@@ -1,0 +1,2 @@
+package com.platizio.wealthtech.domain;
+public enum RedemptionStatus { CREATED, PENDING_INVESTOR_ACTION, SUBMITTED, PROCESSING, SUCCESSFUL, FAILED, BANK_CREDIT_PENDING, BANK_CREDIT_COMPLETED }
