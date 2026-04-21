@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { Product, initialProducts } from './data/products';
 import {
   LayoutDashboard, Users, BookOpen, Search, Bell,
   ArrowLeftRight, UserCircle2, TrendingUp, BellRing, Target,
@@ -62,6 +63,7 @@ export default function App() {
   const [mode,            setMode]            = useState<Mode>('distributor');
   const [distView,        setDistView]        = useState<DistributorView | 'onboarding'>('onboarding');
   const [adminView,       setAdminView]       = useState<AdminView>('admin-overview');
+  const [products,        setProducts]        = useState<Product[]>(initialProducts);
 
   // ── Onboarding gate (distributor only) ──────────────────────────────────
   if (mode === 'distributor' && distView === 'onboarding') {
@@ -74,7 +76,7 @@ export default function App() {
   const distViews: Record<DistributorView, React.ReactNode> = {
     dashboard:    <Dashboard    />,
     investors:    <Investors    />,
-    ledger:       <Ledger       />,
+    ledger:       <Ledger products={products} />,
     transactions: <Transactions />,
     leads:        <Leads        />,
     earnings:     <Earnings     />,
@@ -85,7 +87,7 @@ export default function App() {
   const adminViews: Record<AdminView, React.ReactNode> = {
     'admin-overview':   <AdminOverview   />,
     'distributor-mgmt': <DistributorMgmt />,
-    'product-mgmt':     <ProductMgmt     />,
+    'product-mgmt':     <ProductMgmt products={products} setProducts={setProducts} />,
     'investor-mgmt':    <InvestorMgmt    />,
   };
 
