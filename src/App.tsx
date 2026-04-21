@@ -1,10 +1,15 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Product, initialProducts } from './data/products';
 import {
   LayoutDashboard, Users, BookOpen, Search, Bell,
   ArrowLeftRight, UserCircle2, TrendingUp, BellRing, Target,
   BarChart3, Network, Layers, UserCheck, ShieldCheck
 } from 'lucide-react';
+
+// Auth / pre-app screens
+import LandingPage     from './views/LandingPage';
+import LoginPage       from './views/LoginPage';
+import PendingApproval from './views/PendingApproval';
 
 // Distributor views
 import Onboarding    from './views/Onboarding';
@@ -25,6 +30,7 @@ import InvestorMgmt     from './views/InvestorMgmt';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
+type AuthState = 'landing' | 'login' | 'onboarding' | 'pending' | 'app';
 type Mode = 'distributor' | 'admin';
 
 type DistributorView =
@@ -60,17 +66,53 @@ const ADMIN_NAV: { id: AdminView; icon: React.ReactNode; label: string }[] = [
 // ─── App ────────────────────────────────────────────────────────────────────
 
 export default function App() {
-  const [mode,            setMode]            = useState<Mode>('distributor');
-  const [distView,        setDistView]        = useState<DistributorView | 'onboarding'>('onboarding');
-  const [adminView,       setAdminView]       = useState<AdminView>('admin-overview');
-  const [products,        setProducts]        = useState<Product[]>(initialProducts);
+  // ── Auth state ───────────────────────────────────────────────────────────
+  const [authState, setAuthState] = useState<AuthState>(() => {
+    try { return sessionStorage.getItem('apex_session') ? 'app' : 'landing'; }
+    catch { return 'landing'; }
+  });
 
-  // ── Onboarding gate (distributor only) ──────────────────────────────────
-  if (mode === 'distributor' && distView === 'onboarding') {
-    return (
-      <Onboarding onComplete={() => setDistView('dashboard')} />
-    );
-  }
+  const [mode,     setMode]     = useState<Mode>('distributor');
+  const [distView, setDistView] = useState<DistributorView>('dashboard');
+  const [adminView,setAdminView]= useState<AdminView>('admin-overview');
+  const [products, setProducts] = useState<Product[]>(initialProducts);
+
+  // ── Seed demo user in localStorage on first load ─────────────────────────
+  useEffect(() => {
+    try {
+      const users: any[] = JSON.parse(localStorage.getItem('apex_users') || '[]');
+      if (!users.find((u: any) => u.pan === 'ABCDE1234F')) {
+        users.push({
+          pan: 'ABCDE1234F', arn: 'ARN-102943',
+          firstName: 'Aditya', lastName: 'Sharma',
+          email: 'aditya@apexwealth.in', mobile: '9876543210',
+          status: 'active',
+        });
+        localStorage.setItem('apex_users', JSON.stringify(users));
+      }
+    } catch { /* localStorage unavailable */ }
+  }, []);
+
+  // ── Auth handlers ─────────────────────────────────────────────────────────
+  const handleLoginSuccess = () => {
+    setMode('distributor');
+    setDistView('dashboard');
+    setAuthState('app');
+  };
+  const handleSignOut = () => {
+    try { sessionStorage.removeItem('apex_session'); } catch { /* */ }
+    setAuthState('landing');
+  };
+
+  // ── Pre-app screens ───────────────────────────────────────────────────────
+  if (authState === 'landing')
+    return <LandingPage onLogin={() => setAuthState('login')} onSignUp={() => setAuthState('onboarding')} />;
+  if (authState === 'login')
+    return <LoginPage onLogin={handleLoginSuccess} onSignUp={() => setAuthState('onboarding')} onBack={() => setAuthState('landing')} />;
+  if (authState === 'onboarding')
+    return <Onboarding onComplete={() => setAuthState('pending')} />;
+  if (authState === 'pending')
+    return <PendingApproval onGoToLogin={() => setAuthState('login')} />;
 
   // ── Active view component ────────────────────────────────────────────────
   const distViews: Record<DistributorView, React.ReactNode> = {
@@ -93,7 +135,7 @@ export default function App() {
 
   const activeView = mode === 'admin'
     ? adminViews[adminView]
-    : distViews[distView as DistributorView];
+    : distViews[distView];
 
   const switchMode = (next: Mode) => {
     setMode(next);
@@ -211,8 +253,8 @@ export default function App() {
                 <div className="w-8 h-8 rounded-full bg-slate-200 flex items-center justify-center text-xs font-bold text-slate-600">AS</div>
                 <div>
                   <p className="text-sm font-semibold text-slate-800">Aditya Sharma</p>
-                  <p className="text-xs text-slate-500 cursor-pointer hover:text-blue-600 transition-colors"
-                    onClick={() => setDistView('onboarding')}>
+                  <p className="text-xs text-slate-500 cursor-pointer hover:text-red-500 transition-colors"
+                    onClick={handleSignOut}>
                     Sign out
                   </p>
                 </div>
