@@ -11,7 +11,7 @@ export default function LoginPage({
   onSignUp: () => void;
   onBack:   () => void;
 }) {
-  const [pan,       setPan]       = useState('');
+  const [email,     setEmail]     = useState('');
   const [arn,       setArn]       = useState('');
   const [showArn,   setShowArn]   = useState(false);
   const [error,     setError]     = useState('');
@@ -19,15 +19,15 @@ export default function LoginPage({
 
   const handleLogin = () => {
     setError('');
-    const panTrimmed = pan.trim().toUpperCase();
+    const emailTrimmed = email.trim().toLowerCase();
     const arnTrimmed = arn.trim();
 
-    if (!panTrimmed || !arnTrimmed) {
-      setError('Please enter both PAN Number and ARN Number.');
+    if (!emailTrimmed || !arnTrimmed) {
+      setError('Please enter both Email Address and ARN Number.');
       return;
     }
-    if (!/^[A-Z]{5}[0-9]{4}[A-Z]$/.test(panTrimmed)) {
-      setError('PAN format is invalid (e.g. ABCDE1234F).');
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailTrimmed)) {
+      setError('Email address format is invalid (e.g. you@example.com).');
       return;
     }
 
@@ -37,14 +37,14 @@ export default function LoginPage({
         const users: any[] = JSON.parse(localStorage.getItem('apex_users') || '[]');
         const user = users.find(
           u =>
-            u.pan.toUpperCase() === panTrimmed &&
+            u.email?.toLowerCase() === emailTrimmed &&
             u.arn.toLowerCase() === arnTrimmed.toLowerCase(),
         );
         if (user) {
           sessionStorage.setItem('apex_session', JSON.stringify(user));
           onLogin();
         } else {
-          setError('No account found with these credentials. Check your PAN and ARN, or sign up.');
+          setError('No account found with these credentials. Check your email and ARN, or sign up.');
         }
       } catch {
         setError('Something went wrong. Please try again.');
@@ -138,7 +138,7 @@ export default function LoginPage({
             <div className="mb-8">
               <h1 className="text-2xl font-semibold text-slate-800 mb-1">Sign in to your account</h1>
               <p className="text-sm text-slate-500">
-                Use your PAN number as User ID and ARN number as password.
+                Use your registered email address and ARN number to sign in.
               </p>
             </div>
 
@@ -147,7 +147,7 @@ export default function LoginPage({
               <span className="text-blue-400 mt-0.5 text-sm">ℹ</span>
               <p className="text-xs text-blue-700 leading-relaxed">
                 <span className="font-semibold">Demo credentials:</span>{' '}
-                PAN: <span className="font-mono font-bold">ABCDE1234F</span> &nbsp;|&nbsp;
+                Email: <span className="font-mono font-bold">aditya@apexwealth.in</span> &nbsp;|&nbsp;
                 ARN: <span className="font-mono font-bold">ARN-102943</span>
               </p>
             </div>
@@ -164,21 +164,19 @@ export default function LoginPage({
               </motion.div>
             )}
 
-            {/* PAN field */}
+            {/* Email field */}
             <div className="mb-5">
               <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5">
-                PAN Number <span className="text-red-400">*</span>
+                Email Address <span className="text-red-400">*</span>
               </label>
               <input
-                type="text"
-                value={pan}
-                onChange={e => { setPan(e.target.value.toUpperCase()); setError(''); }}
+                type="email"
+                value={email}
+                onChange={e => { setEmail(e.target.value); setError(''); }}
                 onKeyDown={handleKeyDown}
-                placeholder="e.g. ABCDE1234F"
-                maxLength={10}
-                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm font-mono uppercase tracking-widest focus:ring-2 focus:ring-blue-100 focus:border-blue-500 outline-none transition-all"
+                placeholder="you@example.com"
+                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm focus:ring-2 focus:ring-blue-100 focus:border-blue-500 outline-none transition-all"
               />
-              <p className="text-[11px] text-slate-400 mt-1">Format: 5 letters · 4 digits · 1 letter (e.g. ABCDE1234F)</p>
             </div>
 
             {/* ARN field */}
