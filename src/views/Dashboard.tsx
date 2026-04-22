@@ -1,75 +1,168 @@
 import React from 'react';
 import { motion } from 'motion/react';
+import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts';
 import {
-  PieChart, Pie, Cell, ResponsiveContainer, Tooltip
-} from 'recharts';
-import { ArrowUpRight, Users, AlertCircle, Clock, TrendingUp } from 'lucide-react';
+  ArrowUpRight, Users, AlertCircle, Clock,
+  TrendingUp, TrendingDown, ChevronRight,
+  Briefcase, Activity, Target,
+} from 'lucide-react';
 
+/* ── Existing chart data ────────────────────────────────────────────────── */
 const donutData = [
   { name: 'Successful', value: 65, color: '#22c55e' },
-  { name: 'Pending', value: 25, color: '#eab308' },
-  { name: 'Failed', value: 10, color: '#ef4444' },
+  { name: 'Pending',    value: 25, color: '#eab308' },
+  { name: 'Failed',     value: 10, color: '#ef4444' },
 ];
 
 const recentActivity = [
-  { action: 'KYC Verified', name: 'Sunita Kapur', time: '10 min ago', dot: 'bg-green-500' },
-  { action: 'Payment Pending', name: 'Meera Iyer', time: '45 min ago', dot: 'bg-amber-500' },
-  { action: 'Order Successful', name: 'Aditya Sharma', time: '2 hrs ago', dot: 'bg-blue-500' },
-  { action: 'Order Failed', name: 'Tech Innovations PF', time: '5 hrs ago', dot: 'bg-red-500' },
-  { action: 'SIP Due Tomorrow', name: 'Rahul Verma', time: '1 day ago', dot: 'bg-slate-400' },
+  { action: 'KYC Verified',     name: 'Sunita Kapur',         time: '10 min ago', dot: 'bg-green-500' },
+  { action: 'Payment Pending',  name: 'Meera Iyer',           time: '45 min ago', dot: 'bg-amber-500' },
+  { action: 'Order Successful', name: 'Aditya Sharma',        time: '2 hrs ago',  dot: 'bg-blue-500'  },
+  { action: 'Order Failed',     name: 'Tech Innovations PF',  time: '5 hrs ago',  dot: 'bg-red-500'   },
+  { action: 'SIP Due Tomorrow', name: 'Rahul Verma',          time: '1 day ago',  dot: 'bg-slate-400' },
 ];
 
-export default function Dashboard() {
+/* ── PRD snapshot card data ─────────────────────────────────────────────── */
+const AUM_SUB = [
+  { label: 'Mutual Funds', value: '₹31.2 Cr', change: '+5.1%', up: true  },
+  { label: 'SIF',          value: '₹8.4 Cr',  change: '+2.3%', up: true  },
+  { label: 'Others',       value: '₹2.9 Cr',  change: '+1.8%', up: true  },
+];
+
+const PENDING_SUB = [
+  { label: 'KYC Pending',       value: 5  },
+  { label: 'Bank Link Pending', value: 4  },
+  { label: 'Txn Failed',        value: 8  },
+  { label: 'SIP Failed',        value: 4  },
+  { label: 'Maturing Soon',     value: 2  },
+];
+
+const LEAD_SUB = [
+  { label: 'New Leads',   value: 8,  color: 'bg-blue-400'  },
+  { label: 'In Progress', value: 14, color: 'bg-amber-400' },
+  { label: 'Converted',   value: 23, color: 'bg-green-400' },
+];
+
+/* ── Props ──────────────────────────────────────────────────────────────── */
+interface DashboardProps {
+  onNavigate: (view: string) => void;
+}
+
+export default function Dashboard({ onNavigate }: DashboardProps) {
   return (
     <motion.div
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
       className="p-8 space-y-6"
     >
-      <div className="flex justify-between items-end mb-2">
+      {/* ── Page header ─────────────────────────────────────────────────── */}
+      <div className="flex justify-between items-end">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight text-slate-800">Distributor Overview</h1>
           <p className="text-slate-500 text-sm mt-1">Real-time snapshot of your AUM and business growth</p>
         </div>
-        <div className="flex gap-2 text-xs font-semibold text-slate-500 uppercase tracking-wider bg-slate-100 p-1 rounded-lg">
-          <button className="px-3 py-1.5 bg-white shadow-sm rounded text-slate-900 transition-all">Today</button>
-          <button className="px-3 py-1.5 hover:text-slate-700 transition-all">Weekly</button>
-          <button className="px-3 py-1.5 hover:text-slate-700 transition-all">Monthly</button>
+        <div className="flex gap-1.5 text-xs font-semibold text-slate-500 uppercase tracking-wider bg-slate-100 p-1 rounded-lg">
+          <button className="px-3 py-1.5 bg-white shadow-sm rounded text-slate-900">Today</button>
+          <button className="px-3 py-1.5 hover:text-slate-700 rounded transition-all">Weekly</button>
+          <button className="px-3 py-1.5 hover:text-slate-700 rounded transition-all">Monthly</button>
         </div>
       </div>
 
-      {/* KPI Cards — PRD-aligned: onboarding pending, KYC pending, transactions pending, earnings */}
-      <div className="grid grid-cols-4 gap-6">
-        <KPI
-          label="Total AUM"
-          value="₹42.58 Cr"
-          trend="↑ 4.2% from last month"
-          trendColor="text-green-500"
-          icon={<TrendingUp className="w-5 h-5 text-blue-500" />}
-        />
-        <KPI
-          label="Onboarding Pending"
-          value="8"
-          trend="3 KYC · 3 Bank · 2 Risk"
-          trendColor="text-orange-500"
-          icon={<Users className="w-5 h-5 text-orange-400" />}
-        />
-        <KPI
-          label="Transactions Pending"
-          value="14"
-          trend="6 Awaiting investor action"
-          trendColor="text-amber-500"
-          icon={<Clock className="w-5 h-5 text-amber-400" />}
-        />
-        <KPI
-          label="Est. Brokerage"
-          value="₹40,200"
-          trend="Expected by 15th May"
-          trendColor="text-slate-500"
-          icon={<ArrowUpRight className="w-5 h-5 text-slate-400" />}
-        />
+      {/* ══════════════════════════════════════════════════════════════════
+          5 SNAPSHOT CARDS  (PRD: Key Business Snapshot)
+      ══════════════════════════════════════════════════════════════════ */}
+      <div className="grid grid-cols-5 gap-4">
+
+        {/* ── Card 1: Total AUM ── */}
+        <SnapshotCard onClick={() => onNavigate('aum-breakdown')} accent="border-t-blue-500">
+          <CardLabel icon={<TrendingUp className="w-3.5 h-3.5 text-blue-500" />}>Total AUM</CardLabel>
+          <p className="text-2xl font-bold text-slate-800 mt-2">₹42.58 Cr</p>
+          <p className="text-[11px] font-semibold text-green-500 flex items-center gap-0.5 mt-0.5 mb-3">
+            <TrendingUp className="w-3 h-3" /> 4.2% vs last month
+          </p>
+          <Divider />
+          <div className="space-y-1.5 mt-3">
+            {AUM_SUB.map(s => (
+              <div key={s.label} className="flex items-center justify-between gap-1">
+                <span className="text-[11px] text-slate-500 truncate">{s.label}</span>
+                <span className={`text-[10px] font-semibold ${s.up ? 'text-green-500' : 'text-red-500'}`}>{s.change}</span>
+              </div>
+            ))}
+          </div>
+        </SnapshotCard>
+
+        {/* ── Card 2: Investor Base ── */}
+        <SnapshotCard onClick={() => onNavigate('investors')} accent="border-t-emerald-500">
+          <CardLabel icon={<Users className="w-3.5 h-3.5 text-emerald-500" />}>Investor Base</CardLabel>
+          <p className="text-2xl font-bold text-slate-800 mt-2">347</p>
+          <p className="text-[11px] text-slate-400 mt-0.5 mb-3">Total Investors</p>
+          <Divider />
+          <div className="space-y-1.5 mt-3">
+            <SubRow label="Active SIP" value="218" />
+            <SubRow label="New (30d)"  value="12" highlight />
+          </div>
+        </SnapshotCard>
+
+        {/* ── Card 3: SIP This Month ── */}
+        <SnapshotCard onClick={() => onNavigate('sip-dashboard')} accent="border-t-violet-500">
+          <CardLabel icon={<Activity className="w-3.5 h-3.5 text-violet-500" />}>SIP · This Month</CardLabel>
+          <p className="text-2xl font-bold text-slate-800 mt-2">₹18.4 L</p>
+          <p className="text-[11px] font-semibold text-green-500 flex items-center gap-0.5 mt-0.5 mb-3">
+            <TrendingUp className="w-3 h-3" /> 6.2% vs last month
+          </p>
+          <Divider />
+          <div className="space-y-1.5 mt-3">
+            <SubRow label="Active SIPs" value="218" />
+            <SubRow label="Failed SIPs" value="7"   warn />
+          </div>
+        </SnapshotCard>
+
+        {/* ── Card 4: Pending Actions ── */}
+        <SnapshotCard onClick={() => onNavigate('action-center')} accent="border-t-red-500">
+          <CardLabel icon={<AlertCircle className="w-3.5 h-3.5 text-red-500" />}>Pending Actions</CardLabel>
+          <p className="text-2xl font-bold text-slate-800 mt-2">23</p>
+          <p className="text-[11px] text-slate-400 mt-0.5 mb-3">Items requiring action</p>
+          <Divider />
+          <div className="space-y-1.5 mt-3">
+            {PENDING_SUB.map(s => (
+              <div key={s.label} className="flex items-center justify-between">
+                <span className="text-[11px] text-slate-500 truncate">{s.label}</span>
+                <span className="text-[11px] font-semibold text-slate-700">{s.value}</span>
+              </div>
+            ))}
+          </div>
+        </SnapshotCard>
+
+        {/* ── Card 5: Lead Pipeline ── */}
+        <SnapshotCard onClick={() => onNavigate('leads')} accent="border-t-amber-500">
+          <CardLabel icon={<Target className="w-3.5 h-3.5 text-amber-500" />}>Lead Pipeline</CardLabel>
+          <p className="text-2xl font-bold text-slate-800 mt-2">45</p>
+          <p className="text-[11px] text-slate-400 mt-0.5 mb-3">Total Leads</p>
+          <Divider />
+          {/* Mini funnel */}
+          <div className="space-y-2 mt-3">
+            {LEAD_SUB.map(s => (
+              <div key={s.label} className="flex items-center gap-2">
+                <div className="flex-1">
+                  <div className="flex justify-between mb-0.5">
+                    <span className="text-[11px] text-slate-500">{s.label}</span>
+                    <span className="text-[11px] font-semibold text-slate-700">{s.value}</span>
+                  </div>
+                  <div className="h-1 bg-slate-100 rounded-full overflow-hidden">
+                    <div
+                      className={`h-full rounded-full ${s.color}`}
+                      style={{ width: `${Math.round((s.value / 45) * 100)}%` }}
+                    />
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </SnapshotCard>
+
       </div>
 
+      {/* ── Lower section: kanban + donut ───────────────────────────────── */}
       <div className="grid grid-cols-3 gap-6">
         {/* Onboarding Pipeline */}
         <div className="col-span-2 bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden flex flex-col">
@@ -80,21 +173,21 @@ export default function Dashboard() {
             </button>
           </div>
           <div className="flex-1 p-5 overflow-x-auto">
-            <div className="flex gap-4 min-w-max h-full">
+            <div className="flex gap-4 min-w-max">
               <KanbanColumn title="KYC Pending" count={3} accent="border-t-amber-400">
-                <KanbanCard name="Priya Nair" detail="Selfie upload required" days="Today" status="kyc" />
-                <KanbanCard name="Prakash Mehta" detail="Document mismatch" days="2 days ago" status="failed" />
-                <KanbanCard name="Nisha Patel" detail="In progress" days="3 days ago" status="kyc" />
+                <KanbanCard name="Priya Nair"    detail="Selfie upload required"   days="Today"     status="kyc"    />
+                <KanbanCard name="Prakash Mehta" detail="Document mismatch"        days="2 days ago" status="failed" />
+                <KanbanCard name="Nisha Patel"   detail="In progress"              days="3 days ago" status="kyc"   />
               </KanbanColumn>
               <KanbanColumn title="Bank Pending" count={3} accent="border-t-blue-400">
-                <KanbanCard name="Vikram Singh" detail="Account not verified" days="1 day ago" status="bank" />
-                <KanbanCard name="Rajesh Kumar" detail="IFSC mismatch" days="4 days ago" status="bank" />
-                <KanbanCard name="Anjali Desai" detail="Verification pending" days="Yesterday" status="bank" />
+                <KanbanCard name="Vikram Singh"  detail="Account not verified"     days="1 day ago"  status="bank"  />
+                <KanbanCard name="Rajesh Kumar"  detail="IFSC mismatch"            days="4 days ago" status="bank"  />
+                <KanbanCard name="Anjali Desai"  detail="Verification pending"     days="Yesterday"  status="bank"  />
               </KanbanColumn>
               <KanbanColumn title="Ready to Invest" count={5} accent="border-t-green-400">
-                <KanbanCard name="Aditya Sharma" detail="₹5L Lumpsum" days="Just now" status="ready" />
-                <KanbanCard name="Sunita Kapur" detail="SIP Setup" days="1 day ago" status="ready" />
-                <KanbanCard name="Rahul Verma" detail="₹15L Institutional" days="Today" status="ready" />
+                <KanbanCard name="Aditya Sharma" detail="₹5L Lumpsum"             days="Just now"   status="ready" />
+                <KanbanCard name="Sunita Kapur"  detail="SIP Setup"               days="1 day ago"  status="ready" />
+                <KanbanCard name="Rahul Verma"   detail="₹15L Institutional"      days="Today"      status="ready" />
               </KanbanColumn>
             </div>
           </div>
@@ -108,13 +201,12 @@ export default function Dashboard() {
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
                 <Pie
-                  data={donutData}
-                  cx="50%" cy="50%"
+                  data={donutData} cx="50%" cy="50%"
                   innerRadius={60} outerRadius={80}
                   paddingAngle={5} dataKey="value" stroke="none"
                 >
-                  {donutData.map((entry, index) => (
-                    <Cell key={`cell-${index}`} fill={entry.color} />
+                  {donutData.map((entry, i) => (
+                    <Cell key={`cell-${i}`} fill={entry.color} />
                   ))}
                 </Pie>
                 <Tooltip
@@ -142,7 +234,7 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* Recent Activity */}
+      {/* ── Recent Activity ──────────────────────────────────────────────── */}
       <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
         <div className="p-5 border-b border-slate-100 flex justify-between items-center">
           <h2 className="font-semibold text-slate-800">Recent Activity</h2>
@@ -170,20 +262,62 @@ export default function Dashboard() {
   );
 }
 
-function KPI({ label, value, trend, trendColor, icon }: {
-  label: string; value: string; trend: string; trendColor: string; icon: React.ReactNode;
+/* ── Sub-components ──────────────────────────────────────────────────────── */
+
+function SnapshotCard({
+  children, onClick, accent,
+}: {
+  children: React.ReactNode; onClick: () => void; accent: string;
 }) {
   return (
-    <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
-      <div className="flex justify-between items-start mb-3">
-        <p className="text-slate-500 text-[10px] font-bold uppercase tracking-wider">{label}</p>
-        {icon}
-      </div>
-      <p className="text-2xl font-semibold text-slate-800">{value}</p>
-      <p className={`text-xs mt-3 font-medium ${trendColor}`}>{trend}</p>
+    <motion.div
+      whileHover={{ y: -2 }}
+      onClick={onClick}
+      className={`bg-white rounded-2xl border border-slate-200 shadow-sm p-4 cursor-pointer
+                  hover:shadow-md transition-shadow group relative overflow-hidden
+                  border-t-2 ${accent}`}
+    >
+      {children}
+      {/* Hover arrow */}
+      <ChevronRight
+        className="w-3.5 h-3.5 text-slate-200 group-hover:text-blue-400 transition-all
+                   absolute top-3.5 right-3.5 group-hover:translate-x-0.5"
+      />
+    </motion.div>
+  );
+}
+
+function CardLabel({ icon, children }: { icon: React.ReactNode; children: React.ReactNode }) {
+  return (
+    <div className="flex items-center gap-1.5">
+      {icon}
+      <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider leading-none">
+        {children}
+      </p>
     </div>
   );
 }
+
+function Divider() {
+  return <div className="border-t border-slate-100" />;
+}
+
+function SubRow({
+  label, value, highlight, warn,
+}: {
+  label: string; value: string | number; highlight?: boolean; warn?: boolean;
+}) {
+  return (
+    <div className="flex items-center justify-between">
+      <span className="text-[11px] text-slate-500 truncate">{label}</span>
+      <span className={`text-[11px] font-semibold ${warn ? 'text-red-500' : highlight ? 'text-green-600' : 'text-slate-700'}`}>
+        {value}
+      </span>
+    </div>
+  );
+}
+
+/* ── Kanban (unchanged) ─────────────────────────────────────────────────── */
 
 function KanbanColumn({ title, count, children, accent }: {
   title: string; count: number; children: React.ReactNode; accent: string;
@@ -200,10 +334,10 @@ function KanbanColumn({ title, count, children, accent }: {
 }
 
 const statusColors: Record<string, string> = {
-  kyc: 'bg-amber-100 text-amber-700',
-  bank: 'bg-blue-100 text-blue-700',
+  kyc:   'bg-amber-100 text-amber-700',
+  bank:  'bg-blue-100  text-blue-700',
   ready: 'bg-green-100 text-green-700',
-  failed: 'bg-red-100 text-red-700',
+  failed:'bg-red-100   text-red-700',
 };
 
 function KanbanCard({ name, detail, days, status }: {
@@ -211,9 +345,7 @@ function KanbanCard({ name, detail, days, status }: {
 }) {
   return (
     <div className="bg-white p-3 rounded-lg shadow-sm border border-slate-200 hover:border-blue-300 transition-colors cursor-pointer group">
-      <div className="flex justify-between items-start mb-1">
-        <p className="text-sm font-semibold text-slate-800 group-hover:text-blue-600 transition-colors">{name}</p>
-      </div>
+      <p className="text-sm font-semibold text-slate-800 group-hover:text-blue-600 transition-colors mb-1">{name}</p>
       <p className="text-xs text-slate-500 mb-2">{detail}</p>
       <div className="flex justify-between items-center">
         <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${statusColors[status] ?? 'bg-slate-100 text-slate-500'}`}>

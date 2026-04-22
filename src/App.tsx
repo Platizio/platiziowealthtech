@@ -21,6 +21,9 @@ import Profile       from './views/Profile';
 import Earnings      from './views/Earnings';
 import Notifications from './views/Notifications';
 import Leads         from './views/Leads';
+import AumBreakdown  from './views/AumBreakdown';
+import SipDashboard  from './views/SipDashboard';
+import ActionCenter  from './views/ActionCenter';
 
 // Admin views
 import AdminOverview    from './views/AdminOverview';
@@ -35,7 +38,8 @@ type Mode = 'distributor' | 'admin';
 
 type DistributorView =
   | 'dashboard' | 'investors' | 'ledger' | 'transactions'
-  | 'leads' | 'earnings' | 'notifications' | 'profile';
+  | 'leads' | 'earnings' | 'notifications' | 'profile'
+  | 'aum-breakdown' | 'sip-dashboard' | 'action-center';
 
 type AdminView =
   | 'admin-overview' | 'distributor-mgmt' | 'product-mgmt' | 'investor-mgmt';
@@ -116,14 +120,17 @@ export default function App() {
 
   // ── Active view component ────────────────────────────────────────────────
   const distViews: Record<DistributorView, React.ReactNode> = {
-    dashboard:    <Dashboard    />,
-    investors:    <Investors    />,
-    ledger:       <Ledger products={products} />,
-    transactions: <Transactions />,
-    leads:        <Leads        />,
-    earnings:     <Earnings     />,
-    notifications:<Notifications/>,
-    profile:      <Profile      />,
+    dashboard:       <Dashboard    onNavigate={(v) => setDistView(v as DistributorView)} />,
+    investors:       <Investors    />,
+    ledger:          <Ledger products={products} />,
+    transactions:    <Transactions />,
+    leads:           <Leads        />,
+    earnings:        <Earnings     />,
+    notifications:   <Notifications/>,
+    profile:         <Profile      />,
+    'aum-breakdown': <AumBreakdown  onBack={() => setDistView('dashboard')} />,
+    'sip-dashboard': <SipDashboard  onBack={() => setDistView('dashboard')} />,
+    'action-center': <ActionCenter  onBack={() => setDistView('dashboard')} />,
   };
 
   const adminViews: Record<AdminView, React.ReactNode> = {
