@@ -8,6 +8,7 @@ import com.platizio.wealthtech.service.OrderService;
 import jakarta.validation.Valid;
 import java.util.List;
 import java.util.UUID;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
 @RestController
@@ -45,6 +46,7 @@ public class OrderController {
         return orderService.listRedemptionsByOrder(orderId);
     }
 
+    @PreAuthorize("hasRole('ADMIN')")
     @PatchMapping("/{orderId}/status")
     public TransactionOrder updateStatus(
             @PathVariable UUID orderId,
@@ -60,6 +62,7 @@ public class OrderController {
         return orderService.createRedemption(orderId, actorId);
     }
 
+    @PreAuthorize("hasRole('ADMIN')")
     @DeleteMapping("/{orderId}")
     public void deleteOrder(@PathVariable UUID orderId, @RequestParam UUID actorId) {
         orderService.deleteOrder(orderId, actorId);

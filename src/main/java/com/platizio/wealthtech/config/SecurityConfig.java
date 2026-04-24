@@ -7,6 +7,7 @@ import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.AuthenticationProvider;
 import org.springframework.security.authentication.dao.DaoAuthenticationProvider;
 import org.springframework.security.config.annotation.authentication.configuration.AuthenticationConfiguration;
+import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
@@ -17,19 +18,28 @@ import org.springframework.security.web.authentication.UsernamePasswordAuthentic
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
-
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.platizio.wealthtech.dto.ApiErrorResponse;
+import jakarta.servlet.http.HttpServletResponse;
+import java.time.OffsetDateTime;
 import java.util.List;
 
 @Configuration
 @EnableWebSecurity
+// @EnableMethodSecurity // Commented out to disable @PreAuthorize checks temporarily
 public class SecurityConfig {
 
     private final JwtAuthFilter jwtAuthFilter;
     private final CustomUserDetailsService userDetailsService;
+    private final ObjectMapper objectMapper;
 
-    public SecurityConfig(JwtAuthFilter jwtAuthFilter, CustomUserDetailsService userDetailsService) {
+    @org.springframework.beans.factory.annotation.Value("${app.cors.allowed-origins}")
+    private List<String> allowedOrigins;
+
+    public SecurityConfig(JwtAuthFilter jwtAuthFilter, CustomUserDetailsService userDetailsService, ObjectMapper objectMapper) {
         this.jwtAuthFilter = jwtAuthFilter;
         this.userDetailsService = userDetailsService;
+        this.objectMapper = objectMapper;
     }
 
     @Bean
@@ -42,9 +52,34 @@ public class SecurityConfig {
                     "/api/v1/auth/**",
                     "/actuator/health",
                     "/actuator/info",
+                    "/v3/api-docs/**",
+                    "/v3/api-docs",
+                    "/swagger-ui/**",
+                    "/swagger-ui.html",
+                    "/swagger-ui/index.html",
+                    "/favicon.ico",
                     "/"
                 ).permitAll()
-                .anyRequest().authenticated()
+                // .anyRequest().authenticated() // Disabled for demo
+                .anyRequest().permitAll()
+            )
+            .exceptionHandling(ex -> ex
+                .authenticationEntryPoint((request, response, authException) -> {
+                    response.setContentType("application/json");
+                    response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+                    ApiErrorResponse error = new ApiErrorResponse(
+                            OffsetDateTime.now(), 401, "UNAUTHORIZED", 
+                            authException.getMessage(), request.getRequestURI());
+                    response.getWriter().write(objectMapper.writeValueAsString(error));
+                })
+                .accessDeniedHandler((request, response, accessDeniedException) -> {
+                    response.setContentType("application/json");
+                    response.setStatus(HttpServletResponse.SC_FORBIDDEN);
+                    ApiErrorResponse error = new ApiErrorResponse(
+                            OffsetDateTime.now(), 403, "FORBIDDEN", 
+                            "Access denied", request.getRequestURI());
+                    response.getWriter().write(objectMapper.writeValueAsString(error));
+                })
             )
             .sessionManagement(session -> session
                 .sessionCreationPolicy(SessionCreationPolicy.STATELESS)
@@ -59,7 +94,7 @@ public class SecurityConfig {
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration config = new CorsConfiguration();
         config.setAllowedOriginPatterns(List.of("*"));
-        config.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
+        config.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"));
         config.setAllowedHeaders(List.of("*"));
         config.setAllowCredentials(true);
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();

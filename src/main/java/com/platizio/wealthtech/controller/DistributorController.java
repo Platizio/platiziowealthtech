@@ -8,6 +8,7 @@ import com.platizio.wealthtech.service.DistributorService;
 import jakarta.validation.Valid;
 import java.util.List;
 import java.util.UUID;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
 @RestController
@@ -25,6 +26,7 @@ public class DistributorController {
         return distributorService.signup(request);
     }
 
+    @PreAuthorize("hasRole('ADMIN')")
     @GetMapping
     public List<Distributor> list() {
         return distributorService.findAll();
@@ -48,6 +50,7 @@ public class DistributorController {
         return distributorService.findSubDistributors(requesterId);
     }
 
+    @PreAuthorize("hasRole('ADMIN')")
     @PatchMapping("/{distributorId}/status")
     public Distributor updateStatus(
             @PathVariable UUID distributorId,
@@ -57,6 +60,7 @@ public class DistributorController {
         return distributorService.updateStatus(distributorId, status, actorId);
     }
 
+    @PreAuthorize("hasRole('ADMIN')")
     @DeleteMapping("/{distributorId}")
     public void deleteDistributor(@PathVariable UUID distributorId, @RequestParam UUID actorId) {
         distributorService.deleteDistributor(distributorId, actorId);

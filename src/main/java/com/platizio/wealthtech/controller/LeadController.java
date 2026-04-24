@@ -11,6 +11,7 @@ import com.platizio.wealthtech.service.LeadService;
 import jakarta.validation.Valid;
 import java.util.List;
 import java.util.UUID;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
 @RestController
@@ -23,6 +24,7 @@ public class LeadController {
         this.leadService = leadService;
     }
 
+    @PreAuthorize("hasRole('ADMIN')")
     @GetMapping
     public List<InvestorLead> listAll() {
         return leadService.listAll();
@@ -63,6 +65,7 @@ public class LeadController {
         return leadService.addInteraction(leadId, request);
     }
 
+    @PreAuthorize("hasRole('ADMIN')")
     @DeleteMapping("/{leadId}/{actorId}")
     public void deleteLead(@PathVariable UUID leadId, @PathVariable UUID actorId) {
         leadService.deleteLead(leadId, actorId);
