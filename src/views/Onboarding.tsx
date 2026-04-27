@@ -3,7 +3,66 @@ import { motion, AnimatePresence } from 'motion/react';
 import {
   Check, ChevronRight, ChevronLeft, ChevronDown, ChevronUp,
   Eye, EyeOff, Upload, X, Info, AlertCircle, MapPin, Briefcase,
+  ShieldCheck,
 } from 'lucide-react';
+
+// ─── Password strength helpers ────────────────────────────────────────────────
+
+const PWD_CHECKS = [
+  { key: 'length',  label: 'At least 8 characters',         test: (p: string) => p.length >= 8 },
+  { key: 'upper',   label: 'At least 1 capital letter',     test: (p: string) => /[A-Z]/.test(p) },
+  { key: 'number',  label: 'At least 1 number',             test: (p: string) => /[0-9]/.test(p) },
+  { key: 'special', label: 'At least 1 special character',  test: (p: string) => /[^A-Za-z0-9]/.test(p) },
+];
+
+function getPwdScore(pwd: string): number {
+  return PWD_CHECKS.filter(c => c.test(pwd)).length;
+}
+
+const STRENGTH_META = [
+  { label: '',            bar: '',               text: ''                },
+  { label: 'Weak',        bar: 'bg-red-500',     text: 'text-red-600'   },
+  { label: 'Moderate',    bar: 'bg-amber-500',   text: 'text-amber-600' },
+  { label: 'Strong',      bar: 'bg-teal-500',    text: 'text-teal-600'  },
+  { label: 'Very Strong', bar: 'bg-green-500',   text: 'text-green-600' },
+];
+
+function PasswordStrengthBar({ password }: { password: string }) {
+  if (!password) return null;
+  const score = getPwdScore(password);
+  const meta  = STRENGTH_META[score];
+  return (
+    <div className="mt-2.5 space-y-2">
+      {/* bar segments */}
+      <div className="flex gap-1">
+        {[1, 2, 3, 4].map(i => (
+          <div
+            key={i}
+            className={`h-1.5 flex-1 rounded-full transition-all duration-300 ${
+              i <= score ? meta.bar : 'bg-slate-200'
+            }`}
+          />
+        ))}
+      </div>
+      {/* label */}
+      <p className={`text-xs font-semibold ${meta.text}`}>{meta.label}</p>
+      {/* criteria checklist */}
+      <div className="grid grid-cols-2 gap-1 mt-1">
+        {PWD_CHECKS.map(c => {
+          const ok = c.test(password);
+          return (
+            <p key={c.key} className={`text-[11px] flex items-center gap-1.5 ${ok ? 'text-green-600' : 'text-slate-400'}`}>
+              <span className={`w-3.5 h-3.5 rounded-full flex items-center justify-center flex-shrink-0 ${ok ? 'bg-green-100' : 'bg-slate-100'}`}>
+                {ok ? <Check className="w-2.5 h-2.5" /> : <span className="w-1 h-1 rounded-full bg-slate-300 block" />}
+              </span>
+              {c.label}
+            </p>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -169,6 +228,7 @@ const emptyAddr = (): AddressData => ({ line1: '', line2: '', city: '', state: '
 interface FormData {
   firstName: string; lastName: string; mobile: string;
   email: string; pan: string; dob: string; referredBy: string;
+  password: string; confirmPassword: string;
   arn: string; hasExtraNism: boolean; extraNismCerts: string[]; euin: string;
   currentAddress: AddressData;
   permanentSameAsCurrent: boolean; permanentAddress: AddressData;
@@ -182,6 +242,7 @@ interface FormData {
 
 const initData: FormData = {
   firstName: '', lastName: '', mobile: '', email: '', pan: '', dob: '', referredBy: '',
+  password: '', confirmPassword: '',
   arn: '', hasExtraNism: false, extraNismCerts: [], euin: '',
   currentAddress: emptyAddr(),
   permanentSameAsCurrent: false, permanentAddress: emptyAddr(),
@@ -201,14 +262,16 @@ const CLS_ERR    = 'text-xs text-red-500 mt-1.5 flex items-center gap-1';
 // ─── Main component ───────────────────────────────────────────────────────────
 
 export default function Onboarding({ onComplete }: { onComplete: () => void }) {
-  const [step,       setStep]       = useState(1);
-  const [data,       setData]       = useState<FormData>(initData);
-  const [errors,     setErrors]     = useState<Record<string, string>>({});
-  const [addrTab,    setAddrTab]    = useState<'current' | 'permanent' | 'office'>('current');
-  const [openAgr,    setOpenAgr]    = useState<string | null>(null);
-  const [bankQuery,  setBankQuery]  = useState('');
-  const [showBankDD, setShowBankDD] = useState(false);
-  const [pinFilled,  setPinFilled]  = useState<Set<string>>(new Set());
+  const [step,        setStep]        = useState(1);
+  const [data,        setData]        = useState<FormData>(initData);
+  const [errors,      setErrors]      = useState<Record<string, string>>({});
+  const [addrTab,     setAddrTab]     = useState<'current' | 'permanent' | 'office'>('current');
+  const [openAgr,     setOpenAgr]     = useState<string | null>(null);
+  const [bankQuery,   setBankQuery]   = useState('');
+  const [showBankDD,  setShowBankDD]  = useState(false);
+  const [pinFilled,   setPinFilled]   = useState<Set<string>>(new Set());
+  const [showPwd,     setShowPwd]     = useState(false);
+  const [showConfPwd, setShowConfPwd] = useState(false);
 
   // ── Updaters ───────────────────────────────────────────────────────────────
   const set = <K extends keyof FormData>(k: K, v: FormData[K]) => {
@@ -278,6 +341,10 @@ export default function Onboarding({ onComplete }: { onComplete: () => void }) {
       if (!/^[A-Z]{5}[0-9]{4}[A-Z]$/.test(data.pan.trim().toUpperCase()))
         e.pan = 'Enter a valid PAN (e.g. ABCDE1234F)';
       if (!data.dob) e.dob = 'Required';
+      if (getPwdScore(data.password) < 4)
+        e.password = 'Password must meet all 4 requirements below';
+      if (data.confirmPassword !== data.password)
+        e.confirmPassword = 'Passwords do not match';
     }
     if (s === 2) {
       if (!/^ARN-\d+$/i.test(data.arn.trim()))
@@ -321,16 +388,24 @@ export default function Onboarding({ onComplete }: { onComplete: () => void }) {
   const handleSubmit = () => {
     try {
       const users: any[] = JSON.parse(localStorage.getItem('apex_users') || '[]');
-      const pan = data.pan.trim().toUpperCase();
-      if (!users.find((u: any) => u.pan === pan)) {
-        users.push({
-          pan, arn: data.arn.trim(),
-          firstName: data.firstName.trim(), lastName: data.lastName.trim(),
-          email: data.email.trim(), mobile: data.mobile.trim(),
-          status: 'pending', createdAt: new Date().toISOString(),
-        });
-        localStorage.setItem('apex_users', JSON.stringify(users));
-      }
+      const newUser = {
+        firstName:         data.firstName.trim(),
+        lastName:          data.lastName.trim(),
+        mobile:            data.mobile.trim(),
+        email:             data.email.trim().toLowerCase(),
+        pan:               data.pan.trim().toUpperCase() || undefined,
+        password:          data.password,
+        arn:               data.arn.trim(),
+        euin:              data.euin.trim() || undefined,
+        accountHolderName: data.accountHolderName.trim() || undefined,
+        accountNumber:     data.accountNumber || undefined,
+        ifscCode:          data.ifscCode.toUpperCase() || undefined,
+        accountType:       data.accountType || undefined,
+        status:            'pending',
+        role:              'MASTER_DISTRIBUTOR',
+      };
+      users.push(newUser);
+      localStorage.setItem('apex_users', JSON.stringify(users));
     } catch { /* localStorage unavailable */ }
     onComplete();
   };
@@ -542,6 +617,56 @@ export default function Onboarding({ onComplete }: { onComplete: () => void }) {
                         onChange={e => set('dob', e.target.value)}
                         className={CLS_SELECT + (errors.dob ? ' border-red-300 ring-1 ring-red-200' : '')} />
                       {errors.dob && <p className={CLS_ERR}><AlertCircle className="w-3 h-3" />{errors.dob}</p>}
+                    </div>
+                  </div>
+
+                  {/* Password */}
+                  <div className="pt-1 border-t border-slate-100">
+                    <div className="flex items-center gap-2 mb-4">
+                      <ShieldCheck className="w-4 h-4 text-blue-500" />
+                      <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Account Security</span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <label className={CLS_LABEL}>Password <span className="text-red-400">*</span></label>
+                        <div className="relative">
+                          <input
+                            type={showPwd ? 'text' : 'password'}
+                            value={data.password}
+                            placeholder="Create a strong password"
+                            onChange={e => set('password', e.target.value)}
+                            className={CLS_INPUT + ' pr-11' + (errors.password ? ' border-red-300 ring-1 ring-red-200' : '')}
+                          />
+                          <button type="button" onClick={() => setShowPwd(p => !p)}
+                            className="absolute right-3 top-2.5 text-slate-400 hover:text-slate-600 transition-colors">
+                            {showPwd ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                          </button>
+                        </div>
+                        {errors.password
+                          ? <p className={CLS_ERR}><AlertCircle className="w-3 h-3" />{errors.password}</p>
+                          : <PasswordStrengthBar password={data.password} />}
+                      </div>
+                      <div>
+                        <label className={CLS_LABEL}>Confirm Password <span className="text-red-400">*</span></label>
+                        <div className="relative">
+                          <input
+                            type={showConfPwd ? 'text' : 'password'}
+                            value={data.confirmPassword}
+                            placeholder="Re-enter your password"
+                            onChange={e => set('confirmPassword', e.target.value)}
+                            className={CLS_INPUT + ' pr-11' + (errors.confirmPassword ? ' border-red-300 ring-1 ring-red-200' : '')}
+                          />
+                          <button type="button" onClick={() => setShowConfPwd(p => !p)}
+                            className="absolute right-3 top-2.5 text-slate-400 hover:text-slate-600 transition-colors">
+                            {showConfPwd ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                          </button>
+                        </div>
+                        {errors.confirmPassword
+                          ? <p className={CLS_ERR}><AlertCircle className="w-3 h-3" />{errors.confirmPassword}</p>
+                          : data.confirmPassword && data.confirmPassword === data.password
+                            ? <p className="text-[11px] text-green-600 mt-1 flex items-center gap-1"><Check className="w-3 h-3" /> Passwords match</p>
+                            : null}
+                      </div>
                     </div>
                   </div>
 

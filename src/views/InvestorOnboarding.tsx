@@ -1,0 +1,753 @@
+import React, { useState, useEffect, useRef } from 'react';
+import { motion, AnimatePresence } from 'motion/react';
+import {
+  ArrowLeft, ArrowRight, CheckCircle2, Loader2, Check,
+  ShieldCheck, Upload, Building2, User,
+} from 'lucide-react';
+
+// ── Step metadata ────────────────────────────────────────────────────────────
+const STEPS = [
+  { id: 1, label: 'Basic Info' },
+  { id: 2, label: 'Consent' },
+  { id: 3, label: 'KYC' },
+  { id: 4, label: 'Personal' },
+  { id: 5, label: 'Bank' },
+  { id: 6, label: 'FATCA' },
+  { id: 7, label: 'Documents' },
+];
+
+// ── IFSC prefix → bank name ──────────────────────────────────────────────────
+const IFSC_MAP: Record<string, string> = {
+  HDFC: 'HDFC Bank',
+  ICIC: 'ICICI Bank',
+  SBIN: 'State Bank of India',
+  UTIB: 'Axis Bank',
+  KKBK: 'Kotak Mahindra Bank',
+  PUNB: 'Punjab National Bank',
+  BARB: 'Bank of Baroda',
+  CNRB: 'Canara Bank',
+  BKID: 'Bank of India',
+  IOBA: 'Indian Overseas Bank',
+  ABCD: 'ABCD BANK'
+};
+
+// ── Props ────────────────────────────────────────────────────────────────────
+interface Props {
+  prospect?: {
+    firstName?: string;
+    lastName?: string;
+    mobile?: string;
+    email?: string;
+    pan?: string;
+    dob?: string;
+  };
+  onComplete: () => void;
+  onBack: () => void;
+}
+
+// ── Shared field wrapper ──────────────────────────────────────────────────────
+function Field({
+  label, required, children,
+}: { label: string; required?: boolean; children: React.ReactNode }) {
+  return (
+    <div>
+      <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5">
+        {label}
+        {required && <span className="text-red-400 ml-0.5">*</span>}
+      </label>
+      {children}
+    </div>
+  );
+}
+
+const inp = 'w-full px-3.5 py-2.5 text-sm bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-100 focus:border-blue-500 outline-none transition-all';
+const sel = inp + ' cursor-pointer';
+
+// ═══════════════════════════════════════════════════════════════════════════════
+export default function InvestorOnboarding({ prospect, onComplete, onBack }: Props) {
+  const [step, setStep] = useState(1);
+  const [submitted, setSubmitted] = useState(false);
+  const [refNum] = useState(() => 'APX' + Date.now().toString().slice(-8));
+
+  // ── Step 1 — Basic Identity ─────────────────────────────────────────────────
+  const [s1, setS1] = useState({
+    firstName: prospect?.firstName || '',
+    lastName: prospect?.lastName || '',
+    pan: prospect?.pan || '',
+    dob: prospect?.dob || '',
+    mobile: prospect?.mobile || '',
+    email: prospect?.email || '',
+  });
+
+  // ── Step 2 — Consent ────────────────────────────────────────────────────────
+  const [consentMode, setConsentMode] = useState<'aadhaar' | 'email'>('aadhaar');
+  const [consentId, setConsentId] = useState('');
+  const [otpSent, setOtpSent] = useState(false);
+  const [otp, setOtp] = useState(['', '', '', '', '', '']);
+  const [demoOtp, setDemoOtp] = useState('');
+  const [countdown, setCountdown] = useState(0);
+  const otpRefs = useRef<(HTMLInputElement | null)[]>([]);
+
+  // ── Step 3 — KYC ────────────────────────────────────────────────────────────
+  const [kycPhase, setKycPhase] = useState<'idle' | 'loading' | 'found'>('idle');
+
+  // ── Step 4 — Personal ───────────────────────────────────────────────────────
+  const [s4, setS4] = useState({ gender: '', occupation: '', income: '', contactOwner: 'Self' });
+  const [showNominee, setShowNominee] = useState(false);
+  const [nominee, setNominee] = useState({ name: '', relation: '' });
+
+  // ── Step 5 — Bank ────────────────────────────────────────────────────────────
+  const [s5, setS5] = useState({ accNumber: '', ifsc: '', accType: 'Savings', primary: true });
+  const [bankName, setBankName] = useState('');
+
+  // ── Step 6 — FATCA ───────────────────────────────────────────────────────────
+  const [s6, setS6] = useState({
+    taxResidency: 'India', taxCountry: '', incomeSlab: '',
+    politicalExp: 'No', declared: false,
+  });
+
+  // ── Step 7 — Documents ───────────────────────────────────────────────────────
+  const [docs, setDocs] = useState({ pan: false, address: false, signature: false });
+
+  // ── Effects ─────────────────────────────────────────────────────────────────
+
+  // Countdown tick
+  useEffect(() => {
+    if (!countdown) return;
+    const t = setTimeout(() => setCountdown(c => c - 1), 1000);
+    return () => clearTimeout(t);
+  }, [countdown]);
+
+  // IFSC auto-lookup
+  useEffect(() => {
+    const prefix = s5.ifsc.slice(0, 4).toUpperCase();
+    setBankName(prefix.length === 4 ? (IFSC_MAP[prefix] ?? 'Unknown Bank') : '');
+  }, [s5.ifsc]);
+
+  // KYC simulation — auto-start when we enter step 3
+  // Only depends on `step` so the cleanup doesn't cancel the timer when
+  // kycPhase transitions idle→loading (which would re-run the effect).
+  useEffect(() => {
+    if (step !== 3) return;
+    setKycPhase('loading');
+    const t = setTimeout(() => setKycPhase('found'), 2600);
+    return () => clearTimeout(t);
+  }, [step]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── OTP helpers ──────────────────────────────────────────────────────────────
+  const sendOtp = () => {
+    const code = Math.floor(100000 + Math.random() * 900000).toString();
+    setDemoOtp(code);
+    setOtpSent(true);
+    setCountdown(30);
+    setTimeout(() => otpRefs.current[0]?.focus(), 50);
+  };
+
+  const handleOtpChange = (i: number, val: string) => {
+    if (!/^[0-9]?$/.test(val)) return;
+    const next = [...otp];
+    next[i] = val;
+    setOtp(next);
+    if (val && i < 5) otpRefs.current[i + 1]?.focus();
+  };
+
+  const handleOtpKey = (i: number, e: React.KeyboardEvent) => {
+    if (e.key === 'Backspace' && !otp[i] && i > 0) otpRefs.current[i - 1]?.focus();
+  };
+
+  const otpCorrect = demoOtp.length === 6 && otp.join('') === demoOtp;
+
+  // ── Can proceed guard ─────────────────────────────────────────────────────────
+  const canNext: boolean = (() => {
+    switch (step) {
+      case 1: return !!(s1.firstName && s1.lastName && s1.pan.length >= 10 && s1.mobile.length >= 10 && s1.email.includes('@'));
+      case 2: return otpCorrect;
+      case 3: return kycPhase === 'found';
+      case 4: return !!(s4.gender && s4.occupation && s4.income);
+      case 5: return s5.accNumber.length >= 9 && s5.ifsc.length >= 11;
+      case 6: return !!(s6.incomeSlab && s6.declared);
+      case 7: return docs.pan && docs.address && docs.signature;
+      default: return true;
+    }
+  })();
+
+  // ── Navigation ────────────────────────────────────────────────────────────────
+  const goNext = () => {
+    if (step === 7) { setSubmitted(true); return; }
+    setStep(s=> s + 1);
+  };
+
+  const goBack = () => {
+    if (step === 1) { onBack(); return; }
+    if (step === 2) { setOtpSent(false); setOtp(['', '', '', '', '', '']); setDemoOtp(''); }
+    if (step === 3) { setKycPhase('idle'); }
+    setStep(s => s - 1);
+  };
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // ── Submitted screen ──────────────────────────────────────────────────────
+  if (submitted) {
+    return (
+      <motion.div
+        initial={{ opacity: 0, scale: 0.95 }}
+        animate={{ opacity: 1, scale: 1 }}
+        className="flex items-center justify-center p-10 min-h-full"
+      >
+        <div className="max-w-md w-full text-center">
+          <motion.div
+            initial={{ scale: 0 }}
+            animate={{ scale: 1 }}
+            transition={{ type: 'spring', delay: 0.1 }}
+            className="w-24 h-24 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-6"
+          >
+            <CheckCircle2 className="w-12 h-12 text-green-600" />
+          </motion.div>
+
+          <h1 className="text-2xl font-bold text-slate-800 mb-2">Application Submitted!</h1>
+          <p className="text-slate-500 text-sm mb-6 leading-relaxed">
+            {s1.firstName} {s1.lastName}'s onboarding application has been submitted and is under review.
+          </p>
+
+          <div className="bg-slate-50 border border-slate-200 rounded-2xl p-5 mb-6 text-left">
+            <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1">Reference Number</p>
+            <p className="text-xl font-bold font-mono text-[#0B1B3E]">{refNum}</p>
+            <p className="text-xs text-slate-500 mt-1.5">Estimated review time: 2–3 business days</p>
+          </div>
+
+          <div className="space-y-3 mb-8 text-left">
+            {[
+              { label: 'Identity Verified', sub: 'PAN & consent OTP matched', color: 'green', done: true },
+              { label: 'KYC Processed', sub: 'CKYC registry record found', color: 'green', done: true },
+              { label: 'Bank Mandate', sub: 'eNACH registration pending', color: 'amber', done: false },
+              { label: 'Compliance Review', sub: 'FATCA & PMLA check in queue', color: 'blue', done: false },
+            ].map(it => (
+              <div key={it.label} className={`flex items-center gap-3 rounded-xl p-3.5 bg-${it.color}-50`}>
+                {it.done
+                  ? <CheckCircle2 className={`w-5 h-5 text-${it.color}-600 flex-shrink-0`} />
+                  : <Loader2 className={`w-5 h-5 text-${it.color}-500 flex-shrink-0 animate-spin`} />
+                }
+                <div>
+                  <p className="text-sm font-semibold text-slate-800">{it.label}</p>
+                  <p className="text-xs text-slate-500">{it.sub}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <button
+            onClick={onComplete}
+            className="w-full py-3 bg-[#0B1B3E] text-white font-semibold rounded-xl hover:bg-[#1A3066] transition-colors"
+          >
+            Back to Dashboard
+          </button>
+        </div>
+      </motion.div>
+    );
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // ── Main layout ───────────────────────────────────────────────────────────
+  return (
+    <div className="p-8 max-w-4xl">
+
+      {/* Breadcrumb */}
+      <button
+        onClick={onBack}
+        className="flex items-center gap-2 text-slate-500 hover:text-slate-800 text-sm font-medium transition-colors mb-6"
+      >
+        <ArrowLeft className="w-4 h-4" /> Back
+      </button>
+
+      <div className="mb-6">
+        <h1 className="text-2xl font-semibold text-slate-800">Investor Onboarding</h1>
+        <p className="text-slate-500 text-sm mt-1">
+          {s1.firstName ? `${s1.firstName} ${s1.lastName} — ` : ''}Step {step} of {STEPS.length}
+        </p>
+      </div>
+
+      {/* ── Progress stepper ──────────────────────────────────────────────── */}
+      <div className="flex items-start mb-8 overflow-x-auto pb-2">
+        {STEPS.map((s, i) => {
+          const done = s.id < step;
+          const current = s.id === step;
+          return (
+            <div key={s.id} className="flex items-center flex-1 min-w-0">
+              <div className="flex flex-col items-center gap-1 flex-shrink-0">
+                <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold border-2 transition-all ${done ? 'bg-green-500 border-green-500 text-white' :
+                    current ? 'bg-[#0B1B3E] border-[#0B1B3E] text-white' :
+                      'bg-white border-slate-200 text-slate-400'
+                  }`}>
+                  {done ? <Check className="w-3.5 h-3.5" /> : s.id}
+                </div>
+                <span className={`text-[9px] font-semibold whitespace-nowrap ${current ? 'text-[#0B1B3E]' : done ? 'text-green-600' : 'text-slate-400'
+                  }`}>
+                  {s.label}
+                </span>
+              </div>
+              {i < STEPS.length - 1 && (
+                <div className={`h-0.5 flex-1 mx-1 mb-4 rounded transition-colors ${done ? 'bg-green-400' : 'bg-slate-200'}`} />
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      {/* ── Step card ─────────────────────────────────────────────────────── */}
+      <AnimatePresence mode="wait">
+        <motion.div
+          key={step}
+          initial={{ opacity: 0, x: 24 }}
+          animate={{ opacity: 1, x: 0 }}
+          exit={{ opacity: 0, x: -24 }}
+          transition={{ duration: 0.18 }}
+          className="bg-white rounded-2xl border border-slate-200 p-8"
+        >
+
+          {/* ── Step 1 — Basic Identity ──────────────────────────────── */}
+          {step === 1 && (
+            <div>
+              <h2 className="text-lg font-semibold text-slate-800 mb-1">Basic Identity</h2>
+              <p className="text-sm text-slate-500 mb-6">Investor's core identification details</p>
+              <div className="grid grid-cols-2 gap-5">
+                <Field label="First Name" required>
+                  <input value={s1.firstName} onChange={e => setS1({ ...s1, firstName: e.target.value })} placeholder="Rahul" className={inp} />
+                </Field>
+                <Field label="Last Name" required>
+                  <input value={s1.lastName} onChange={e => setS1({ ...s1, lastName: e.target.value })} placeholder="Verma" className={inp} />
+                </Field>
+                <Field label="PAN Number" required>
+                  <input
+                    value={s1.pan}
+                    onChange={e => setS1({ ...s1, pan: e.target.value.toUpperCase() })}
+                    placeholder="ABCDE1234F"
+                    maxLength={10}
+                    className={inp + ' font-mono tracking-widest'}
+                  />
+                </Field>
+                <Field label="Date of Birth">
+                  <input type="date" value={s1.dob} onChange={e => setS1({ ...s1, dob: e.target.value })} className={inp} />
+                </Field>
+                <Field label="Mobile Number" required>
+                  <input value={s1.mobile} onChange={e => setS1({ ...s1, mobile: e.target.value.replace(/\D/g, '') })} placeholder="9876543210" maxLength={13} className={inp} />
+                </Field>
+                <Field label="Email Address" required>
+                  <input type="email" value={s1.email} onChange={e => setS1({ ...s1, email: e.target.value })} placeholder="investor@email.com" className={inp} />
+                </Field>
+              </div>
+            </div>
+          )}
+
+          {/* ── Step 2 — Consent OTP ──────────────────────────────────── */}
+          {step === 2 && (
+            <div>
+              <h2 className="text-lg font-semibold text-slate-800 mb-1">Investor Consent</h2>
+              <p className="text-sm text-slate-500 mb-5">Verify investor identity via OTP before proceeding</p>
+
+              {/* Mode toggle */}
+              <div className="flex gap-2 mb-5">
+                {(['aadhaar', 'email'] as const).map(m => (
+                  <button
+                    key={m}
+                    onClick={() => { setConsentMode(m); setOtpSent(false); setConsentId(''); setOtp(['', '', '', '', '', '']); setDemoOtp(''); }}
+                    className={`px-4 py-2 rounded-xl text-sm font-semibold border transition-all ${consentMode === m
+                        ? 'bg-[#0B1B3E] text-white border-[#0B1B3E]'
+                        : 'bg-white text-slate-600 border-slate-200 hover:border-slate-300'
+                      }`}
+                  >
+                    {m === 'aadhaar' ? 'Aadhaar OTP' : 'Email OTP'}
+                  </button>
+                ))}
+              </div>
+
+              {!otpSent ? (
+                <div className="space-y-4 max-w-sm">
+                  <Field label={consentMode === 'aadhaar' ? 'Aadhaar Number' : 'Email Address'} required>
+                    <input
+                      value={consentId}
+                      onChange={e => setConsentId(e.target.value)}
+                      placeholder={consentMode === 'aadhaar' ? '1234 5678 9012' : (s1.email || 'investor@email.com')}
+                      className={inp}
+                    />
+                  </Field>
+                  <p className="text-xs text-slate-400">
+                    A 6-digit OTP will be sent to the investor's {consentMode === 'aadhaar' ? 'Aadhaar-linked mobile' : 'registered email'}.
+                  </p>
+                  <button
+                    onClick={sendOtp}
+                    disabled={!consentId}
+                    className="px-5 py-2.5 bg-[#0B1B3E] text-white text-sm font-semibold rounded-xl hover:bg-[#1A3066] transition-colors disabled:opacity-40"
+                  >
+                    Send OTP
+                  </button>
+                </div>
+              ) : (
+                <div className="space-y-5 max-w-sm">
+                  <p className="text-sm text-slate-600">
+                    OTP sent to investor's {consentMode === 'aadhaar' ? 'Aadhaar-linked mobile' : 'email'}.
+                  </p>
+                  <div className="bg-blue-50 border border-blue-200 rounded-xl px-4 py-2.5 text-sm">
+                    Demo hint — OTP:{' '}
+                    <span className="font-mono font-bold text-blue-700 tracking-widest">{demoOtp}</span>
+                  </div>
+
+                  {/* 6-box OTP input */}
+                  <div className="flex gap-2">
+                    {otp.map((d, i) => (
+                      <input
+                        key={i}
+                        ref={el => { otpRefs.current[i] = el; }}
+                        value={d}
+                        onChange={e => handleOtpChange(i, e.target.value.slice(-1))}
+                        onKeyDown={e => handleOtpKey(i, e)}
+                        maxLength={1}
+                        className={`w-12 h-12 text-center text-lg font-bold border-2 rounded-xl outline-none transition-all ${otpCorrect
+                            ? 'border-green-500 bg-green-50 text-green-700'
+                            : d
+                              ? 'border-blue-400 text-slate-800'
+                              : 'border-slate-200 text-slate-400'
+                          }`}
+                      />
+                    ))}
+                  </div>
+
+                  <AnimatePresence>
+                    {otpCorrect && (
+                      <motion.div
+                        initial={{ opacity: 0, y: 4 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        className="flex items-center gap-2 text-green-600 text-sm font-semibold"
+                      >
+                        <CheckCircle2 className="w-4 h-4" /> OTP verified successfully
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+
+                  <div>
+                    {countdown > 0
+                      ? <span className="text-xs text-slate-400">Resend in {countdown}s</span>
+                      : <button onClick={sendOtp} className="text-xs font-semibold text-blue-600 hover:underline">Resend OTP</button>
+                    }
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ── Step 3 — KYC Processing ───────────────────────────────── */}
+          {step === 3 && (
+            <div className="text-center py-8">
+              <h2 className="text-lg font-semibold text-slate-800 mb-1">KYC Processing</h2>
+              <p className="text-sm text-slate-500 mb-8">Checking CKYC registry and verifying investor documents</p>
+
+              {kycPhase === 'loading' && (
+                <div className="space-y-6">
+                  <div className="w-20 h-20 bg-blue-50 border-4 border-blue-100 rounded-full flex items-center justify-center mx-auto">
+                    <Loader2 className="w-8 h-8 text-blue-600 animate-spin" />
+                  </div>
+                  <div className="space-y-2 max-w-xs mx-auto text-left">
+                    {['Querying CKYC registry…', 'Verifying PAN details…', 'Matching Aadhaar data…'].map((t, i) => (
+                      <div key={i} className="flex items-center gap-2 text-sm text-slate-500">
+                        <Loader2 className="w-3.5 h-3.5 text-blue-400 animate-spin flex-shrink-0" />
+                        {t}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {kycPhase === 'found' && (
+                <motion.div
+                  initial={{ opacity: 0, scale: 0.9 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  className="space-y-6"
+                >
+                  <div className="w-20 h-20 bg-green-100 rounded-full flex items-center justify-center mx-auto">
+                    <ShieldCheck className="w-10 h-10 text-green-600" />
+                  </div>
+                  <div>
+                    <h3 className="text-lg font-bold text-green-700">KYC Record Found!</h3>
+                    <p className="text-sm text-slate-500 mt-1">CKYC registry match successful</p>
+                  </div>
+                  <div className="bg-slate-50 rounded-2xl border border-slate-200 p-5 max-w-xs mx-auto text-left space-y-3">
+                    {[
+                      { label: 'KYC Status', value: 'Compliant', badge: 'bg-green-100 text-green-700' },
+                      { label: 'CKYC Number', value: 'CKYC-' + (s1.pan.slice(-4) || 'XXXX') + '-2025' },
+                      { label: 'KYC Type', value: 'Full KYC (In-person)' },
+                      { label: 'Verified By', value: 'CDSL Ventures Ltd' },
+                    ].map(row => (
+                      <div key={row.label} className="flex justify-between items-center">
+                        <span className="text-xs text-slate-500">{row.label}</span>
+                        {row.badge
+                          ? <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${row.badge}`}>{row.value}</span>
+                          : <span className="text-xs font-semibold text-slate-800">{row.value}</span>
+                        }
+                      </div>
+                    ))}
+                  </div>
+                </motion.div>
+              )}
+            </div>
+          )}
+
+          {/* ── Step 4 — Personal Details ─────────────────────────────── */}
+          {step === 4 && (
+            <div>
+              <h2 className="text-lg font-semibold text-slate-800 mb-1">Personal Details</h2>
+              <p className="text-sm text-slate-500 mb-6">Additional investor profile information</p>
+              <div className="grid grid-cols-2 gap-5">
+                <Field label="Gender" required>
+                  <select value={s4.gender} onChange={e => setS4({ ...s4, gender: e.target.value })} className={sel}>
+                    <option value="">Select gender</option>
+                    {['Male', 'Female', 'Other', 'Prefer not to say'].map(g => <option key={g}>{g}</option>)}
+                  </select>
+                </Field>
+                <Field label="Occupation" required>
+                  <select value={s4.occupation} onChange={e => setS4({ ...s4, occupation: e.target.value })} className={sel}>
+                    <option value="">Select occupation</option>
+                    {['Salaried', 'Self-Employed', 'Business Owner', 'Retired', 'Student', 'Homemaker'].map(o => <option key={o}>{o}</option>)}
+                  </select>
+                </Field>
+                <Field label="Annual Income Range" required>
+                  <select value={s4.income} onChange={e => setS4({ ...s4, income: e.target.value })} className={sel}>
+                    <option value="">Select range</option>
+                    {['Below ₹1 L', '₹1–5 L', '₹5–10 L', '₹10–25 L', '₹25–50 L', 'Above ₹50 L'].map(r => <option key={r}>{r}</option>)}
+                  </select>
+                </Field>
+                <Field label="Contact Ownership">
+                  <select value={s4.contactOwner} onChange={e => setS4({ ...s4, contactOwner: e.target.value })} className={sel}>
+                    {['Self', 'Spouse', 'Guardian', 'Other'].map(c => <option key={c}>{c}</option>)}
+                  </select>
+                </Field>
+              </div>
+
+              {/* Nominee — expandable */}
+              <div className="mt-5 border border-slate-200 rounded-xl overflow-hidden">
+                <button
+                  type="button"
+                  onClick={() => setShowNominee(n => !n)}
+                  className="w-full flex items-center justify-between px-4 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-50 transition-colors"
+                >
+                  <span className="flex items-center gap-2">
+                    <User className="w-4 h-4 text-slate-400" />
+                    Nominee Details
+                    <span className="text-xs font-normal text-slate-400">(optional)</span>
+                  </span>
+                  <span className={`text-slate-400 text-xs transition-transform duration-200 ${showNominee ? 'rotate-180' : ''}`}>▼</span>
+                </button>
+                <AnimatePresence>
+                  {showNominee && (
+                    <motion.div
+                      initial={{ height: 0, opacity: 0 }}
+                      animate={{ height: 'auto', opacity: 1 }}
+                      exit={{ height: 0, opacity: 0 }}
+                      className="overflow-hidden"
+                    >
+                      <div className="px-4 pb-5 pt-3 grid grid-cols-2 gap-4 border-t border-slate-100 bg-slate-50">
+                        <Field label="Nominee Full Name">
+                          <input value={nominee.name} onChange={e => setNominee({ ...nominee, name: e.target.value })} placeholder="Full legal name" className={inp} />
+                        </Field>
+                        <Field label="Relationship">
+                          <select value={nominee.relation} onChange={e => setNominee({ ...nominee, relation: e.target.value })} className={sel}>
+                            <option value="">Select</option>
+                            {['Spouse', 'Son', 'Daughter', 'Father', 'Mother', 'Brother', 'Sister'].map(r => <option key={r}>{r}</option>)}
+                          </select>
+                        </Field>
+                      </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </div>
+            </div>
+          )}
+
+          {/* ── Step 5 — Bank Details ─────────────────────────────────── */}
+          {step === 5 && (
+            <div>
+              <h2 className="text-lg font-semibold text-slate-800 mb-1">Bank Details</h2>
+              <p className="text-sm text-slate-500 mb-6">Link the investor's bank account for transactions</p>
+              <div className="grid grid-cols-2 gap-5">
+                <Field label="Account Number" required>
+                  <input
+                    value={s5.accNumber}
+                    onChange={e => setS5({ ...s5, accNumber: e.target.value.replace(/\D/g, '') })}
+                    placeholder="12345678901234"
+                    maxLength={18}
+                    className={inp + ' font-mono'}
+                  />
+                </Field>
+                <Field label="Account Type">
+                  <select value={s5.accType} onChange={e => setS5({ ...s5, accType: e.target.value })} className={sel}>
+                    {['Savings', 'Current', 'NRE', 'NRO'].map(t => <option key={t}>{t}</option>)}
+                  </select>
+                </Field>
+                <div className="col-span-2">
+                  <Field label="IFSC Code" required>
+                    <div className="flex gap-3 items-start flex-wrap">
+                      <input
+                        value={s5.ifsc}
+                        onChange={e => setS5({ ...s5, ifsc: e.target.value.toUpperCase() })}
+                        placeholder="HDFC0001234"
+                        maxLength={11}
+                        className={inp + ' font-mono w-44'}
+                      />
+                      <AnimatePresence>
+                        {bankName && (
+                          <motion.div
+                            initial={{ opacity: 0, scale: 0.9 }}
+                            animate={{ opacity: 1, scale: 1 }}
+                            className="flex items-center gap-2 bg-green-50 border border-green-200 rounded-xl px-3.5 py-2.5"
+                          >
+                            <Building2 className="w-4 h-4 text-green-600 flex-shrink-0" />
+                            <span className="text-sm font-semibold text-green-700">{bankName}</span>
+                          </motion.div>
+                        )}
+                      </AnimatePresence>
+                    </div>
+                  </Field>
+                </div>
+                <div className="col-span-2">
+                  <label
+                    className="flex items-center gap-3 cursor-pointer"
+                    onClick={() => setS5({ ...s5, primary: !s5.primary })}
+                  >
+                    <div className={`w-5 h-5 rounded border-2 flex items-center justify-center transition-all flex-shrink-0 ${s5.primary ? 'bg-[#0B1B3E] border-[#0B1B3E]' : 'border-slate-300 bg-white'
+                      }`}>
+                      {s5.primary && <Check className="w-3 h-3 text-white" />}
+                    </div>
+                    <span className="text-sm text-slate-700 select-none">Set as primary bank account</span>
+                  </label>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* ── Step 6 — FATCA ────────────────────────────────────────── */}
+          {step === 6 && (
+            <div>
+              <h2 className="text-lg font-semibold text-slate-800 mb-1">FATCA Declaration</h2>
+              <p className="text-sm text-slate-500 mb-6">Foreign Account Tax Compliance Act — mandatory for all investors</p>
+              <div className="grid grid-cols-2 gap-5">
+                <Field label="Country of Tax Residency">
+                  <select value={s6.taxResidency} onChange={e => setS6({ ...s6, taxResidency: e.target.value })} className={sel}>
+                    {['India', 'USA', 'UK', 'Canada', 'Australia', 'UAE', 'Singapore', 'Other'].map(c => <option key={c}>{c}</option>)}
+                  </select>
+                </Field>
+                {s6.taxResidency !== 'India' && (
+                  <Field label="Overseas Tax ID / TIN">
+                    <input value={s6.taxCountry} onChange={e => setS6({ ...s6, taxCountry: e.target.value })} placeholder="Tax identification number" className={inp} />
+                  </Field>
+                )}
+                <Field label="Annual Income Slab" required>
+                  <select value={s6.incomeSlab} onChange={e => setS6({ ...s6, incomeSlab: e.target.value })} className={sel}>
+                    <option value="">Select slab</option>
+                    {['Below ₹1 L', '₹1–5 L', '₹5–10 L', '₹10–25 L', '₹25–50 L', 'Above ₹50 L', 'Above ₹1 Cr'].map(r => <option key={r}>{r}</option>)}
+                  </select>
+                </Field>
+                <Field label="Politically Exposed Person (PEP)">
+                  <select value={s6.politicalExp} onChange={e => setS6({ ...s6, politicalExp: e.target.value })} className={sel}>
+                    {['No', 'Yes', 'Related to PEP'].map(v => <option key={v}>{v}</option>)}
+                  </select>
+                </Field>
+              </div>
+
+              <div className="mt-6 bg-slate-50 rounded-xl border border-slate-200 p-4">
+                <p className="text-xs text-slate-600 leading-relaxed mb-4">
+                  I declare that all information provided is true and correct. I confirm that I am not a US Person / non-Indian tax resident unless declared above. I understand this information may be shared with relevant tax authorities under FATCA/CRS regulations.
+                </p>
+                <label
+                  className="flex items-start gap-3 cursor-pointer"
+                  onClick={() => setS6({ ...s6, declared: !s6.declared })}
+                >
+                  <div className={`w-5 h-5 rounded border-2 flex items-center justify-center mt-0.5 transition-all flex-shrink-0 ${s6.declared ? 'bg-[#0B1B3E] border-[#0B1B3E]' : 'border-slate-300 bg-white'
+                    }`}>
+                    {s6.declared && <Check className="w-3 h-3 text-white" />}
+                  </div>
+                  <span className="text-sm font-semibold text-slate-700 select-none">
+                    I confirm the above declaration on behalf of the investor
+                  </span>
+                </label>
+              </div>
+            </div>
+          )}
+
+          {/* ── Step 7 — Documents ────────────────────────────────────── */}
+          {step === 7 && (
+            <div>
+              <h2 className="text-lg font-semibold text-slate-800 mb-1">Document Upload</h2>
+              <p className="text-sm text-slate-500 mb-6">Upload self-attested copies of the required documents</p>
+
+              <div className="space-y-4">
+                {[
+                  { key: 'pan' as const, label: 'PAN Card', sub: 'Front side, self-attested' },
+                  { key: 'address' as const, label: 'Address Proof', sub: 'Aadhaar / Passport / Utility bill' },
+                  { key: 'signature' as const, label: 'Signature Specimen', sub: 'On white paper — scan or photo' },
+                ].map(doc => (
+                  <div
+                    key={doc.key}
+                    onClick={() => setDocs({ ...docs, [doc.key]: !docs[doc.key] })}
+                    className={`flex items-center justify-between p-4 border-2 rounded-xl cursor-pointer transition-all ${docs[doc.key]
+                        ? 'border-green-400 bg-green-50'
+                        : 'border-dashed border-slate-300 bg-white hover:border-slate-400 hover:bg-slate-50'
+                      }`}
+                  >
+                    <div className="flex items-center gap-3">
+                      {docs[doc.key]
+                        ? <CheckCircle2 className="w-8 h-8 text-green-600 flex-shrink-0" />
+                        : <div className="w-8 h-8 rounded-lg bg-slate-100 flex items-center justify-center flex-shrink-0">
+                          <Upload className="w-4 h-4 text-slate-400" />
+                        </div>
+                      }
+                      <div>
+                        <p className="text-sm font-semibold text-slate-800">
+                          {doc.label} <span className="text-red-400">*</span>
+                        </p>
+                        <p className="text-xs text-slate-500">
+                          {docs[doc.key] ? 'Uploaded successfully' : doc.sub}
+                        </p>
+                      </div>
+                    </div>
+                    {!docs[doc.key] && (
+                      <span className="text-xs font-semibold text-blue-600 border border-blue-200 bg-blue-50 px-3 py-1.5 rounded-lg">
+                        Upload
+                      </span>
+                    )}
+                  </div>
+                ))}
+              </div>
+
+              <p className="text-xs text-slate-400 mt-5">
+                💡 In this demo, clicking a document row simulates a successful upload.
+                Supported: PDF, JPG, PNG (max 5 MB each).
+              </p>
+            </div>
+          )}
+
+        </motion.div>
+      </AnimatePresence>
+
+      {/* ── Navigation bar ────────────────────────────────────────────────── */}
+      <div className="flex items-center justify-between mt-6">
+        <button
+          onClick={goBack}
+          className="flex items-center gap-2 px-5 py-2.5 text-sm font-semibold text-slate-600 border border-slate-200 bg-white rounded-xl hover:bg-slate-50 transition-colors"
+        >
+          <ArrowLeft className="w-4 h-4" />
+          {step === 1 ? 'Cancel' : 'Back'}
+        </button>
+
+        <div className="flex items-center gap-3">
+          <span className="text-xs text-slate-400 font-medium">{step} / {STEPS.length}</span>
+          <button
+            onClick={goNext}
+            disabled={!canNext}
+            className="flex items-center gap-2 px-6 py-2.5 text-sm font-semibold bg-[#0B1B3E] text-white rounded-xl hover:bg-[#1A3066] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            {step === 7 ? 'Submit Application' : 'Continue'}
+            {step < 7 && <ArrowRight className="w-4 h-4" />}
+          </button>
+        </div>
+      </div>
+
+    </div>
+  );
+}

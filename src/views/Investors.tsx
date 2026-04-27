@@ -1,14 +1,26 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Search, Filter, ChevronLeft, Download, ShieldCheck, AreaChart, Activity } from 'lucide-react';
+import {
+  Search, Filter, ChevronLeft, Download, ShieldCheck,
+  AreaChart, Activity, TrendingUp,
+} from 'lucide-react';
 import { AreaChart as RechartsArea, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 
-const investors = [
-  { id: 1, name: 'Aditya Sharma', type: 'HNI', kyc: 'Verified', aum: '₹1.2 Cr', lastActive: '2 days ago' },
-  { id: 2, name: 'Meera Iyer', type: 'Retail', kyc: 'Pending', aum: '₹45 L', lastActive: '5 hours ago' },
-  { id: 3, name: 'Rahul Verma', type: 'Institutional', kyc: 'Verified', aum: '₹15 Cr', lastActive: '1 week ago' },
-  { id: 4, name: 'Sunita Kapur', type: 'Retail', kyc: 'Verified', aum: '₹12 L', lastActive: 'Today' },
-  { id: 5, name: 'Tech Innovations PF', type: 'Institutional', kyc: 'Verified', aum: '₹42 Cr', lastActive: 'Today' },
+interface Investor {
+  id: number;
+  name: string;
+  type: string;
+  kyc: string;
+  aum: string;
+  lastActive: string;
+}
+
+const investors: Investor[] = [
+  { id: 1, name: 'Aditya Sharma',       type: 'HNI',           kyc: 'Verified', aum: '₹1.2 Cr', lastActive: '2 days ago' },
+  { id: 2, name: 'Meera Iyer',          type: 'Retail',        kyc: 'Pending',  aum: '₹45 L',   lastActive: '5 hours ago' },
+  { id: 3, name: 'Rahul Verma',         type: 'Institutional', kyc: 'Verified', aum: '₹15 Cr',  lastActive: '1 week ago' },
+  { id: 4, name: 'Sunita Kapur',        type: 'Retail',        kyc: 'Verified', aum: '₹12 L',   lastActive: 'Today' },
+  { id: 5, name: 'Tech Innovations PF', type: 'Institutional', kyc: 'Verified', aum: '₹42 Cr',  lastActive: 'Today' },
 ];
 
 const performanceData = [
@@ -20,11 +32,23 @@ const performanceData = [
   { month: 'Jun', value: 125 },
 ];
 
-export default function Investors() {
+export default function Investors({
+  onInvest,
+}: {
+  onInvest?: (investor: Investor) => void;
+}) {
   const [selectedInvestor, setSelectedInvestor] = useState<number | null>(null);
 
-  if (selectedInvestor) {
-    return <InvestorDetail investor={investors.find(i => i.id === selectedInvestor)} onBack={() => setSelectedInvestor(null)} />;
+  if (selectedInvestor !== null) {
+    const inv = investors.find(i => i.id === selectedInvestor);
+    if (!inv) { setSelectedInvestor(null); return null; }
+    return (
+      <InvestorDetail
+        investor={inv}
+        onBack={() => setSelectedInvestor(null)}
+        onInvest={onInvest}
+      />
+    );
   }
 
   return (
@@ -48,14 +72,14 @@ export default function Investors() {
         <div className="p-4 border-b border-slate-100 flex gap-4">
           <div className="relative flex-1 max-w-md">
             <Search className="w-4 h-4 absolute left-3 top-3 text-slate-400" />
-            <input 
-              type="text" 
-              placeholder="Search by name, PAN, or tier..." 
+            <input
+              type="text"
+              placeholder="Search by name, PAN, or tier..."
               className="w-full pl-9 pr-4 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:bg-white focus:ring-2 focus:ring-blue-100 focus:border-blue-500 transition-all outline-none"
             />
           </div>
         </div>
-        
+
         <div className="flex-1 overflow-auto">
           <table className="w-full text-left">
             <thead className="bg-slate-50 text-[10px] uppercase tracking-wider text-slate-500 sticky top-0 z-10 font-semibold">
@@ -64,19 +88,24 @@ export default function Investors() {
                 <th className="px-6 py-4 font-semibold">Classification</th>
                 <th className="px-6 py-4 font-semibold">AUM</th>
                 <th className="px-6 py-4 font-semibold">KYC Status</th>
-                <th className="px-6 py-4 font-semibold text-right">Last Interaction</th>
+                <th className="px-6 py-4 font-semibold">Last Interaction</th>
+                <th className="px-6 py-4 font-semibold text-right">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {investors.map(inv => (
-                <tr 
-                  key={inv.id} 
-                  onClick={() => setSelectedInvestor(inv.id)}
-                  className="group hover:bg-slate-50 transition-colors cursor-pointer"
+                <tr
+                  key={inv.id}
+                  className="group hover:bg-slate-50 transition-colors"
                 >
                   <td className="px-6 py-4">
-                    <div className="font-semibold text-slate-800 group-hover:text-blue-600 transition-colors">{inv.name}</div>
-                    <div className="text-xs text-slate-400 font-mono mt-1">ID: INV-{1000 + inv.id}</div>
+                    <button
+                      onClick={() => setSelectedInvestor(inv.id)}
+                      className="text-left"
+                    >
+                      <div className="font-semibold text-slate-800 group-hover:text-blue-600 transition-colors">{inv.name}</div>
+                      <div className="text-xs text-slate-400 font-mono mt-1">ID: INV-{1000 + inv.id}</div>
+                    </button>
                   </td>
                   <td className="px-6 py-4">
                     <span className={`px-2.5 py-1 text-xs font-semibold rounded-md ${
@@ -93,7 +122,17 @@ export default function Investors() {
                       {inv.kyc}
                     </span>
                   </td>
-                  <td className="px-6 py-4 text-xs text-slate-500 text-right">{inv.lastActive}</td>
+                  <td className="px-6 py-4 text-xs text-slate-500">{inv.lastActive}</td>
+                  <td className="px-6 py-4 text-right">
+                    {inv.kyc === 'Verified' && onInvest && (
+                      <button
+                        onClick={() => onInvest(inv)}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+                      >
+                        <TrendingUp className="w-3.5 h-3.5" /> Invest Now
+                      </button>
+                    )}
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -104,14 +143,22 @@ export default function Investors() {
   );
 }
 
-function InvestorDetail({ investor, onBack }: { investor: any, onBack: () => void }) {
+function InvestorDetail({
+  investor,
+  onBack,
+  onInvest,
+}: {
+  investor: Investor;
+  onBack: () => void;
+  onInvest?: (investor: Investor) => void;
+}) {
   const [activeTab, setActiveTab] = useState('overview');
 
   const tabs = [
-    { id: 'overview', label: 'Overview' },
-    { id: 'portfolio', label: 'Portfolio Analysis' },
-    { id: 'compliance', label: 'Compliance' },
-    { id: 'transactions', label: 'Transactions' }
+    { id: 'overview',     label: 'Overview'          },
+    { id: 'portfolio',    label: 'Portfolio Analysis' },
+    { id: 'compliance',   label: 'Compliance'         },
+    { id: 'transactions', label: 'Transactions'       },
   ];
 
   return (
@@ -130,9 +177,19 @@ function InvestorDetail({ investor, onBack }: { investor: any, onBack: () => voi
             <span className="text-slate-500 font-mono text-xs">PAN: ABCDE1234F</span>
           </div>
         </div>
-        <button className="flex items-center gap-2 px-4 py-2 text-sm font-medium bg-white border border-slate-200 text-slate-700 rounded-lg shadow-sm hover:bg-slate-50 transition-colors">
-          <Download className="w-4 h-4" /> Dossier
-        </button>
+        <div className="flex gap-2">
+          <button className="flex items-center gap-2 px-4 py-2 text-sm font-medium bg-white border border-slate-200 text-slate-700 rounded-lg shadow-sm hover:bg-slate-50 transition-colors">
+            <Download className="w-4 h-4" /> Dossier
+          </button>
+          {investor.kyc === 'Verified' && onInvest && (
+            <button
+              onClick={() => onInvest(investor)}
+              className="flex items-center gap-2 px-4 py-2 text-sm font-medium bg-blue-600 text-white rounded-lg shadow-sm hover:bg-blue-700 transition-colors"
+            >
+              <TrendingUp className="w-4 h-4" /> Invest Now
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="flex gap-6 border-b border-slate-200 mb-8">
@@ -156,7 +213,9 @@ function InvestorDetail({ investor, onBack }: { investor: any, onBack: () => voi
             <div className="grid grid-cols-3 gap-6">
               <div className="col-span-2 bg-white rounded-2xl p-6 shadow-sm border border-slate-200">
                 <div className="flex justify-between items-center mb-6">
-                  <h3 className="font-semibold text-slate-800 flex items-center gap-2"><AreaChart className="w-5 h-5 text-blue-500" /> Performance History</h3>
+                  <h3 className="font-semibold text-slate-800 flex items-center gap-2">
+                    <AreaChart className="w-5 h-5 text-blue-500" /> Performance History
+                  </h3>
                   <select className="text-xs font-semibold bg-slate-50 border-none rounded-md outline-none cursor-pointer">
                     <option>Year to Date</option>
                     <option>Last 1 Year</option>
@@ -167,8 +226,8 @@ function InvestorDetail({ investor, onBack }: { investor: any, onBack: () => voi
                     <RechartsArea data={performanceData} margin={{ top: 10, right: 0, left: -20, bottom: 0 }}>
                       <defs>
                         <linearGradient id="colorVal" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.3}/>
-                          <stop offset="95%" stopColor="#3b82f6" stopOpacity={0}/>
+                          <stop offset="5%"  stopColor="#3b82f6" stopOpacity={0.3} />
+                          <stop offset="95%" stopColor="#3b82f6" stopOpacity={0}   />
                         </linearGradient>
                       </defs>
                       <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
@@ -185,23 +244,25 @@ function InvestorDetail({ investor, onBack }: { investor: any, onBack: () => voi
                 <div>
                   <p className="text-xs font-semibold text-blue-300 uppercase tracking-wider mb-2">Current Value (AUM)</p>
                   <p className="text-4xl font-semibold tracking-tight">{investor.aum}</p>
-                  <p className="text-sm text-green-400 mt-2 font-medium flex items-center gap-1"><Activity className="w-4 h-4" /> +12.5% XIRR</p>
+                  <p className="text-sm text-green-400 mt-2 font-medium flex items-center gap-1">
+                    <Activity className="w-4 h-4" /> +12.5% XIRR
+                  </p>
                 </div>
                 <div className="bg-white/10 rounded-xl p-4 mt-8">
                   <p className="text-xs font-semibold mb-2 text-blue-200">Asset Allocation</p>
                   <div className="space-y-3">
-                    <div>
-                      <div className="flex justify-between text-xs mb-1"><span>Equity</span><span>65%</span></div>
-                      <div className="h-1.5 w-full bg-white/20 rounded-full overflow-hidden"><div className="h-full bg-blue-400 w-[65%]" /></div>
-                    </div>
-                    <div>
-                      <div className="flex justify-between text-xs mb-1"><span>Debt</span><span>25%</span></div>
-                      <div className="h-1.5 w-full bg-white/20 rounded-full overflow-hidden"><div className="h-full bg-emerald-400 w-[25%]" /></div>
-                    </div>
-                    <div>
-                      <div className="flex justify-between text-xs mb-1"><span>Liquid</span><span>10%</span></div>
-                      <div className="h-1.5 w-full bg-white/20 rounded-full overflow-hidden"><div className="h-full bg-amber-400 w-[10%]" /></div>
-                    </div>
+                    {[
+                      { label: 'Equity', pct: '65%', w: 'w-[65%]', color: 'bg-blue-400' },
+                      { label: 'Debt',   pct: '25%', w: 'w-[25%]', color: 'bg-emerald-400' },
+                      { label: 'Liquid', pct: '10%', w: 'w-[10%]', color: 'bg-amber-400' },
+                    ].map(a => (
+                      <div key={a.label}>
+                        <div className="flex justify-between text-xs mb-1"><span>{a.label}</span><span>{a.pct}</span></div>
+                        <div className="h-1.5 w-full bg-white/20 rounded-full overflow-hidden">
+                          <div className={`h-full ${a.color} ${a.w}`} />
+                        </div>
+                      </div>
+                    ))}
                   </div>
                 </div>
               </div>

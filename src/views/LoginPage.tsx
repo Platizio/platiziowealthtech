@@ -3,10 +3,61 @@ import { motion, AnimatePresence } from 'motion/react';
 import {
   Eye, EyeOff, ArrowLeft, AlertCircle, ShieldCheck,
   CheckSquare, Square, Mail, KeyRound, ChevronLeft,
-  CheckCircle2, Smartphone, RefreshCw, MessageSquare,
+  CheckCircle2, Smartphone, RefreshCw, MessageSquare, Check,
 } from 'lucide-react';
 
 const REMEMBER_KEY = 'apex_remembered_email';
+
+// ── Password strength (shown while typing on login too) ───────────────────────
+const PWD_CHECKS = [
+  { key: 'length',  label: 'At least 8 characters',        test: (p: string) => p.length >= 8 },
+  { key: 'upper',   label: 'At least 1 capital letter',    test: (p: string) => /[A-Z]/.test(p) },
+  { key: 'number',  label: 'At least 1 number',            test: (p: string) => /[0-9]/.test(p) },
+  { key: 'special', label: 'At least 1 special character', test: (p: string) => /[^A-Za-z0-9]/.test(p) },
+];
+
+function getPwdScore(pwd: string) {
+  return PWD_CHECKS.filter(c => c.test(pwd)).length;
+}
+
+const STRENGTH_META = [
+  { label: '',            bar: '',               text: ''                },
+  { label: 'Weak',        bar: 'bg-red-500',     text: 'text-red-600'   },
+  { label: 'Moderate',    bar: 'bg-amber-500',   text: 'text-amber-600' },
+  { label: 'Strong',      bar: 'bg-teal-500',    text: 'text-teal-600'  },
+  { label: 'Very Strong', bar: 'bg-green-500',   text: 'text-green-600' },
+];
+
+function PasswordStrengthBar({ password }: { password: string }) {
+  if (!password) return null;
+  const score = getPwdScore(password);
+  const meta  = STRENGTH_META[score];
+  return (
+    <div className="mt-2 space-y-2">
+      <div className="flex gap-1">
+        {[1, 2, 3, 4].map(i => (
+          <div key={i} className={`h-1.5 flex-1 rounded-full transition-all duration-300 ${i <= score ? meta.bar : 'bg-slate-200'}`} />
+        ))}
+      </div>
+      <div className="flex items-center justify-between">
+        <p className={`text-[11px] font-semibold ${meta.text}`}>{meta.label}</p>
+      </div>
+      <div className="grid grid-cols-2 gap-1">
+        {PWD_CHECKS.map(c => {
+          const ok = c.test(password);
+          return (
+            <p key={c.key} className={`text-[11px] flex items-center gap-1.5 ${ok ? 'text-green-600' : 'text-slate-400'}`}>
+              <span className={`w-3.5 h-3.5 rounded-full flex items-center justify-center flex-shrink-0 ${ok ? 'bg-green-100' : 'bg-slate-100'}`}>
+                {ok ? <Check className="w-2.5 h-2.5" /> : <span className="w-1 h-1 rounded-full bg-slate-300 block" />}
+              </span>
+              {c.label}
+            </p>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
 
 type LoginMode = 'password' | 'otp';
 type OtpStep   = 'send' | 'verify';
@@ -26,8 +77,8 @@ export default function LoginPage({
 
   /* ── Password state ─────────────────────────────────────────────────── */
   const [email,      setEmail]      = useState('');
-  const [arn,        setArn]        = useState('');
-  const [showArn,    setShowArn]    = useState(false);
+  const [password,   setPassword]   = useState('');
+  const [showPwd,    setShowPwd]    = useState(false);
   const [rememberMe, setRememberMe] = useState(false);
   const [pwError,    setPwError]    = useState('');
   const [pwLoading,  setPwLoading]  = useState(false);
@@ -79,9 +130,9 @@ export default function LoginPage({
   /* ── Password login ─────────────────────────────────────────────────── */
   const handlePasswordLogin = () => {
     setPwError('');
-    const em = email.trim().toLowerCase();
-    const ar = arn.trim();
-    if (!em || !ar) { setPwError('Please enter both Email Address and ARN Number.'); return; }
+    const em  = email.trim().toLowerCase();
+    const pwd = password;
+    if (!em || !pwd) { setPwError('Please enter your Email Address and Password.'); return; }
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(em)) {
       setPwError('Email address format is invalid (e.g. you@example.com).');
       return;
@@ -89,7 +140,7 @@ export default function LoginPage({
     setPwLoading(true);
     setTimeout(() => {
       const user = getUsers().find(
-        u => u.email?.toLowerCase() === em && u.arn?.toLowerCase() === ar.toLowerCase(),
+        (u: any) => u.email?.toLowerCase() === em && u.password === pwd,
       );
       if (user) {
         if (rememberMe) localStorage.setItem(REMEMBER_KEY, em);
@@ -97,10 +148,10 @@ export default function LoginPage({
         sessionStorage.setItem('apex_session', JSON.stringify(user));
         onLogin();
       } else {
-        setPwError('No account found with these credentials. Check your email and ARN, or sign up.');
+        setPwError('Incorrect email or password. Please try again.');
+        setPwLoading(false);
       }
-      setPwLoading(false);
-    }, 600);
+    }, 700);
   };
 
   /* ── Forgot ARN ─────────────────────────────────────────────────────── */
@@ -212,7 +263,7 @@ export default function LoginPage({
                    : loginMode === 'otp' ? 'Quick OTP Login'
                    : 'Welcome Back';
   const leftSubtitle = forgotMode
-    ? "Enter your registered email and we'll retrieve your ARN credentials."
+    ? "Enter your registered email and we'll send a password reset link."
     : loginMode === 'otp'
     ? 'No password needed — enter your email or mobile to receive a one-time passcode.'
     : 'Sign in to access your distributor dashboard, manage investors, and track earnings.';
@@ -275,8 +326,8 @@ export default function LoginPage({
               <div className="w-14 h-14 rounded-2xl bg-blue-50 border border-blue-100 flex items-center justify-center mb-6">
                 <KeyRound className="w-6 h-6 text-blue-500" />
               </div>
-              <h1 className="text-2xl font-semibold text-slate-800 mb-1">Forgot your credentials?</h1>
-              <p className="text-sm text-slate-500 mb-8">Enter your registered email and we'll retrieve your ARN number.</p>
+              <h1 className="text-2xl font-semibold text-slate-800 mb-1">Forgot your password?</h1>
+              <p className="text-sm text-slate-500 mb-8">Enter your registered email and we'll send a password reset link.</p>
 
               <AnimatePresence mode="wait">
                 {forgotStatus === 'sent' && (
@@ -284,13 +335,17 @@ export default function LoginPage({
                     <div className="w-12 h-12 rounded-full bg-green-100 flex items-center justify-center mx-auto mb-4">
                       <CheckCircle2 className="w-6 h-6 text-green-500" />
                     </div>
-                    <p className="text-sm font-semibold text-slate-700 mb-1">Account found!</p>
-                    <p className="text-xs text-slate-500 mb-4">Your registered ARN number is:</p>
-                    <div className="inline-flex items-center gap-2 bg-white border border-green-200 rounded-xl px-4 py-2.5 mb-5">
-                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">ARN</span>
-                      <span className="text-sm font-mono font-bold text-slate-800">{recoveredArn}</span>
+                    <p className="text-sm font-semibold text-slate-700 mb-1">Reset link sent!</p>
+                    <p className="text-xs text-slate-500 mb-4">
+                      A password reset link has been sent to{' '}
+                      <span className="font-semibold text-slate-700">{forgotEmail}</span>.
+                    </p>
+                    <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 mb-5 text-left">
+                      <p className="text-[11px] text-amber-800 leading-relaxed">
+                        <span className="font-bold">Demo note:</span> No real email is sent. Use the demo password{' '}
+                        <span className="font-mono font-bold">Apex@2024</span> to sign in.
+                      </p>
                     </div>
-                    <p className="text-xs text-slate-400 mb-5">Use this ARN along with your email to sign in.</p>
                     <button onClick={resetForgot} className="w-full py-3 bg-[#0B1B3E] text-white font-semibold text-sm rounded-xl hover:bg-[#1A3066] transition-colors">
                       Back to Sign In
                     </button>
@@ -324,7 +379,7 @@ export default function LoginPage({
                     </div>
                     <button onClick={handleForgotSubmit} disabled={forgotStatus === 'loading' || !forgotEmail.trim()}
                       className="w-full py-3.5 bg-[#0B1B3E] text-white font-semibold text-sm rounded-xl hover:bg-[#1A3066] transition-colors disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2 shadow-lg">
-                      {forgotStatus === 'loading' ? (<><Spinner />Looking up…</>) : 'Retrieve My ARN'}
+                      {forgotStatus === 'loading' ? (<><Spinner />Sending…</>) : 'Send Reset Link'}
                     </button>
                     <p className="text-center text-xs text-slate-400 mt-5">
                       Remember your credentials?{' '}
@@ -397,11 +452,11 @@ export default function LoginPage({
                   {/* Demo hint */}
                   <div className="mb-6 bg-blue-50 border border-blue-100 rounded-xl px-4 py-3 flex items-start gap-3">
                     <span className="text-blue-400 mt-0.5 text-sm">ℹ</span>
-                    <p className="text-xs text-blue-700 leading-relaxed">
-                      <span className="font-semibold">Demo credentials:</span>{' '}
-                      Email: <span className="font-mono font-bold">aditya@apexwealth.in</span>&nbsp;|&nbsp;
-                      ARN: <span className="font-mono font-bold">ARN-102943</span>
-                    </p>
+                    <div className="text-xs text-blue-700 leading-relaxed">
+                      <p className="font-semibold mb-0.5">Demo credentials</p>
+                      <p>Email: <span className="font-mono font-bold">aditya@apexwealth.in</span></p>
+                      <p>Password: <span className="font-mono font-bold">Apex@2024</span></p>
+                    </div>
                   </div>
 
                   {/* Error */}
@@ -427,29 +482,28 @@ export default function LoginPage({
                       className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm focus:ring-2 focus:ring-blue-100 focus:border-blue-500 outline-none transition-all" />
                   </div>
 
-                  {/* ARN */}
+                  {/* Password */}
                   <div className="mb-5">
                     <div className="flex items-center justify-between mb-1.5">
                       <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider">
-                        ARN Number <span className="text-red-400">*</span>
+                        Password <span className="text-red-400">*</span>
                       </label>
                       <button type="button" onClick={() => { setForgotMode(true); setForgotEmail(email); }}
                         className="text-[11px] text-blue-500 hover:text-blue-700 font-medium hover:underline transition-colors">
-                        Forgot ARN?
+                        Forgot Password?
                       </button>
                     </div>
                     <div className="relative">
-                      <input type={showArn ? 'text' : 'password'} value={arn}
-                        onChange={e => { setArn(e.target.value); setPwError(''); }}
+                      <input type={showPwd ? 'text' : 'password'} value={password}
+                        onChange={e => { setPassword(e.target.value); setPwError(''); }}
                         onKeyDown={e => e.key === 'Enter' && handlePasswordLogin()}
-                        placeholder="e.g. ARN-102943"
+                        placeholder="Enter your password"
                         className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 pr-11 text-sm focus:ring-2 focus:ring-blue-100 focus:border-blue-500 outline-none transition-all" />
-                      <button type="button" onClick={() => setShowArn(p => !p)}
+                      <button type="button" onClick={() => setShowPwd(p => !p)}
                         className="absolute right-3 top-3 text-slate-400 hover:text-slate-600 transition-colors">
-                        {showArn ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+                        {showPwd ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
                       </button>
                     </div>
-                    <p className="text-[11px] text-slate-400 mt-1">Format: ARN- followed by digits (e.g. ARN-102943)</p>
                   </div>
 
                   {/* Remember me */}
@@ -466,7 +520,7 @@ export default function LoginPage({
                   </div>
 
                   {/* Submit */}
-                  <button onClick={handlePasswordLogin} disabled={pwLoading}
+                  <button onClick={() => handlePasswordLogin()} disabled={pwLoading}
                     className="w-full py-3.5 bg-[#0B1B3E] text-white font-semibold text-sm rounded-xl hover:bg-[#1A3066] transition-colors disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2 shadow-lg">
                     {pwLoading ? (<><Spinner />Signing in…</>) : 'Sign In'}
                   </button>

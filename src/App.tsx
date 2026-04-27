@@ -21,9 +21,11 @@ import Profile       from './views/Profile';
 import Earnings      from './views/Earnings';
 import Notifications from './views/Notifications';
 import Leads         from './views/Leads';
-import AumBreakdown  from './views/AumBreakdown';
-import SipDashboard  from './views/SipDashboard';
-import ActionCenter  from './views/ActionCenter';
+import AumBreakdown         from './views/AumBreakdown';
+import SipDashboard         from './views/SipDashboard';
+import ActionCenter         from './views/ActionCenter';
+import InvestorOnboarding   from './views/InvestorOnboarding';
+import InvestorTransaction  from './views/InvestorTransaction';
 
 // Admin views
 import AdminOverview    from './views/AdminOverview';
@@ -39,7 +41,8 @@ type Mode = 'distributor' | 'admin';
 type DistributorView =
   | 'dashboard' | 'investors' | 'ledger' | 'transactions'
   | 'leads' | 'earnings' | 'notifications' | 'profile'
-  | 'aum-breakdown' | 'sip-dashboard' | 'action-center';
+  | 'aum-breakdown' | 'sip-dashboard' | 'action-center'
+  | 'investor-onboarding' | 'investor-transaction';
 
 type AdminView =
   | 'admin-overview' | 'distributor-mgmt' | 'product-mgmt' | 'investor-mgmt';
@@ -80,20 +83,24 @@ export default function App() {
   const [distView, setDistView] = useState<DistributorView>('dashboard');
   const [adminView,setAdminView]= useState<AdminView>('admin-overview');
   const [products, setProducts] = useState<Product[]>(initialProducts);
+  const [currentProspect,  setCurrentProspect]  = useState<any>(null);
+  const [currentInvestor,  setCurrentInvestor]  = useState<any>(null);
 
   // ── Seed demo user in localStorage on first load ─────────────────────────
   useEffect(() => {
     try {
       const users: any[] = JSON.parse(localStorage.getItem('apex_users') || '[]');
-      if (!users.find((u: any) => u.pan === 'ABCDE1234F')) {
-        users.push({
-          pan: 'ABCDE1234F', arn: 'ARN-102943',
-          firstName: 'Aditya', lastName: 'Sharma',
-          email: 'aditya@apexwealth.in', mobile: '9876543210',
-          status: 'active',
-        });
-        localStorage.setItem('apex_users', JSON.stringify(users));
-      }
+      const demoUser = {
+        pan: 'ABCDE1234F', arn: 'ARN-102943',
+        firstName: 'Aditya', lastName: 'Sharma',
+        email: 'aditya@apexwealth.in', mobile: '9876543210',
+        password: 'Apex@2024',
+        status: 'active',
+      };
+      const idx = users.findIndex((u: any) => u.pan === 'ABCDE1234F');
+      if (idx === -1) users.push(demoUser);
+      else            users[idx] = { ...users[idx], ...demoUser };
+      localStorage.setItem('apex_users', JSON.stringify(users));
     } catch { /* localStorage unavailable */ }
   }, []);
 
@@ -102,6 +109,16 @@ export default function App() {
     setMode('distributor');
     setDistView('dashboard');
     setAuthState('app');
+  };
+
+  // ── Onboarding / transaction triggers ─────────────────────────────────────
+  const handleStartOnboarding = (prospect: any) => {
+    setCurrentProspect(prospect);
+    setDistView('investor-onboarding');
+  };
+  const handleStartTransaction = (investor: any) => {
+    setCurrentInvestor(investor);
+    setDistView('investor-transaction');
   };
   const handleSignOut = () => {
     try { sessionStorage.removeItem('apex_session'); } catch { /* */ }
@@ -121,16 +138,28 @@ export default function App() {
   // ── Active view component ────────────────────────────────────────────────
   const distViews: Record<DistributorView, React.ReactNode> = {
     dashboard:       <Dashboard    onNavigate={(v) => setDistView(v as DistributorView)} />,
-    investors:       <Investors    />,
+    investors:       <Investors    onInvest={handleStartTransaction} />,
     ledger:          <Ledger products={products} />,
     transactions:    <Transactions />,
-    leads:           <Leads        />,
+    leads:           <Leads        onStartOnboarding={handleStartOnboarding} />,
     earnings:        <Earnings     />,
     notifications:   <Notifications/>,
     profile:         <Profile      />,
-    'aum-breakdown': <AumBreakdown  onBack={() => setDistView('dashboard')} />,
-    'sip-dashboard': <SipDashboard  onBack={() => setDistView('dashboard')} />,
-    'action-center': <ActionCenter  onBack={() => setDistView('dashboard')} />,
+    'aum-breakdown':         <AumBreakdown  onBack={() => setDistView('dashboard')} />,
+    'sip-dashboard':         <SipDashboard  onBack={() => setDistView('dashboard')} />,
+    'action-center':         <ActionCenter  onBack={() => setDistView('dashboard')} />,
+    'investor-onboarding':   <InvestorOnboarding
+                               prospect={currentProspect}
+                               onComplete={() => { setCurrentProspect(null); setDistView('investors'); }}
+                               onBack={() => { setCurrentProspect(null); setDistView('leads'); }}
+                             />,
+    'investor-transaction':  currentInvestor
+                             ? <InvestorTransaction
+                                 investor={currentInvestor}
+                                 onComplete={() => { setCurrentInvestor(null); setDistView('investors'); }}
+                                 onBack={() => { setCurrentInvestor(null); setDistView('investors'); }}
+                               />
+                             : <Investors onInvest={handleStartTransaction} />,
   };
 
   const adminViews: Record<AdminView, React.ReactNode> = {
@@ -324,7 +353,7 @@ export default function App() {
             {/* CTA */}
             {mode === 'distributor' ? (
               <button
-                onClick={() => setDistView('investors')}
+                onClick={() => setDistView('leads')}
                 className="px-4 py-2 text-sm font-medium bg-[#0B1B3E] text-white rounded-lg shadow-sm hover:bg-[#1A3066] transition-colors"
               >
                 + New Onboarding
