@@ -261,7 +261,7 @@ const CLS_ERR    = 'text-xs text-red-500 mt-1.5 flex items-center gap-1';
 
 // ─── Main component ───────────────────────────────────────────────────────────
 
-export default function Onboarding({ onComplete }: { onComplete: () => void }) {
+export default function Onboarding({ onComplete, onBack }: { onComplete: () => void; onBack: () => void }) {
   const [step,        setStep]        = useState(1);
   const [data,        setData]        = useState<FormData>(initData);
   const [errors,      setErrors]      = useState<Record<string, string>>({});
@@ -532,6 +532,20 @@ export default function Onboarding({ onComplete }: { onComplete: () => void }) {
 
       {/* ─── Right Content ──────────────────────────────────────────────────── */}
       <div className="flex-1 flex flex-col overflow-y-auto">
+
+        {/* Top bar */}
+        <div className="flex items-center justify-between px-8 py-4 border-b border-slate-100 flex-shrink-0">
+          <button
+            onClick={onBack}
+            className="flex items-center gap-2 text-slate-500 hover:text-slate-800 text-sm font-medium transition-colors"
+          >
+            <ChevronLeft className="w-4 h-4" /> Back to Home
+          </button>
+          <p className="text-xs text-slate-400">
+            Already registered?{' '}
+            <button className="text-blue-600 font-semibold hover:underline text-xs">Sign In</button>
+          </p>
+        </div>
 
         {/* Top progress bar */}
         <div className="h-1 bg-slate-100 flex-shrink-0">

@@ -131,7 +131,7 @@ export default function App() {
   if (authState === 'login')
     return <LoginPage onLogin={handleLoginSuccess} onSignUp={() => setAuthState('onboarding')} onBack={() => setAuthState('landing')} />;
   if (authState === 'onboarding')
-    return <Onboarding onComplete={() => setAuthState('pending')} />;
+    return <Onboarding onComplete={() => setAuthState('pending')} onBack={() => setAuthState('landing')} />;
   if (authState === 'pending')
     return <PendingApproval onGoToLogin={() => setAuthState('login')} />;
 
