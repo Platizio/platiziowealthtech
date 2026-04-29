@@ -1,0 +1,2 @@
+package com.platizio.wealthtech.domain;
+public enum LeadStatus { NEW, ASSIGNED, CONTACTED, FOLLOW_UP, CONVERTED_TO_INVESTOR, INVESTMENT_COMPLETED, POST_INVESTMENT_FOLLOW_UP, LOST }
