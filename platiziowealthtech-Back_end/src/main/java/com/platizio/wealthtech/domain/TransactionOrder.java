@@ -26,6 +26,9 @@ public class TransactionOrder extends BaseEntity {
     @Column(nullable = false)
     private OrderStatus orderStatus = OrderStatus.DRAFT;
 
+    @Enumerated(EnumType.STRING)
+    private ProductCategory productCategory;
+
     private BigDecimal amount;
     private BigDecimal units;
     private String paymentMode;
@@ -58,4 +61,7 @@ public class TransactionOrder extends BaseEntity {
     public void setFailureReason(String failureReason) { this.failureReason = failureReason; }
     public String getInvestorActionUrl() { return investorActionUrl; }
     public void setInvestorActionUrl(String investorActionUrl) { this.investorActionUrl = investorActionUrl; }
+
+    public ProductCategory getProductCategory() { return productCategory; }
+    public void setProductCategory(ProductCategory productCategory) { this.productCategory = productCategory; }
 }

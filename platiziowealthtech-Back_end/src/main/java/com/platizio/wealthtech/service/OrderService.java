@@ -8,8 +8,11 @@ import com.platizio.wealthtech.repository.TransactionOrderRepository;
 import jakarta.persistence.EntityNotFoundException;
 import java.util.List;
 import java.util.UUID;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+
 
 @Service
 public class OrderService {
@@ -19,6 +22,7 @@ public class OrderService {
     private final InvestorService investorService;
     private final AuditService auditService;
     private final NotificationService notificationService;
+    private static final Logger logger = LoggerFactory.getLogger(OrderService.class);
     private final CybrillaClient cybrillaClient;
 
     public OrderService(
@@ -41,8 +45,12 @@ public class OrderService {
         return transactionOrderRepository.findByInvestorId(investorId);
     }
 
+@Transactional(readOnly = true)
     public List<TransactionOrder> listOrdersByDistributor(UUID distributorId) {
-        return transactionOrderRepository.findByDistributorId(distributorId);
+        logger.info("Fetching orders for distributor {}", distributorId);
+        List<TransactionOrder> orders = transactionOrderRepository.findByDistributorId(distributorId);
+        logger.info("Found {} orders for distributor {}", orders.size(), distributorId);
+        return orders;
     }
 
     public TransactionOrder getOrder(UUID orderId) {

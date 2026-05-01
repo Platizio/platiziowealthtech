@@ -29,7 +29,7 @@ public class MockCybrillaClient implements CybrillaClient {
         ProductScheme equityScheme = new ProductScheme();
         equityScheme.setSchemeName("Bluechip Equity Fund");
         equityScheme.setAmcName("Platizio Assets");
-        equityScheme.setCategory(ProductCategory.EQUITY);
+        equityScheme.setCategory(ProductCategory.OTHER);
         equityScheme.setExternalSchemeCode("EQ-101");
         equityScheme.setExternalIsin("INF001");
         equityScheme.setProductType("MUTUAL_FUND");
@@ -38,7 +38,7 @@ public class MockCybrillaClient implements CybrillaClient {
         ProductScheme mfScheme = new ProductScheme();
         mfScheme.setSchemeName("Balanced Mutual Fund");
         mfScheme.setAmcName("Platizio Assets");
-        mfScheme.setCategory(ProductCategory.MUTUAL_FUND);
+        mfScheme.setCategory(ProductCategory.MF);
         mfScheme.setExternalSchemeCode("MF-201");
         mfScheme.setExternalIsin("INF002");
         mfScheme.setProductType("MUTUAL_FUND");

@@ -268,7 +268,7 @@ INSERT INTO product_schemes (id, created_at, updated_at, scheme_name, amc_name, 
 VALUES ('a123fef2-7440-42f0-9ef2-5b9db054a123', now(), now(), 'Super Growth Fund', 'Super AMC', 'EQUITY', 'MF-SG-100', 'INF123456789', 'MUTUAL_FUND', true);
 
 INSERT INTO transaction_orders (id, created_at, updated_at, investor_id, distributor_id, product_scheme_id, transaction_type, order_status, amount, units, payment_mode)
-VALUES ('e012fe1c-7440-42f0-9ef2-5b9db054e012', now(), now(), 'b75fef2e-7440-42f0-9ef2-5b9db054e526', 'd9b2d63d-a233-4123-8478-3b169d988b48', 'a123fef2-7440-42f0-9ef2-5b9db054a123', 'PURCHASE', 'COMPLETED', 10000.00, 100.0000, 'NET_BANKING');
+VALUES ('e012fe1c-7440-42f0-9ef2-5b9db054e012', now(), now(), 'b75fef2e-7440-42f0-9ef2-5b9db054e526', 'd9b2d63d-a233-4123-8478-3b169d988b48', 'a123fef2-7440-42f0-9ef2-5b9db054a123', 'LUMPSUM_PURCHASE', 'COMPLETED', 10000.00, 100.0000, 'NET_BANKING');
 
 INSERT INTO redemption_records (id, created_at, updated_at, order_id, investor_id, redemption_status, units, amount)
 VALUES ('f123fe1c-7440-42f0-9ef2-5b9db0123456', now(), now(), 'e012fe1c-7440-42f0-9ef2-5b9db054e012', 'b75fef2e-7440-42f0-9ef2-5b9db054e526', 'PENDING', 50.0000, 5000.00);

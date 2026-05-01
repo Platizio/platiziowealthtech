@@ -79,6 +79,7 @@ public class DistributorService {
         distributor.setArnNumber(request.arnNumber());
         distributor.setNismCertificateNumber(request.nismCertificateNumber());
         distributor.setNismExpiryDate(request.nismExpiryDate());
+        distributor.setArnExpiryDate(request.arnExpiryDate());
         distributor.seteUinNumber(request.eUinNumber());
         distributor.setBankAccountNumber(request.bankAccountNumber());
         distributor.setBankIfsc(request.bankIfsc());
@@ -107,6 +108,7 @@ public class DistributorService {
         if (request.email() != null) distributor.setEmail(request.email());
         if (request.nismCertificateNumber() != null) distributor.setNismCertificateNumber(request.nismCertificateNumber());
         if (request.nismExpiryDate() != null) distributor.setNismExpiryDate(request.nismExpiryDate());
+        if (request.arnExpiryDate() != null) distributor.setArnExpiryDate(request.arnExpiryDate());
         if (request.eUinNumber() != null) distributor.seteUinNumber(request.eUinNumber());
         if (request.bankAccountNumber() != null) distributor.setBankAccountNumber(request.bankAccountNumber());
         if (request.bankIfsc() != null) distributor.setBankIfsc(request.bankIfsc());

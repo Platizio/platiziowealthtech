@@ -25,6 +25,8 @@ public class Distributor extends BaseEntity {
     @Column(nullable = false, unique = true)
     private String arnNumber;
 
+    private LocalDate arnExpiryDate;
+
     @Column(nullable = false)
     private String nismCertificateNumber;
 
@@ -63,6 +65,8 @@ public class Distributor extends BaseEntity {
     public void setEmail(String email) { this.email = email; }
     public String getArnNumber() { return arnNumber; }
     public void setArnNumber(String arnNumber) { this.arnNumber = arnNumber; }
+    public LocalDate getArnExpiryDate() { return arnExpiryDate; }
+    public void setArnExpiryDate(LocalDate arnExpiryDate) { this.arnExpiryDate = arnExpiryDate; }
     public String getNismCertificateNumber() { return nismCertificateNumber; }
     public void setNismCertificateNumber(String nismCertificateNumber) { this.nismCertificateNumber = nismCertificateNumber; }
     public LocalDate getNismExpiryDate() { return nismExpiryDate; }

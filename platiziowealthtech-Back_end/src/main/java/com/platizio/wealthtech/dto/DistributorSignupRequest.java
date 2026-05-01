@@ -12,6 +12,7 @@ public record DistributorSignupRequest(
         @NotBlank String mobileNumber,
         @NotBlank @Email String email,
         @NotBlank String arnNumber,
+        @NotNull LocalDate arnExpiryDate,
         @NotBlank String nismCertificateNumber,
         @NotNull LocalDate nismExpiryDate,
         String eUinNumber,

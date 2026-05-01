@@ -2,9 +2,9 @@ spring:
   application:
     name: wealthtech-backend
   datasource:
-    url: ${DB_URL:jdbc:postgresql://localhost:5432/wealthtech}
-    username: ${DB_USERNAME:wealthtech}
-    password: ${DB_PASSWORD:wealthtech}
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/postgres}
+    username: ${DB_USERNAME:postgres}
+    password: ${DB_PASSWORD:1234}
     driverClassName: org.postgresql.Driver
   jpa:
     hibernate:
@@ -24,7 +24,7 @@ management:
         include: health,info
 
 server:
-  port: 8080
+  port: 8081
 
 cybrilla:
   base-url: ${CYBRILLA_BASE_URL:https://api.cybrilla.example}

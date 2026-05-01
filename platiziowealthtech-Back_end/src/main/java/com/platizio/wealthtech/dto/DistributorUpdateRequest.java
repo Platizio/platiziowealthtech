@@ -9,6 +9,7 @@ public record DistributorUpdateRequest(
         @Email String email,
         String nismCertificateNumber,
         LocalDate nismExpiryDate,
+        LocalDate arnExpiryDate,
         String eUinNumber,
         String bankAccountNumber,
         String bankIfsc,
