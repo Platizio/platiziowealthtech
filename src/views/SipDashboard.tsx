@@ -6,34 +6,15 @@ import {
   Tooltip, ResponsiveContainer,
 } from 'recharts';
 
-const sipTrend = [
-  { month: 'Nov', amount: 12.5, count: 185 },
-  { month: 'Dec', amount: 14.2, count: 195 },
-  { month: 'Jan', amount: 15.8, count: 201 },
-  { month: 'Feb', amount: 16.1, count: 208 },
-  { month: 'Mar', amount: 17.3, count: 214 },
-  { month: 'Apr', amount: 18.4, count: 218 },
-];
-
 interface Sip {
-  id: number; investor: string; fund: string;
+  id: string; investor: string; fund: string;
   amount: string; status: 'Active' | 'Failed' | 'Paused';
   nextDue: string; mandate: string;
 }
 
-const sips: Sip[] = [
-  { id: 1, investor: 'Aditya Sharma',       fund: 'HDFC Large & Mid Cap Fund',         amount: '₹5,000',  status: 'Active', nextDue: '5 May',  mandate: 'UPI Autopay' },
-  { id: 2, investor: 'Meera Iyer',           fund: 'Parag Parikh Flexi Cap Fund',       amount: '₹3,000',  status: 'Failed', nextDue: 'Retry',  mandate: 'eNACH'       },
-  { id: 3, investor: 'Rahul Verma',          fund: 'ICICI Prudential Bluechip',         amount: '₹15,000', status: 'Active', nextDue: '10 May', mandate: 'UPI Autopay' },
-  { id: 4, investor: 'Sunita Kapur',         fund: 'SBI Small Cap Fund',                amount: '₹2,000',  status: 'Active', nextDue: '7 May',  mandate: 'eNACH'       },
-  { id: 5, investor: 'Tech Innovations PF',  fund: 'Quant Small Cap Fund',              amount: '₹50,000', status: 'Active', nextDue: '1 May',  mandate: 'Netbanking'  },
-  { id: 6, investor: 'Anjali Desai',         fund: 'Kotak Emerging Equity Fund',        amount: '₹7,500',  status: 'Failed', nextDue: 'Retry',  mandate: 'eNACH'       },
-  { id: 7, investor: 'Vikram Singh',         fund: 'Axis Long Term Equity Fund',        amount: '₹10,000', status: 'Paused', nextDue: 'On Hold',mandate: 'UPI Autopay' },
-  { id: 8, investor: 'Priya Nair',           fund: 'Mirae Asset Emerging Bluechip',     amount: '₹8,000',  status: 'Active', nextDue: '12 May', mandate: 'UPI Autopay' },
-  { id: 9, investor: 'Rajesh Kumar',         fund: 'Parag Parikh Flexi Cap Fund',       amount: '₹5,000',  status: 'Active', nextDue: '8 May',  mandate: 'eNACH'       },
-  { id: 10, investor: 'Deepa Rao',           fund: 'HDFC Mid-Cap Opportunities',        amount: '₹4,000',  status: 'Active', nextDue: '15 May', mandate: 'UPI Autopay' },
-  { id: 11, investor: 'Mohit Gupta',         fund: 'Kotak Small Cap Fund',              amount: '₹12,000', status: 'Failed', nextDue: 'Retry',  mandate: 'Netbanking'  },
-];
+interface SipTrend {
+  month: string; amount: number; count: number;
+}
 
 type Filter = 'All' | 'Active' | 'Failed' | 'Paused';
 
@@ -43,8 +24,31 @@ const statusCfg: Record<string, { icon: React.ReactNode; cls: string }> = {
   Paused: { icon: <Clock        className="w-3.5 h-3.5" />, cls: 'bg-amber-100 text-amber-700' },
 };
 
-export default function SipDashboard({ onBack }: { onBack: () => void }) {
+export default function SipDashboard({ onBack, userData }: { onBack: () => void; userData?: any }) {
   const [filter, setFilter] = useState<Filter>('All');
+  const [sips, setSips] = useState<Sip[]>([]);
+  const [sipTrend, setSipTrend] = useState<SipTrend[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  React.useEffect(() => {
+    if (!userData?.id) return;
+    const token = userData.token || sessionStorage.getItem('token') || '';
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+
+    fetch(`http://localhost:8081/api/v1/dashboard/distributor/${userData.id}/sips`, { headers })
+      .then(res => res.json())
+      .then(data => {
+        setSips(data.sips || []);
+        setSipTrend(data.trend || []);
+        setLoading(false);
+      })
+      .catch(err => {
+        console.error('Failed to fetch SIP dashboard', err);
+        setLoading(false);
+      });
+  }, [userData]);
+
   const visible = filter === 'All' ? sips : sips.filter(s => s.status === filter);
 
   return (

@@ -32,17 +32,27 @@ import AppLayout from './layout/AppLayout';
 
 export default function App() {
   const [userSession, setUserSession] = useState<any>(null);
+  const [loadingSession, setLoadingSession] = useState(true);
   const navigate = useNavigate();
 
   useEffect(() => {
-    const savedUser = sessionStorage.getItem('userSession');
-    if (savedUser) {
-      try {
-        const user = JSON.parse(savedUser);
-        setUserSession(user);
-      } catch (e) {
-        console.error("Failed to parse saved user session");
-      }
+    // Check if distributorId cookie exists
+    const match = document.cookie.match(new RegExp('(^| )distributorId=([^;]+)'));
+    if (match && match[2]) {
+      const id = match[2];
+      fetch(`http://localhost:8081/api/v1/distributors/${id}`)
+        .then(res => {
+          if (res.ok) return res.json();
+          throw new Error('Failed to fetch user');
+        })
+        .then(user => setUserSession(user))
+        .catch(err => {
+          console.error('Session restore failed:', err);
+          document.cookie = 'distributorId=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;';
+        })
+        .finally(() => setLoadingSession(false));
+    } else {
+      setLoadingSession(false);
     }
   }, []);
 
@@ -55,9 +65,10 @@ export default function App() {
 
   const handleLoginSuccess = (user?: any) => {
     console.log("App.tsx -> handleLoginSuccess called. Received user:", user);
-    if (user) {
+    if (user && user.id) {
       setUserSession(user);
-      sessionStorage.setItem('userSession', JSON.stringify(user));
+      // Set cookie to expire in 24 hours
+      document.cookie = `distributorId=${user.id}; path=/; max-age=86400`;
     }
     navigate('/distributor/dashboard');
   };
@@ -65,12 +76,17 @@ export default function App() {
   const handleSignOut = () => {
     console.log("App.tsx -> handleSignOut called. Clearing user session.");
     setUserSession(null);
-    sessionStorage.clear();
+    document.cookie = 'distributorId=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;';
     navigate('/');
   };
 
-  // Provide user session context to Layout and views if needed.
-  // We can pass userData down to views via props in the Route elements.
+  if (loadingSession) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-50">
+        <div className="w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
+      </div>
+    );
+  }
 
   return (
     <Routes>
@@ -85,15 +101,15 @@ export default function App() {
         <Route element={<AppLayout userData={userData} onSignOut={handleSignOut} />}>
           
           {/* Distributor Routes */}
-          <Route path="/distributor/dashboard" element={<Dashboard onNavigate={(v) => navigate(`/distributor/${v}`)} />} />
+          <Route path="/distributor/dashboard" element={<Dashboard userData={userData} onNavigate={(v) => navigate(`/distributor/${v}`)} />} />
           <Route path="/distributor/investors" element={<Investors onInvest={(inv) => navigate('/distributor/investor-transaction', { state: { investor: inv } })} userData={userData} />} />
           <Route path="/distributor/ledger" element={<Ledger />} />
-          <Route path="/distributor/transactions" element={<Transactions />} />
+          <Route path="/distributor/transactions" element={<Transactions userData={userData} />} />
           <Route path="/distributor/leads" element={<Leads userData={userData} onStartOnboarding={(prospect) => navigate('/distributor/investor-onboarding', { state: { prospect } })} />} />
           <Route path="/distributor/earnings" element={<Earnings />} />
-          <Route path="/distributor/notifications" element={<Notifications />} />
+          <Route path="/distributor/notifications" element={<Notifications userData={userData} />} />
           <Route path="/distributor/profile" element={<Profile userData={userData} />} />
-          <Route path="/distributor/aum-breakdown" element={<AumBreakdown onBack={() => navigate('/distributor/dashboard')} />} />
+          <Route path="/distributor/aum-breakdown" element={<AumBreakdown onBack={() => navigate('/distributor/dashboard')} userData={userData} />} />
           <Route path="/distributor/sip-dashboard" element={<SipDashboard onBack={() => navigate('/distributor/dashboard')} />} />
           <Route path="/distributor/action-center" element={<ActionCenter onBack={() => navigate('/distributor/dashboard')} />} />
           

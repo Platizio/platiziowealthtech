@@ -1,67 +1,118 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Search, Filter, ChevronLeft, CheckCircle2, Clock, XCircle, AlertCircle, RefreshCw } from 'lucide-react';
 
-const transactions = [
-  { id: 1, investor: 'Aditya Sharma', fund: 'HDFC Large & Mid Cap Fund', type: 'SIP', amount: '₹5,000', status: 'Successful', date: 'Today, 10:32 AM', pan: 'ABCDE1234F', mandate: 'UPI Autopay' },
-  { id: 2, investor: 'Meera Iyer', fund: 'Parag Parikh Flexi Cap Fund', type: 'Lumpsum', amount: '₹1,00,000', status: 'Payment Pending', date: 'Today, 09:15 AM', pan: 'FGHIJ5678K', mandate: 'Netbanking' },
-  { id: 3, investor: 'Rahul Verma', fund: 'ICICI Prudential Bluechip', type: 'SIP', amount: '₹10,000', status: 'Pending Investor Action', date: 'Yesterday, 4:20 PM', pan: 'KLMNO9012P', mandate: 'UPI Autopay' },
-  { id: 4, investor: 'Sunita Kapur', fund: 'SBI Liquid Fund', type: 'Redemption', amount: '₹50,000', status: 'Processing', date: 'Yesterday, 2:10 PM', pan: 'QRSTU3456V', mandate: '—' },
-  { id: 5, investor: 'Tech Innovations PF', fund: 'Quant Small Cap Fund', type: 'Lumpsum', amount: '₹5,00,000', status: 'Failed', date: '18 Apr, 11:00 AM', pan: 'WXYZ7890A', mandate: 'Netbanking' },
-  { id: 6, investor: 'Aditya Sharma', fund: 'Kotak Corporate Bond Fund', type: 'Switch', amount: '₹25,000', status: 'Submitted', date: '17 Apr, 3:30 PM', pan: 'ABCDE1234F', mandate: '—' },
-  { id: 7, investor: 'Meera Iyer', fund: 'SBI Liquid Fund', type: 'SIP', amount: '₹3,000', status: 'Retry Available', date: '16 Apr, 9:00 AM', pan: 'FGHIJ5678K', mandate: 'eNACH' },
-  { id: 8, investor: 'Rahul Verma', fund: 'HDFC Large & Mid Cap Fund', type: 'SIP', amount: '₹15,000', status: 'Created', date: '15 Apr, 8:45 AM', pan: 'KLMNO9012P', mandate: 'UPI Autopay' },
-];
+type StatusKey = 'Successful' | 'Processing' | 'Submitted' | 'Payment Pending' | 'Pending Investor Action' | 'Failed' | 'Retry Available' | 'Draft' | 'Created' | 'SUCCESSFUL' | 'FAILED' | 'PENDING_PAYMENT' | 'DRAFT';
 
-type StatusKey = 'Successful' | 'Processing' | 'Submitted' | 'Payment Pending' | 'Pending Investor Action' | 'Failed' | 'Retry Available' | 'Draft' | 'Created';
-
-const statusConfig: Record<StatusKey, { color: string; icon: React.ReactNode }> = {
-  Successful: { color: 'bg-green-50 text-green-700', icon: <CheckCircle2 className="w-3.5 h-3.5" /> },
-  Processing: { color: 'bg-blue-50 text-blue-700', icon: <RefreshCw className="w-3.5 h-3.5 animate-spin" /> },
-  Submitted: { color: 'bg-indigo-50 text-indigo-700', icon: <Clock className="w-3.5 h-3.5" /> },
-  'Payment Pending': { color: 'bg-orange-50 text-orange-700', icon: <Clock className="w-3.5 h-3.5" /> },
-  'Pending Investor Action': { color: 'bg-amber-50 text-amber-700', icon: <AlertCircle className="w-3.5 h-3.5" /> },
-  Failed: { color: 'bg-red-50 text-red-700', icon: <XCircle className="w-3.5 h-3.5" /> },
-  'Retry Available': { color: 'bg-purple-50 text-purple-700', icon: <RefreshCw className="w-3.5 h-3.5" /> },
-  Draft: { color: 'bg-slate-100 text-slate-600', icon: <Clock className="w-3.5 h-3.5" /> },
-  Created: { color: 'bg-slate-100 text-slate-600', icon: <Clock className="w-3.5 h-3.5" /> },
+const statusConfig: Record<StatusKey, { color: string; icon: React.ReactNode; label: string }> = {
+  Successful: { color: 'bg-green-50 text-green-700', icon: <CheckCircle2 className="w-3.5 h-3.5" />, label: 'Successful' },
+  SUCCESSFUL: { color: 'bg-green-50 text-green-700', icon: <CheckCircle2 className="w-3.5 h-3.5" />, label: 'Successful' },
+  Processing: { color: 'bg-blue-50 text-blue-700', icon: <RefreshCw className="w-3.5 h-3.5 animate-spin" />, label: 'Processing' },
+  Submitted: { color: 'bg-indigo-50 text-indigo-700', icon: <Clock className="w-3.5 h-3.5" />, label: 'Submitted' },
+  'Payment Pending': { color: 'bg-orange-50 text-orange-700', icon: <Clock className="w-3.5 h-3.5" />, label: 'Payment Pending' },
+  PENDING_PAYMENT: { color: 'bg-orange-50 text-orange-700', icon: <Clock className="w-3.5 h-3.5" />, label: 'Payment Pending' },
+  'Pending Investor Action': { color: 'bg-amber-50 text-amber-700', icon: <AlertCircle className="w-3.5 h-3.5" />, label: 'Pending Investor Action' },
+  Failed: { color: 'bg-red-50 text-red-700', icon: <XCircle className="w-3.5 h-3.5" />, label: 'Failed' },
+  FAILED: { color: 'bg-red-50 text-red-700', icon: <XCircle className="w-3.5 h-3.5" />, label: 'Failed' },
+  'Retry Available': { color: 'bg-purple-50 text-purple-700', icon: <RefreshCw className="w-3.5 h-3.5" />, label: 'Retry Available' },
+  Draft: { color: 'bg-slate-100 text-slate-600', icon: <Clock className="w-3.5 h-3.5" />, label: 'Draft' },
+  DRAFT: { color: 'bg-slate-100 text-slate-600', icon: <Clock className="w-3.5 h-3.5" />, label: 'Draft' },
+  Created: { color: 'bg-slate-100 text-slate-600', icon: <Clock className="w-3.5 h-3.5" />, label: 'Created' },
 };
 
 function buildTimeline(status: string) {
   const steps = [
     { label: 'Order Created', time: '09:15 AM' },
     { label: 'Investor Action Sent', time: '09:16 AM' },
-    { label: 'Payment Authorized', time: status === 'Payment Pending' ? 'Awaiting' : '09:30 AM' },
-    { label: 'Submitted to Exchange', time: ['Processing', 'Submitted', 'Successful'].includes(status) ? '09:45 AM' : '—' },
-    { label: 'Order Successful', time: status === 'Successful' ? '10:32 AM' : '—' },
+    { label: 'Payment Authorized', time: status === 'Payment Pending' || status === 'PENDING_PAYMENT' ? 'Awaiting' : '09:30 AM' },
+    { label: 'Submitted to Exchange', time: ['Processing', 'Submitted', 'Successful', 'SUCCESSFUL'].includes(status) ? '09:45 AM' : '—' },
+    { label: 'Order Successful', time: status === 'Successful' || status === 'SUCCESSFUL' ? '10:32 AM' : '—' },
   ];
   const doneCount =
     status === 'Created' ? 1 :
-    status === 'Pending Investor Action' ? 1 :
-    status === 'Payment Pending' ? 2 :
+    (status === 'Pending Investor Action' || status === 'DRAFT') ? 1 :
+    (status === 'Payment Pending' || status === 'PENDING_PAYMENT') ? 2 :
     status === 'Submitted' ? 3 :
     status === 'Processing' ? 4 :
-    status === 'Successful' ? 5 : 2;
+    (status === 'Successful' || status === 'SUCCESSFUL') ? 5 : 2;
   return steps.map((s, i) => ({ ...s, done: i < doneCount }));
 }
 
 const TYPE_FILTERS = ['All', 'SIP', 'Lumpsum', 'Redemption', 'Switch'];
 
-export default function Transactions() {
-  const [selected, setSelected] = useState<number | null>(null);
+export default function Transactions({ userData }: { userData?: any }) {
+  const [selected, setSelected] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [typeFilter, setTypeFilter] = useState('All');
+  const [transactions, setTransactions] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (!userData?.id) return;
+    
+    const token = userData?.token || sessionStorage.getItem('token') || '';
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const fetchData = async () => {
+      try {
+        setLoading(true);
+        // Fetch orders, investors, and schemes to map data correctly
+        const [ordersRes, investorsRes, schemesRes] = await Promise.all([
+          fetch(`http://localhost:8081/api/v1/orders/by-distributor/${userData.id}`, { headers }),
+          fetch(`http://localhost:8081/api/v1/investors/by-distributor/${userData.id}`, { headers }),
+          fetch(`http://localhost:8081/api/v1/products/schemes`, { headers })
+        ]);
+
+        const orders = ordersRes.ok ? await ordersRes.json() : [];
+        const investors = investorsRes.ok ? await investorsRes.json() : [];
+        const schemes = schemesRes.ok ? await schemesRes.json() : [];
+
+        const investorMap = new Map(investors.map((i: any) => [i.id, i]));
+        const schemeMap = new Map(schemes.map((s: any) => [s.id, s]));
+
+        const formatted = orders.map((o: any) => {
+          const inv = investorMap.get(o.investorId) as any;
+          const scm = schemeMap.get(o.productSchemeId) as any;
+          return {
+            id: o.id,
+            investor: inv ? inv.fullName || 'Unknown Investor' : 'Unknown Investor',
+            fund: scm ? scm.schemeName || 'Unknown Scheme' : 'Unknown Scheme',
+            type: o.transactionType || 'Lumpsum',
+            amount: o.amount ? `₹${o.amount.toLocaleString()}` : '—',
+            status: o.orderStatus || 'Draft',
+            date: new Date(o.createdAt || Date.now()).toLocaleString(),
+            pan: inv?.pan || '—',
+            mandate: o.paymentMode || o.mandateMode || '—'
+          };
+        });
+
+        setTransactions(formatted);
+      } catch (err) {
+        console.error('Failed to fetch transactions', err);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchData();
+  }, [userData]);
 
   const filtered = transactions.filter(t => {
     const matchSearch = t.investor.toLowerCase().includes(search.toLowerCase()) ||
       t.fund.toLowerCase().includes(search.toLowerCase());
-    const matchType = typeFilter === 'All' || t.type === typeFilter;
+    const typeLabel = t.type.toLowerCase() === 'lumpsum' ? 'Lumpsum' : t.type;
+    const matchType = typeFilter === 'All' || typeLabel === typeFilter;
     return matchSearch && matchType;
   });
 
   if (selected !== null) {
-    const tx = transactions.find(t => t.id === selected)!;
-    return <TransactionDetail tx={tx} onBack={() => setSelected(null)} />;
+    const tx = transactions.find(t => t.id === selected);
+    if (tx) return <TransactionDetail tx={tx} onBack={() => setSelected(null)} />;
   }
 
   return (
@@ -107,49 +158,55 @@ export default function Transactions() {
         </div>
 
         <div className="flex-1 overflow-auto">
-          <table className="w-full text-left">
-            <thead className="bg-slate-50 text-[10px] uppercase tracking-wider text-slate-500 sticky top-0 z-10 font-semibold">
-              <tr>
-                <th className="px-6 py-4">Investor</th>
-                <th className="px-6 py-4">Fund</th>
-                <th className="px-6 py-4">Type</th>
-                <th className="px-6 py-4">Amount</th>
-                <th className="px-6 py-4">Status</th>
-                <th className="px-6 py-4 text-right">Date</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {filtered.map(tx => {
-                const s = statusConfig[tx.status as StatusKey] ?? statusConfig.Draft;
-                return (
-                  <tr key={tx.id} onClick={() => setSelected(tx.id)} className="group hover:bg-slate-50 transition-colors cursor-pointer">
-                    <td className="px-6 py-4">
-                      <div className="font-semibold text-slate-800 group-hover:text-blue-600 transition-colors">{tx.investor}</div>
-                      <div className="text-xs text-slate-400 font-mono mt-1">TXN-{1000 + tx.id}</div>
-                    </td>
-                    <td className="px-6 py-4 text-sm text-slate-600 max-w-[200px] truncate">{tx.fund}</td>
-                    <td className="px-6 py-4">
-                      <span className={`px-2.5 py-1 text-xs font-semibold rounded-md ${
-                        tx.type === 'SIP' ? 'bg-blue-50 text-blue-700' :
-                        tx.type === 'Lumpsum' ? 'bg-purple-50 text-purple-700' :
-                        tx.type === 'Redemption' ? 'bg-amber-50 text-amber-700' :
-                        'bg-slate-100 text-slate-600'
-                      }`}>
-                        {tx.type}
-                      </span>
-                    </td>
-                    <td className="px-6 py-4 font-mono font-medium text-slate-700">{tx.amount}</td>
-                    <td className="px-6 py-4">
-                      <span className={`flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-md w-fit ${s.color}`}>
-                        {s.icon} {tx.status}
-                      </span>
-                    </td>
-                    <td className="px-6 py-4 text-xs text-slate-500 text-right">{tx.date}</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+          {loading ? (
+            <div className="p-8 text-center text-slate-500">Loading transactions...</div>
+          ) : filtered.length === 0 ? (
+            <div className="p-8 text-center text-slate-500">No transactions found.</div>
+          ) : (
+            <table className="w-full text-left">
+              <thead className="bg-slate-50 text-[10px] uppercase tracking-wider text-slate-500 sticky top-0 z-10 font-semibold">
+                <tr>
+                  <th className="px-6 py-4">Investor</th>
+                  <th className="px-6 py-4">Fund</th>
+                  <th className="px-6 py-4">Type</th>
+                  <th className="px-6 py-4">Amount</th>
+                  <th className="px-6 py-4">Status</th>
+                  <th className="px-6 py-4 text-right">Date</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {filtered.map(tx => {
+                  const s = statusConfig[tx.status as StatusKey] ?? statusConfig.Draft;
+                  return (
+                    <tr key={tx.id} onClick={() => setSelected(tx.id)} className="group hover:bg-slate-50 transition-colors cursor-pointer">
+                      <td className="px-6 py-4">
+                        <div className="font-semibold text-slate-800 group-hover:text-blue-600 transition-colors">{tx.investor}</div>
+                        <div className="text-xs text-slate-400 font-mono mt-1">TXN-{tx.id.substring(0, 6)}</div>
+                      </td>
+                      <td className="px-6 py-4 text-sm text-slate-600 max-w-[200px] truncate">{tx.fund}</td>
+                      <td className="px-6 py-4">
+                        <span className={`px-2.5 py-1 text-xs font-semibold rounded-md ${
+                          tx.type.toUpperCase() === 'SIP' ? 'bg-blue-50 text-blue-700' :
+                          tx.type.toUpperCase() === 'LUMPSUM' ? 'bg-purple-50 text-purple-700' :
+                          tx.type.toUpperCase() === 'REDEMPTION' ? 'bg-amber-50 text-amber-700' :
+                          'bg-slate-100 text-slate-600'
+                        }`}>
+                          {tx.type}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4 font-mono font-medium text-slate-700">{tx.amount}</td>
+                      <td className="px-6 py-4">
+                        <span className={`flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-md w-fit ${s.color}`}>
+                          {s.icon} {s.label}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4 text-xs text-slate-500 text-right">{tx.date}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
         </div>
       </div>
     </motion.div>
@@ -171,9 +228,9 @@ function TransactionDetail({ tx, onBack }: { tx: any; onBack: () => void }) {
           <h1 className="text-2xl font-semibold tracking-tight text-slate-800">{tx.investor}</h1>
           <div className="flex items-center gap-3 mt-2">
             <span className={`flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-md ${s.color}`}>
-              {s.icon} {tx.status}
+              {s.icon} {s.label}
             </span>
-            <span className="text-slate-400 text-xs font-mono">TXN-{1000 + tx.id}</span>
+            <span className="text-slate-400 text-xs font-mono">TXN-{tx.id.substring(0, 6)}</span>
           </div>
         </div>
         {tx.status === 'Retry Available' && (
@@ -204,7 +261,7 @@ function TransactionDetail({ tx, onBack }: { tx: any; onBack: () => void }) {
             </div>
           </div>
 
-          {(tx.status === 'Payment Pending' || tx.status === 'Pending Investor Action') && (
+          {(tx.status === 'Payment Pending' || tx.status === 'PENDING_PAYMENT' || tx.status === 'Pending Investor Action') && (
             <div className="bg-amber-50 rounded-2xl p-5 border border-amber-200 flex gap-4">
               <AlertCircle className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
               <div>
@@ -219,12 +276,12 @@ function TransactionDetail({ tx, onBack }: { tx: any; onBack: () => void }) {
             </div>
           )}
 
-          {tx.status === 'Failed' && (
+          {(tx.status === 'Failed' || tx.status === 'FAILED') && (
             <div className="bg-red-50 rounded-2xl p-5 border border-red-200 flex gap-4">
               <XCircle className="w-5 h-5 text-red-500 flex-shrink-0 mt-0.5" />
               <div>
                 <p className="text-sm font-semibold text-red-800">Order failed</p>
-                <p className="text-xs text-red-700 mt-1">Reason: Insufficient funds in the investor's bank account. Please ask the investor to top up and retry.</p>
+                <p className="text-xs text-red-700 mt-1">Reason: The transaction could not be processed. Please ask the investor to check their account and retry.</p>
                 <button className="mt-3 px-4 py-2 bg-red-600 text-white text-xs font-semibold rounded-lg hover:bg-red-700 transition-colors">
                   Create New Order
                 </button>

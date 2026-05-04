@@ -9,40 +9,9 @@ type Category = 'All' | 'KYC' | 'Bank' | 'Transaction' | 'SIP' | 'Maturing';
 type Priority  = 'High' | 'Medium' | 'Low';
 
 interface Action {
-  id: number; category: Exclude<Category, 'All'>;
+  id: string; category: Exclude<Category, 'All'>;
   priority: Priority; investor: string; desc: string; age: string;
 }
-
-const ACTIONS: Action[] = [
-  /* KYC — 5 */
-  { id:  1, category: 'KYC', priority: 'High',   investor: 'Priya Nair',          desc: 'Selfie upload required for KYC completion',             age: '2 days'    },
-  { id:  2, category: 'KYC', priority: 'High',   investor: 'Prakash Mehta',       desc: 'PAN–Aadhaar mismatch — verification pending',           age: '4 days'    },
-  { id:  3, category: 'KYC', priority: 'Medium', investor: 'Nisha Patel',         desc: 'KYC in progress, awaiting CKYC registry update',        age: '1 day'     },
-  { id:  4, category: 'KYC', priority: 'High',   investor: 'Mohit Gupta',         desc: 'Address proof expired — fresh submission needed',       age: '6 days'    },
-  { id:  5, category: 'KYC', priority: 'Low',    investor: 'Deepa Rao',           desc: 'Video KYC appointment not yet scheduled',              age: '3 days'    },
-  /* Bank — 4 */
-  { id:  6, category: 'Bank', priority: 'High',   investor: 'Vikram Singh',       desc: 'Bank account not verified — penny drop failed',         age: '1 day'     },
-  { id:  7, category: 'Bank', priority: 'Medium', investor: 'Rajesh Kumar',       desc: 'IFSC code mismatch on submitted cancelled cheque',      age: '3 days'    },
-  { id:  8, category: 'Bank', priority: 'High',   investor: 'Anjali Desai',       desc: 'Cancelled cheque not submitted',                        age: '5 days'    },
-  { id:  9, category: 'Bank', priority: 'Low',    investor: 'Sunita Kapur',       desc: 'Bank mandate (eNACH) registration pending',            age: '2 days'    },
-  /* Transaction — 8 */
-  { id: 10, category: 'Transaction', priority: 'High',   investor: 'Tech Innovations PF', desc: 'Lumpsum payment failed — insufficient funds',  age: 'Today'     },
-  { id: 11, category: 'Transaction', priority: 'High',   investor: 'Meera Iyer',          desc: 'Redemption stuck in processing for 2 days',    age: '2 days'    },
-  { id: 12, category: 'Transaction', priority: 'Medium', investor: 'Rahul Verma',         desc: 'Switch order awaiting investor confirmation',  age: '1 day'     },
-  { id: 13, category: 'Transaction', priority: 'Medium', investor: 'Aditya Sharma',       desc: 'NFO subscription window closes in 2 days',    age: '1 day'     },
-  { id: 14, category: 'Transaction', priority: 'Low',    investor: 'Priya Nair',          desc: 'Partial redemption request stalled at BSE',   age: '3 days'    },
-  { id: 15, category: 'Transaction', priority: 'Low',    investor: 'Nisha Patel',         desc: 'Growth-to-IDCW switch pending investor sign-off', age: '4 days' },
-  { id: 16, category: 'Transaction', priority: 'High',   investor: 'Vikram Singh',        desc: 'Netbanking payment rejected — retry available',age: 'Today'     },
-  { id: 17, category: 'Transaction', priority: 'Low',    investor: 'Mohit Gupta',         desc: 'STT discrepancy on equity redemption',         age: '5 days'    },
-  /* SIP — 4 */
-  { id: 18, category: 'SIP', priority: 'High',   investor: 'Meera Iyer',          desc: 'SIP eNACH mandate failed for 2 consecutive months',    age: 'Today'     },
-  { id: 19, category: 'SIP', priority: 'High',   investor: 'Anjali Desai',        desc: 'SIP amount deducted but units not allotted',            age: '1 day'     },
-  { id: 20, category: 'SIP', priority: 'Medium', investor: 'Rajesh Kumar',        desc: 'Upcoming SIP on 5th — insufficient balance alert',     age: 'Today'     },
-  { id: 21, category: 'SIP', priority: 'Low',    investor: 'Deepa Rao',           desc: 'SIP pause request received from investor',              age: '2 days'    },
-  /* Maturing — 2 */
-  { id: 22, category: 'Maturing', priority: 'Medium', investor: 'Rahul Verma',     desc: 'Fixed Deposit maturing 10 May — renewal or payout needed', age: 'In 18d' },
-  { id: 23, category: 'Maturing', priority: 'Low',    investor: 'Tech Innovations PF', desc: 'LAS OD limit review due end of month',              age: 'In 25d' },
-];
 
 const TABS: { key: Category; label: string; icon: React.ReactNode }[] = [
   { key: 'All',         label: 'All',          icon: <AlertCircle     className="w-3.5 h-3.5" /> },
@@ -59,7 +28,7 @@ const priorityCls: Record<Priority, string> = {
   Low:    'bg-slate-100 text-slate-600',
 };
 
-const catIcon: Record<Exclude<Category, 'All'>, { icon: React.ReactNode; cls: string }> = {
+const catIcon: Record<string, { icon: React.ReactNode; cls: string }> = {
   KYC:         { icon: <ShieldCheck    className="w-4 h-4" />, cls: 'bg-blue-100   text-blue-600'   },
   Bank:        { icon: <Landmark       className="w-4 h-4" />, cls: 'bg-green-100  text-green-600'  },
   Transaction: { icon: <ArrowLeftRight className="w-4 h-4" />, cls: 'bg-violet-100 text-violet-600' },
@@ -67,10 +36,30 @@ const catIcon: Record<Exclude<Category, 'All'>, { icon: React.ReactNode; cls: st
   Maturing:    { icon: <Package        className="w-4 h-4" />, cls: 'bg-slate-100  text-slate-600'  },
 };
 
-export default function ActionCenter({ onBack }: { onBack: () => void }) {
+export default function ActionCenter({ onBack, userData }: { onBack: () => void; userData?: any }) {
   const [tab, setTab] = useState<Category>('All');
+  const [actions, setActions] = useState<Action[]>([]);
+  const [loading, setLoading] = useState(true);
 
-  const filtered = tab === 'All' ? ACTIONS : ACTIONS.filter(a => a.category === tab);
+  React.useEffect(() => {
+    if (!userData?.id) return;
+    const token = userData.token || sessionStorage.getItem('token') || '';
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+
+    fetch(`http://localhost:8081/api/v1/dashboard/distributor/${userData.id}/actions`, { headers })
+      .then(res => res.json())
+      .then(data => {
+        setActions(data || []);
+        setLoading(false);
+      })
+      .catch(err => {
+        console.error('Failed to fetch action center', err);
+        setLoading(false);
+      });
+  }, [userData]);
+
+  const filtered = tab === 'All' ? actions : actions.filter(a => a.category === tab);
   const high   = filtered.filter(a => a.priority === 'High').length;
   const medium = filtered.filter(a => a.priority === 'Medium').length;
   const low    = filtered.filter(a => a.priority === 'Low').length;
@@ -115,7 +104,7 @@ export default function ActionCenter({ onBack }: { onBack: () => void }) {
       {/* ── Category tabs ───────────────────────────────────────────────── */}
       <div className="flex gap-2 flex-wrap">
         {TABS.map(t => {
-          const count = t.key === 'All' ? ACTIONS.length : ACTIONS.filter(a => a.category === t.key).length;
+          const count = t.key === 'All' ? actions.length : actions.filter(a => a.category === t.key).length;
           const active = tab === t.key;
           return (
             <button
@@ -147,7 +136,9 @@ export default function ActionCenter({ onBack }: { onBack: () => void }) {
             exit={{ opacity: 0, y: -6 }}
             transition={{ duration: 0.15 }}
           >
-            {filtered.length === 0 ? (
+            {loading ? (
+              <div className="py-20 text-center text-slate-500">Loading action items...</div>
+            ) : filtered.length === 0 ? (
               <div className="py-16 text-center">
                 <p className="text-slate-400 text-sm">No pending actions in this category.</p>
               </div>

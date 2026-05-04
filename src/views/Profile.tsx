@@ -1,15 +1,16 @@
 import React, { useState } from 'react';
 import { motion } from 'motion/react';
-import { AlertTriangle, CheckCircle2, Edit2, Building, ShieldCheck, CreditCard, User } from 'lucide-react';
-
+import { AlertTriangle, CheckCircle2, Edit2, Building, ShieldCheck, CreditCard, User, XCircle } from 'lucide-react';
 
 export default function Profile({ userData }: { userData?: any }) {
   const [editingSection, setEditingSection] = useState<string | null>(null);
 
-  const isExpired = (dateStr?: string) => {
+  const isExpired = (dateStr?: any) => {
     if (!dateStr) return false;
-    const expiry = new Date(dateStr);
-    return expiry < new Date();
+    let d;
+    if (Array.isArray(dateStr)) d = new Date(dateStr[0], dateStr[1] - 1, dateStr[2]);
+    else d = new Date(dateStr);
+    return !isNaN(d.getTime()) && d < new Date();
   };
 
   const arnExpiry = userData?.arnExpiryDate || userData?.arn_expiry_date;
@@ -23,10 +24,10 @@ export default function Profile({ userData }: { userData?: any }) {
 
   const completionItems = [
     { label: 'Personal Details', done: !!userData?.fullName },
-    { label: 'ARN & NISM', done: !!userData?.arnNumber },
+    { label: 'ARN & NISM', done: !!userData?.arnNumber && !arnExpired },
     { label: 'Bank Details', done: !!userData?.bankAccountNumber },
     { label: 'KYC Verified', done: userData?.kycStatus === 'VERIFIED' },
-    { label: 'NISM Renewed', done: !!userData?.nismExpiryDate },
+    { label: 'NISM Renewed', done: !!userData?.nismExpiryDate && !isExpired(userData?.nismExpiryDate) },
   ];
 
   const completionPct = userData?.profileCompletionPercent || Math.round(
@@ -127,8 +128,10 @@ export default function Profile({ userData }: { userData?: any }) {
                   </div>
                   {c.status === 'active' ? (
                     <CheckCircle2 className="w-5 h-5 text-green-500" />
+                  ) : c.status === 'expired' ? (
+                    <XCircle className="w-5 h-5 text-red-500" />
                   ) : (
-                    <AlertTriangle className={`w-5 h-5 ${c.status === 'expired' ? 'text-red-500' : 'text-amber-500'}`} />
+                    <AlertTriangle className="w-5 h-5 text-amber-500" />
                   )}
                 </div>
               ))}

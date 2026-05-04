@@ -1,11 +1,11 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { motion } from 'motion/react';
 import { CheckCircle2, XCircle, AlertCircle, Clock, RefreshCw } from 'lucide-react';
 
 type NotifType = 'success' | 'error' | 'warning' | 'info';
 
 interface Notif {
-  id: number;
+  id: string;
   type: NotifType;
   category: string;
   title: string;
@@ -13,63 +13,6 @@ interface Notif {
   time: string;
   read: boolean;
 }
-
-const initialNotifications: Notif[] = [
-  {
-    id: 1, type: 'success', category: 'KYC',
-    title: 'KYC Verified',
-    message: "Sunita Kapur's KYC has been successfully completed. She is now eligible for transactions.",
-    time: '10 min ago', read: false,
-  },
-  {
-    id: 2, type: 'warning', category: 'Payment',
-    title: 'Payment Pending',
-    message: "Meera Iyer has not authorized the payment link for Parag Parikh Flexi Cap SIP ₹5,000.",
-    time: '45 min ago', read: false,
-  },
-  {
-    id: 3, type: 'success', category: 'Transaction',
-    title: 'Order Successful',
-    message: 'SIP order for Aditya Sharma in HDFC Large & Mid Cap Fund (₹5,000) has been processed successfully.',
-    time: '2 hrs ago', read: false,
-  },
-  {
-    id: 4, type: 'error', category: 'Transaction',
-    title: 'Order Failed',
-    message: 'Lumpsum order for Tech Innovations PF in Quant Small Cap Fund failed. Reason: Insufficient funds.',
-    time: '5 hrs ago', read: true,
-  },
-  {
-    id: 5, type: 'info', category: 'SIP',
-    title: 'SIP Due Tomorrow',
-    message: 'Monthly SIP of ₹10,000 for Rahul Verma (ICICI Prudential Bluechip) is due on 21st Apr.',
-    time: '1 day ago', read: true,
-  },
-  {
-    id: 6, type: 'success', category: 'Redemption',
-    title: 'Bank Credit Completed',
-    message: "Redemption proceeds of ₹50,000 have been credited to Sunita Kapur's registered bank account.",
-    time: '2 days ago', read: true,
-  },
-  {
-    id: 7, type: 'error', category: 'KYC',
-    title: 'KYC Failed',
-    message: 'KYC verification for Prakash Mehta failed. Document mismatch detected. Please re-initiate.',
-    time: '3 days ago', read: true,
-  },
-  {
-    id: 8, type: 'info', category: 'SIP',
-    title: 'SIP Paused',
-    message: "Vikram Singh's SIP in Kotak Corporate Bond Fund has been paused as per investor request.",
-    time: '4 days ago', read: true,
-  },
-  {
-    id: 9, type: 'warning', category: 'Mandate',
-    title: 'Mandate Setup Pending',
-    message: "eNACH mandate for Nisha Patel's SBI Liquid Fund SIP is still pending registration.",
-    time: '5 days ago', read: true,
-  },
-];
 
 const typeConfig: Record<NotifType, { borderColor: string; iconBg: string; icon: React.ReactNode }> = {
   success: {
@@ -94,17 +37,98 @@ const typeConfig: Record<NotifType, { borderColor: string; iconBg: string; icon:
   },
 };
 
-const CATEGORIES = ['All', 'KYC', 'Transaction', 'Payment', 'SIP', 'Redemption', 'Mandate'];
+const CATEGORIES = ['All', 'KYC', 'Transaction', 'Payment', 'SIP', 'Redemption', 'Mandate', 'General'];
 
-export default function Notifications() {
-  const [notifications, setNotifications] = useState(initialNotifications);
+function mapBackendType(type: string): { notifType: NotifType, category: string } {
+  switch (type) {
+    case 'KYC_COMPLETED': return { notifType: 'success', category: 'KYC' };
+    case 'KYC_FAILED': return { notifType: 'error', category: 'KYC' };
+    case 'PAYMENT_PENDING': return { notifType: 'warning', category: 'Payment' };
+    case 'PAYMENT_FAILED': return { notifType: 'error', category: 'Payment' };
+    case 'TRANSACTION_SUCCESSFUL': return { notifType: 'success', category: 'Transaction' };
+    case 'TRANSACTION_FAILED': return { notifType: 'error', category: 'Transaction' };
+    case 'REDEMPTION_SUBMITTED': return { notifType: 'info', category: 'Redemption' };
+    case 'REDEMPTION_SUCCESSFUL': return { notifType: 'success', category: 'Redemption' };
+    case 'BANK_CREDIT_COMPLETED': return { notifType: 'success', category: 'Redemption' };
+    case 'RECURRING_PLAN_EVENT': return { notifType: 'info', category: 'SIP' };
+    case 'GENERAL':
+    default:
+      return { notifType: 'info', category: 'General' };
+  }
+}
+
+export default function Notifications({ userData }: { userData?: any }) {
+  const [notifications, setNotifications] = useState<Notif[]>([]);
   const [filter, setFilter] = useState('All');
+  const [loading, setLoading] = useState(true);
 
-  const markAllRead = () =>
+  useEffect(() => {
+    if (!userData?.id) return;
+
+    const token = userData?.token || sessionStorage.getItem('token') || '';
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const fetchNotifications = async () => {
+      try {
+        setLoading(true);
+        const res = await fetch(`http://localhost:8081/api/v1/notifications/distributor/${userData.id}`, { headers });
+        if (res.ok) {
+          const data = await res.json();
+          const mapped: Notif[] = data.map((n: any) => {
+            const { notifType, category } = mapBackendType(n.type);
+            return {
+              id: n.id,
+              type: notifType,
+              category,
+              title: n.title,
+              message: n.message,
+              time: new Date(n.createdAt || Date.now()).toLocaleString(),
+              read: n.readFlag === true
+            };
+          });
+          setNotifications(mapped);
+        }
+      } catch (err) {
+        console.error('Failed to fetch notifications', err);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchNotifications();
+  }, [userData]);
+
+  const markAllRead = () => {
+    // Optimistic UI update
     setNotifications(prev => prev.map(n => ({ ...n, read: true })));
+    // Real implementation would batch patch all unread to backend
+  };
 
-  const markRead = (id: number) =>
-    setNotifications(prev => prev.map(n => n.id === id ? { ...n, read: true } : n));
+  const markRead = async (id: string) => {
+    const n = notifications.find(x => x.id === id);
+    if (!n || n.read) return;
+
+    // Optimistic update
+    setNotifications(prev => prev.map(x => x.id === id ? { ...x, read: true } : x));
+
+    try {
+      const token = userData?.token || sessionStorage.getItem('token') || '';
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+
+      await fetch(`http://localhost:8081/api/v1/notifications/${id}/read`, {
+        method: 'PATCH',
+        headers
+      });
+    } catch (err) {
+      console.error('Failed to mark read', err);
+    }
+  };
 
   const filtered = filter === 'All'
     ? notifications
@@ -149,45 +173,48 @@ export default function Notifications() {
       </div>
 
       <div className="space-y-3">
-        {filtered.length === 0 && (
+        {loading ? (
+           <div className="py-20 text-center text-slate-500">Loading notifications...</div>
+        ) : filtered.length === 0 ? (
           <div className="py-20 text-center">
             <div className="w-16 h-16 mx-auto mb-4 bg-slate-100 rounded-full flex items-center justify-center">
               <CheckCircle2 className="w-8 h-8 text-slate-300" />
             </div>
             <p className="text-slate-500 font-medium">No notifications in this category</p>
           </div>
-        )}
-        {filtered.map(n => {
-          const cfg = typeConfig[n.type];
-          return (
-            <div
-              key={n.id}
-              onClick={() => markRead(n.id)}
-              className={`bg-white rounded-2xl p-5 shadow-sm border border-l-4 border-slate-200 ${cfg.borderColor} flex gap-4 transition-all cursor-pointer hover:shadow-md ${
-                !n.read ? 'ring-1 ring-blue-100 bg-blue-50/20' : ''
-              }`}
-            >
-              <div className={`w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 ${cfg.iconBg}`}>
-                {cfg.icon}
-              </div>
-              <div className="flex-1 min-w-0">
-                <div className="flex justify-between items-start gap-2">
-                  <div className="flex items-center gap-2">
-                    <p className="text-sm font-semibold text-slate-800">{n.title}</p>
-                    {!n.read && (
-                      <span className="w-1.5 h-1.5 rounded-full bg-blue-500 flex-shrink-0" />
-                    )}
-                  </div>
-                  <span className="text-xs text-slate-400 whitespace-nowrap flex-shrink-0">{n.time}</span>
+        ) : (
+          filtered.map(n => {
+            const cfg = typeConfig[n.type] || typeConfig['info'];
+            return (
+              <div
+                key={n.id}
+                onClick={() => markRead(n.id)}
+                className={`bg-white rounded-2xl p-5 shadow-sm border border-l-4 border-slate-200 ${cfg.borderColor} flex gap-4 transition-all cursor-pointer hover:shadow-md ${
+                  !n.read ? 'ring-1 ring-blue-100 bg-blue-50/20' : ''
+                }`}
+              >
+                <div className={`w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 ${cfg.iconBg}`}>
+                  {cfg.icon}
                 </div>
-                <p className="text-sm text-slate-500 mt-1 leading-relaxed">{n.message}</p>
-                <span className="inline-block mt-2 px-2 py-0.5 bg-slate-100 text-slate-500 text-[10px] font-bold uppercase tracking-wider rounded">
-                  {n.category}
-                </span>
+                <div className="flex-1 min-w-0">
+                  <div className="flex justify-between items-start gap-2">
+                    <div className="flex items-center gap-2">
+                      <p className="text-sm font-semibold text-slate-800">{n.title}</p>
+                      {!n.read && (
+                        <span className="w-1.5 h-1.5 rounded-full bg-blue-500 flex-shrink-0" />
+                      )}
+                    </div>
+                    <span className="text-xs text-slate-400 whitespace-nowrap flex-shrink-0">{n.time}</span>
+                  </div>
+                  <p className="text-sm text-slate-500 mt-1 leading-relaxed">{n.message}</p>
+                  <span className="inline-block mt-2 px-2 py-0.5 bg-slate-100 text-slate-500 text-[10px] font-bold uppercase tracking-wider rounded">
+                    {n.category}
+                  </span>
+                </div>
               </div>
-            </div>
-          );
-        })}
+            );
+          })
+        )}
       </div>
     </motion.div>
   );

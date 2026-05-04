@@ -7,48 +7,175 @@ import {
   Briefcase, Activity, Target,
 } from 'lucide-react';
 
-/* ── Existing chart data ────────────────────────────────────────────────── */
-const donutData = [
-  { name: 'Successful', value: 65, color: '#22c55e' },
-  { name: 'Pending',    value: 25, color: '#eab308' },
-  { name: 'Failed',     value: 10, color: '#ef4444' },
-];
-
-const recentActivity = [
-  { action: 'KYC Verified',     name: 'Sunita Kapur',         time: '10 min ago', dot: 'bg-green-500' },
-  { action: 'Payment Pending',  name: 'Meera Iyer',           time: '45 min ago', dot: 'bg-amber-500' },
-  { action: 'Order Successful', name: 'Aditya Sharma',        time: '2 hrs ago',  dot: 'bg-blue-500'  },
-  { action: 'Order Failed',     name: 'Tech Innovations PF',  time: '5 hrs ago',  dot: 'bg-red-500'   },
-  { action: 'SIP Due Tomorrow', name: 'Rahul Verma',          time: '1 day ago',  dot: 'bg-slate-400' },
-];
-
-/* ── PRD snapshot card data ─────────────────────────────────────────────── */
-const AUM_SUB = [
-  { label: 'Mutual Funds', value: '₹31.2 Cr', change: '+5.1%', up: true  },
-  { label: 'SIF',          value: '₹8.4 Cr',  change: '+2.3%', up: true  },
-  { label: 'Others',       value: '₹2.9 Cr',  change: '+1.8%', up: true  },
-];
-
-const PENDING_SUB = [
-  { label: 'KYC Pending',       value: 5  },
-  { label: 'Bank Link Pending', value: 4  },
-  { label: 'Txn Failed',        value: 8  },
-  { label: 'SIP Failed',        value: 4  },
-  { label: 'Maturing Soon',     value: 2  },
-];
-
-const LEAD_SUB = [
-  { label: 'New Leads',   value: 8,  color: 'bg-blue-400'  },
-  { label: 'In Progress', value: 14, color: 'bg-amber-400' },
-  { label: 'Converted',   value: 23, color: 'bg-green-400' },
-];
-
 /* ── Props ──────────────────────────────────────────────────────────────── */
 interface DashboardProps {
   onNavigate: (view: string) => void;
+  userData?: any;
 }
 
-export default function Dashboard({ onNavigate }: DashboardProps) {
+export default function Dashboard({ onNavigate, userData }: DashboardProps) {
+  const [metrics, setMetrics] = React.useState({
+    totalAum: 0,
+    investorCount: 0,
+    sipAmount: 0,
+    sipCount: 0,
+    failedSips: 0,
+    todayOrders: 0,
+    aumSub: [] as any[],
+    pendingSub: [] as any[],
+    leadSub: [] as any[],
+    donutData: [] as any[],
+    recentActivity: [] as any[],
+    onboarding: { kycPending: [] as any[], bankPending: [] as any[], readyToInvest: [] as any[] }
+  });
+
+  React.useEffect(() => {
+    if (!userData?.id) return;
+    const token = userData.token || sessionStorage.getItem('token') || '';
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+
+    const fetchDashboard = async () => {
+      try {
+        const [ordersRes, investorsRes, schemesRes, leadsRes, onboardingRes] = await Promise.all([
+          fetch(`http://localhost:8081/api/v1/orders/by-distributor/${userData.id}`, { headers }),
+          fetch(`http://localhost:8081/api/v1/investors/by-distributor/${userData.id}`, { headers }),
+          fetch(`http://localhost:8081/api/v1/products/schemes`, { headers }),
+          fetch(`http://localhost:8081/api/v1/leads/distributor/${userData.id}`, { headers }),
+          fetch(`http://localhost:8081/api/v1/dashboard/distributor/${userData.id}/onboarding`, { headers })
+        ]);
+
+        let orders: any[] = [], investors: any[] = [], schemes: any[] = [], leads: any[] = [], onboarding: any = { kycPending: [], bankPending: [], readyToInvest: [] };
+        if (ordersRes.ok) orders = await ordersRes.json();
+        if (investorsRes.ok) investors = await investorsRes.json();
+        if (schemesRes.ok) schemes = await schemesRes.json();
+        if (leadsRes.ok) leads = await leadsRes.json();
+        if (onboardingRes.ok) onboarding = await onboardingRes.json();
+
+        let totalAum = 0;
+        let sipAmount = 0;
+        let sipCount = 0;
+        let failedSips = 0;
+        let todayOrders = 0;
+
+        let successfulOrders = 0;
+        let pendingOrders = 0;
+        let failedOrders = 0;
+
+        let mfAum = 0;
+        let sifAum = 0;
+        let othersAum = 0;
+
+        const schemeMap = new Map(schemes.map(s => [s.id, s]));
+        const today = new Date().toDateString();
+
+        // Activity feed builder
+        const activities: any[] = [];
+
+        orders.forEach((o: any) => {
+          if (o.orderStatus === 'COMPLETED') {
+            totalAum += o.amount || 0;
+            const s = schemeMap.get(o.productSchemeId);
+            if (s?.productCategory === 'MUTUAL_FUND') mfAum += o.amount || 0;
+            else if (s?.productCategory === 'SIF') sifAum += o.amount || 0;
+            else othersAum += o.amount || 0;
+          }
+
+          if (o.transactionType === 'SIP') {
+            sipCount++;
+            if (o.orderStatus === 'COMPLETED') sipAmount += o.amount || 0;
+            if (o.orderStatus === 'FAILED') failedSips++;
+          }
+          if (new Date(o.createdAt || Date.now()).toDateString() === today) {
+            todayOrders++;
+          }
+
+          if (o.orderStatus === 'COMPLETED' || o.orderStatus === 'SUCCESSFUL') successfulOrders++;
+          else if (o.orderStatus === 'FAILED') failedOrders++;
+          else pendingOrders++;
+
+          // push to activities
+          activities.push({
+            date: new Date(o.createdAt || Date.now()),
+            action: `Order ${o.orderStatus}`,
+            name: `Order #${o.id.substring(0, 6)}`,
+            dot: o.orderStatus === 'COMPLETED' ? 'bg-blue-500' : o.orderStatus === 'FAILED' ? 'bg-red-500' : 'bg-amber-500'
+          });
+        });
+
+        let kycPending = 0;
+        let bankPending = 0;
+        investors.forEach((i: any) => {
+          if (i.kycStatus !== 'COMPLETED') kycPending++;
+          if (i.bankVerificationStatus !== 'VERIFIED') bankPending++;
+
+          activities.push({
+            date: new Date(i.createdAt || Date.now()),
+            action: `Investor Added`,
+            name: i.fullName || 'Unknown',
+            dot: 'bg-green-500'
+          });
+        });
+
+        let newLeads = 0;
+        let inProgressLeads = 0;
+        let convertedLeads = 0;
+        leads.forEach((l: any) => {
+          if (l.status === 'NEW') newLeads++;
+          else if (l.status === 'CONVERTED_TO_INVESTOR' || l.status === 'INVESTMENT_COMPLETED') convertedLeads++;
+          else inProgressLeads++;
+        });
+
+        // Time formatter
+        const formatTime = (d: Date) => {
+          const diff = Math.floor((Date.now() - d.getTime()) / 60000); // mins
+          if (diff < 60) return `${diff} min ago`;
+          if (diff < 1440) return `${Math.floor(diff / 60)} hrs ago`;
+          return `${Math.floor(diff / 1440)} days ago`;
+        };
+        activities.sort((a, b) => b.date.getTime() - a.date.getTime());
+        const recentActivity = activities.slice(0, 5).map(a => ({
+          ...a, time: formatTime(a.date)
+        }));
+
+        setMetrics({
+          totalAum,
+          investorCount: investors.length,
+          sipAmount,
+          sipCount,
+          failedSips,
+          todayOrders,
+          aumSub: [
+            { label: 'Mutual Funds', value: `₹${(mfAum / 100000).toFixed(2)} L`, change: '', up: true },
+            { label: 'SIF', value: `₹${(sifAum / 100000).toFixed(2)} L`, change: '', up: true },
+            { label: 'Others', value: `₹${(othersAum / 100000).toFixed(2)} L`, change: '', up: true },
+          ],
+          pendingSub: [
+            { label: 'KYC Pending', value: kycPending },
+            { label: 'Bank Link Pending', value: bankPending },
+            { label: 'Txn Failed', value: failedOrders },
+            { label: 'SIP Failed', value: failedSips },
+          ],
+          leadSub: [
+            { label: 'New Leads', value: newLeads, color: 'bg-blue-400' },
+            { label: 'In Progress', value: inProgressLeads, color: 'bg-amber-400' },
+            { label: 'Converted', value: convertedLeads, color: 'bg-green-400' },
+          ],
+          donutData: [
+            { name: 'Successful', value: successfulOrders, color: '#22c55e' },
+            { name: 'Pending', value: pendingOrders, color: '#eab308' },
+            { name: 'Failed', value: failedOrders, color: '#ef4444' },
+          ],
+          recentActivity,
+          onboarding
+        });
+      } catch (err) {
+        console.error('Failed to fetch dashboard metrics', err);
+      }
+    };
+    fetchDashboard();
+  }, [userData]);
+
   return (
     <motion.div
       initial={{ opacity: 0, y: 10 }}
@@ -76,16 +203,16 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
         {/* ── Card 1: Total AUM ── */}
         <SnapshotCard onClick={() => onNavigate('aum-breakdown')} accent="border-t-blue-500">
           <CardLabel icon={<TrendingUp className="w-3.5 h-3.5 text-blue-500" />}>Total AUM</CardLabel>
-          <p className="text-2xl font-bold text-slate-800 mt-2">₹42.58 Cr</p>
+          <p className="text-2xl font-bold text-slate-800 mt-2">₹{(metrics.totalAum / 100000).toFixed(2)} L</p>
           <p className="text-[11px] font-semibold text-green-500 flex items-center gap-0.5 mt-0.5 mb-3">
-            <TrendingUp className="w-3 h-3" /> 4.2% vs last month
+            <TrendingUp className="w-3 h-3" /> Live
           </p>
           <Divider />
           <div className="space-y-1.5 mt-3">
-            {AUM_SUB.map(s => (
+            {metrics.aumSub.map(s => (
               <div key={s.label} className="flex items-center justify-between gap-1">
                 <span className="text-[11px] text-slate-500 truncate">{s.label}</span>
-                <span className={`text-[10px] font-semibold ${s.up ? 'text-green-500' : 'text-red-500'}`}>{s.change}</span>
+                <span className={`text-[10px] font-semibold ${s.up ? 'text-green-500' : 'text-red-500'}`}>{s.value}</span>
               </div>
             ))}
           </div>
@@ -94,37 +221,37 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
         {/* ── Card 2: Investor Base ── */}
         <SnapshotCard onClick={() => onNavigate('investors')} accent="border-t-emerald-500">
           <CardLabel icon={<Users className="w-3.5 h-3.5 text-emerald-500" />}>Investor Base</CardLabel>
-          <p className="text-2xl font-bold text-slate-800 mt-2">347</p>
+          <p className="text-2xl font-bold text-slate-800 mt-2">{metrics.investorCount}</p>
           <p className="text-[11px] text-slate-400 mt-0.5 mb-3">Total Investors</p>
           <Divider />
           <div className="space-y-1.5 mt-3">
-            <SubRow label="Active SIP" value="218" />
-            <SubRow label="New (30d)"  value="12" highlight />
+            <SubRow label="Active SIP" value={metrics.sipCount} />
+            <SubRow label="New (30d)" value="12" highlight />
           </div>
         </SnapshotCard>
 
         {/* ── Card 3: SIP This Month ── */}
         <SnapshotCard onClick={() => onNavigate('sip-dashboard')} accent="border-t-violet-500">
           <CardLabel icon={<Activity className="w-3.5 h-3.5 text-violet-500" />}>SIP · This Month</CardLabel>
-          <p className="text-2xl font-bold text-slate-800 mt-2">₹18.4 L</p>
+          <p className="text-2xl font-bold text-slate-800 mt-2">₹{(metrics.sipAmount / 1000).toFixed(1)} k</p>
           <p className="text-[11px] font-semibold text-green-500 flex items-center gap-0.5 mt-0.5 mb-3">
-            <TrendingUp className="w-3 h-3" /> 6.2% vs last month
+            <TrendingUp className="w-3 h-3" /> Live
           </p>
           <Divider />
           <div className="space-y-1.5 mt-3">
-            <SubRow label="Active SIPs" value="218" />
-            <SubRow label="Failed SIPs" value="7"   warn />
+            <SubRow label="Active SIPs" value={metrics.sipCount} />
+            <SubRow label="Failed SIPs" value={metrics.failedSips} warn />
           </div>
         </SnapshotCard>
 
         {/* ── Card 4: Pending Actions ── */}
         <SnapshotCard onClick={() => onNavigate('action-center')} accent="border-t-red-500">
           <CardLabel icon={<AlertCircle className="w-3.5 h-3.5 text-red-500" />}>Pending Actions</CardLabel>
-          <p className="text-2xl font-bold text-slate-800 mt-2">23</p>
+          <p className="text-2xl font-bold text-slate-800 mt-2">{(metrics.pendingSub.reduce((acc, curr) => acc + curr.value, 0))}</p>
           <p className="text-[11px] text-slate-400 mt-0.5 mb-3">Items requiring action</p>
           <Divider />
           <div className="space-y-1.5 mt-3">
-            {PENDING_SUB.map(s => (
+            {metrics.pendingSub.map(s => (
               <div key={s.label} className="flex items-center justify-between">
                 <span className="text-[11px] text-slate-500 truncate">{s.label}</span>
                 <span className="text-[11px] font-semibold text-slate-700">{s.value}</span>
@@ -136,27 +263,30 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
         {/* ── Card 5: Lead Pipeline ── */}
         <SnapshotCard onClick={() => onNavigate('leads')} accent="border-t-amber-500">
           <CardLabel icon={<Target className="w-3.5 h-3.5 text-amber-500" />}>Lead Pipeline</CardLabel>
-          <p className="text-2xl font-bold text-slate-800 mt-2">45</p>
+          <p className="text-2xl font-bold text-slate-800 mt-2">{metrics.leadSub.reduce((acc, curr) => acc + curr.value, 0)}</p>
           <p className="text-[11px] text-slate-400 mt-0.5 mb-3">Total Leads</p>
           <Divider />
           {/* Mini funnel */}
           <div className="space-y-2 mt-3">
-            {LEAD_SUB.map(s => (
-              <div key={s.label} className="flex items-center gap-2">
-                <div className="flex-1">
-                  <div className="flex justify-between mb-0.5">
-                    <span className="text-[11px] text-slate-500">{s.label}</span>
-                    <span className="text-[11px] font-semibold text-slate-700">{s.value}</span>
-                  </div>
-                  <div className="h-1 bg-slate-100 rounded-full overflow-hidden">
-                    <div
-                      className={`h-full rounded-full ${s.color}`}
-                      style={{ width: `${Math.round((s.value / 45) * 100)}%` }}
-                    />
+            {metrics.leadSub.map(s => {
+              const total = metrics.leadSub.reduce((acc, curr) => acc + curr.value, 0) || 1;
+              return (
+                <div key={s.label} className="flex items-center gap-2">
+                  <div className="flex-1">
+                    <div className="flex justify-between mb-0.5">
+                      <span className="text-[11px] text-slate-500">{s.label}</span>
+                      <span className="text-[11px] font-semibold text-slate-700">{s.value}</span>
+                    </div>
+                    <div className="h-1 bg-slate-100 rounded-full overflow-hidden">
+                      <div
+                        className={`h-full rounded-full ${s.color}`}
+                        style={{ width: `${Math.round((s.value / total) * 100)}%` }}
+                      />
+                    </div>
                   </div>
                 </div>
-              </div>
-            ))}
+              )
+            })}
           </div>
         </SnapshotCard>
 
@@ -174,20 +304,20 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
           </div>
           <div className="flex-1 p-5 overflow-x-auto">
             <div className="flex gap-4 min-w-max">
-              <KanbanColumn title="KYC Pending" count={3} accent="border-t-amber-400">
-                <KanbanCard name="Priya Nair"    detail="Selfie upload required"   days="Today"     status="kyc"    />
-                <KanbanCard name="Prakash Mehta" detail="Document mismatch"        days="2 days ago" status="failed" />
-                <KanbanCard name="Nisha Patel"   detail="In progress"              days="3 days ago" status="kyc"   />
+              <KanbanColumn title="KYC Pending" count={metrics.onboarding.kycPending.length} accent="border-t-amber-400">
+                {metrics.onboarding.kycPending.map((item: any) => (
+                  <KanbanCard key={item.id} name={item.name} detail={item.detail} days={item.days} status={item.status} />
+                ))}
               </KanbanColumn>
-              <KanbanColumn title="Bank Pending" count={3} accent="border-t-blue-400">
-                <KanbanCard name="Vikram Singh"  detail="Account not verified"     days="1 day ago"  status="bank"  />
-                <KanbanCard name="Rajesh Kumar"  detail="IFSC mismatch"            days="4 days ago" status="bank"  />
-                <KanbanCard name="Anjali Desai"  detail="Verification pending"     days="Yesterday"  status="bank"  />
+              <KanbanColumn title="Bank Pending" count={metrics.onboarding.bankPending.length} accent="border-t-blue-400">
+                {metrics.onboarding.bankPending.map((item: any) => (
+                  <KanbanCard key={item.id} name={item.name} detail={item.detail} days={item.days} status={item.status} />
+                ))}
               </KanbanColumn>
-              <KanbanColumn title="Ready to Invest" count={5} accent="border-t-green-400">
-                <KanbanCard name="Aditya Sharma" detail="₹5L Lumpsum"             days="Just now"   status="ready" />
-                <KanbanCard name="Sunita Kapur"  detail="SIP Setup"               days="1 day ago"  status="ready" />
-                <KanbanCard name="Rahul Verma"   detail="₹15L Institutional"      days="Today"      status="ready" />
+              <KanbanColumn title="Ready to Invest" count={metrics.onboarding.readyToInvest.length} accent="border-t-green-400">
+                {metrics.onboarding.readyToInvest.map((item: any) => (
+                  <KanbanCard key={item.id} name={item.name} detail={item.detail} days={item.days} status={item.status} />
+                ))}
               </KanbanColumn>
             </div>
           </div>
@@ -201,11 +331,11 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
                 <Pie
-                  data={donutData} cx="50%" cy="50%"
+                  data={metrics.donutData} cx="50%" cy="50%"
                   innerRadius={60} outerRadius={80}
                   paddingAngle={5} dataKey="value" stroke="none"
                 >
-                  {donutData.map((entry, i) => (
+                  {metrics.donutData.map((entry, i) => (
                     <Cell key={`cell-${i}`} fill={entry.color} />
                   ))}
                 </Pie>
@@ -216,12 +346,12 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
               </PieChart>
             </ResponsiveContainer>
             <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
-              <span className="text-2xl font-bold">142</span>
+              <span className="text-2xl font-bold">{metrics.todayOrders}</span>
               <span className="text-[10px] text-blue-200 uppercase tracking-wide">Orders</span>
             </div>
           </div>
           <div className="mt-4 space-y-3">
-            {donutData.map(item => (
+            {metrics.donutData.map(item => (
               <div key={item.name} className="flex justify-between items-center text-sm">
                 <div className="flex items-center gap-2">
                   <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: item.color }} />
@@ -243,7 +373,7 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
           </button>
         </div>
         <div className="divide-y divide-slate-100">
-          {recentActivity.map((item, i) => (
+          {metrics.recentActivity.map((item, i) => (
             <div key={i} className="px-5 py-3.5 flex items-center gap-4 hover:bg-slate-50 transition-colors cursor-pointer">
               <div className={`w-2 h-2 rounded-full flex-shrink-0 ${item.dot}`} />
               <div className="flex-1 flex justify-between items-center">
@@ -256,6 +386,9 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
               </div>
             </div>
           ))}
+          {metrics.recentActivity.length === 0 && (
+            <div className="p-5 text-center text-sm text-slate-400">No recent activity</div>
+          )}
         </div>
       </div>
     </motion.div>
@@ -334,10 +467,10 @@ function KanbanColumn({ title, count, children, accent }: {
 }
 
 const statusColors: Record<string, string> = {
-  kyc:   'bg-amber-100 text-amber-700',
-  bank:  'bg-blue-100  text-blue-700',
+  kyc: 'bg-amber-100 text-amber-700',
+  bank: 'bg-blue-100  text-blue-700',
   ready: 'bg-green-100 text-green-700',
-  failed:'bg-red-100   text-red-700',
+  failed: 'bg-red-100   text-red-700',
 };
 
 function KanbanCard({ name, detail, days, status }: {

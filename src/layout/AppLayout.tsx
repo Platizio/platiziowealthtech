@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard, Users, BookOpen, Search, Bell,
@@ -31,6 +31,26 @@ export default function AppLayout({ userData, onSignOut }: { userData: any, onSi
   const navigate = useNavigate();
   const location = useLocation();
   const [showInactivePopup, setShowInactivePopup] = useState(true);
+  const [unreadNotifs, setUnreadNotifs] = useState(0);
+
+  useEffect(() => {
+    if (userData && userData.id) {
+      const token = userData.token || sessionStorage.getItem('token') || '';
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+
+      fetch(`http://localhost:8081/api/v1/notifications/distributor/${userData.id}`, { headers })
+        .then(res => {
+          if (res.ok) return res.json();
+          throw new Error('Failed to fetch notifs');
+        })
+        .then(data => {
+          const unread = data.filter((n: any) => n.readFlag === false).length;
+          setUnreadNotifs(unread);
+        })
+        .catch(err => console.error('Failed to fetch notifications', err));
+    }
+  }, [userData]);
 
   const mode = location.pathname.startsWith('/admin') ? 'admin' : 'distributor';
 
@@ -40,7 +60,20 @@ export default function AppLayout({ userData, onSignOut }: { userData: any, onSi
   const nismExpiryDate = userData?.nismExpiryDate || userData?.nism_expiry_date || null;
   const arnExpiryDate  = userData?.arnExpiryDate  || userData?.arn_expiry_date  || null;
   
-  const checkExpired = (dateStr: string | null) => dateStr ? new Date(dateStr) < new Date() : false;
+  const parseDate = (dateStr: any) => {
+    if (!dateStr) return null;
+    if (Array.isArray(dateStr)) {
+      return new Date(dateStr[0], dateStr[1] - 1, dateStr[2]);
+    }
+    const d = new Date(dateStr);
+    return isNaN(d.getTime()) ? null : d;
+  };
+
+  const checkExpired = (dateStr: any) => {
+    const d = parseDate(dateStr);
+    if (!d) return false;
+    return d < new Date();
+  };
   
   const nismExpired = checkExpired(nismExpiryDate);
   const arnExpired  = checkExpired(arnExpiryDate);
@@ -126,7 +159,7 @@ export default function AppLayout({ userData, onSignOut }: { userData: any, onSi
                 <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-2 px-1">Management</p>
                 <nav className="space-y-1">
                   {DIST_NAV_SEC.map(item => (
-                    <NavItem key={item.id} to={item.id} icon={item.icon} label={item.label} badge={item.badge} />
+                    <NavItem key={item.id} to={item.id} icon={item.icon} label={item.label} badge={item.id === '/distributor/notifications' ? unreadNotifs : item.badge} />
                   ))}
                 </nav>
               </>
@@ -226,7 +259,9 @@ export default function AppLayout({ userData, onSignOut }: { userData: any, onSi
                 className="text-slate-400 hover:text-slate-600 transition-colors relative"
               >
                 <Bell className="w-5 h-5" />
-                <span className="absolute top-0 right-0 w-2 h-2 bg-red-500 border border-white rounded-full"></span>
+                {unreadNotifs > 0 && (
+                  <span className="absolute top-0 right-0 w-2 h-2 bg-red-500 border border-white rounded-full"></span>
+                )}
               </button>
 
               {mode === 'distributor' ? (
@@ -256,7 +291,7 @@ export default function AppLayout({ userData, onSignOut }: { userData: any, onSi
   );
 }
 
-function NavItem({ to, icon, label, badge, adminMode }: { to: string, icon: React.ReactNode, label: string, badge?: number, adminMode?: boolean }) {
+const NavItem: React.FC<{ to: string, icon: React.ReactNode, label: string, badge?: number, adminMode?: boolean }> = ({ to, icon, label, badge, adminMode }) => {
   return (
     <NavLink
       to={to}
