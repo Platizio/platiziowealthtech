@@ -21,6 +21,9 @@ import SipDashboard from './views/SipDashboard';
 import ActionCenter from './views/ActionCenter';
 import InvestorOnboarding from './views/InvestorOnboarding';
 import InvestorTransaction from './views/InvestorTransaction';
+import Portfolio from './views/Portfolio';
+import Reports from './views/Reports';
+import Communications from './views/Communications';
 
 // Admin views
 import AdminOverview from './views/AdminOverview';
@@ -109,9 +112,12 @@ export default function App() {
           <Route path="/distributor/earnings" element={<Earnings />} />
           <Route path="/distributor/notifications" element={<Notifications userData={userData} />} />
           <Route path="/distributor/profile" element={<Profile userData={userData} />} />
-          <Route path="/distributor/aum-breakdown" element={<AumBreakdown onBack={() => navigate('/distributor/dashboard')} userData={userData} />} />
-          <Route path="/distributor/sip-dashboard" element={<SipDashboard onBack={() => navigate('/distributor/dashboard')} />} />
-          <Route path="/distributor/action-center" element={<ActionCenter onBack={() => navigate('/distributor/dashboard')} />} />
+          <Route path="/distributor/aum-breakdown"   element={<AumBreakdown onBack={() => navigate('/distributor/dashboard')} userData={userData} />} />
+          <Route path="/distributor/sip-dashboard"   element={<SipDashboard onBack={() => navigate('/distributor/dashboard')} />} />
+          <Route path="/distributor/action-center"   element={<ActionCenter onBack={() => navigate('/distributor/dashboard')} />} />
+          <Route path="/distributor/portfolio"       element={<Portfolio userData={userData} />} />
+          <Route path="/distributor/reports"         element={<Reports userData={userData} />} />
+          <Route path="/distributor/communications"  element={<Communications userData={userData} />} />
           
           {/* Pass state dynamically or let the components grab it from location state */}
           <Route path="/distributor/investor-onboarding" element={<InvestorOnboardingWrapper />} />

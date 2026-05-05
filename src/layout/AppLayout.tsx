@@ -2,22 +2,27 @@ import React, { useState, useEffect } from 'react';
 import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard, Users, BookOpen, Search, Bell,
-  ArrowLeftRight, UserCircle2, TrendingUp, BellRing, Target,
-  BarChart3, Network, Layers, UserCheck, ShieldCheck, X, AlertTriangle
+  ArrowLeftRight, UserCircle2, TrendingUp, Target,
+  BarChart3, Network, Layers, UserCheck, ShieldCheck, X, AlertTriangle,
+  PieChart, RefreshCw, FileBarChart2, MessageSquare, ClipboardList
 } from 'lucide-react';
 
-const DIST_NAV_MAIN = [
-  { id: '/distributor/dashboard', icon: <LayoutDashboard className="w-4 h-4" />, label: 'Dashboard' },
-  { id: '/distributor/investors', icon: <Users className="w-4 h-4" />, label: 'Investors' },
-  { id: '/distributor/ledger', icon: <BookOpen className="w-4 h-4" />, label: 'Product Catalog' },
-  { id: '/distributor/transactions', icon: <ArrowLeftRight className="w-4 h-4" />, label: 'Transactions' },
+const DIST_NAV_PRIMARY = [
+  { id: '/distributor/dashboard',      icon: <LayoutDashboard className="w-4 h-4" />, label: 'Dashboard' },
+  { id: '/distributor/leads',          icon: <Target className="w-4 h-4" />,          label: 'Leads' },
+  { id: '/distributor/investors',      icon: <Users className="w-4 h-4" />,           label: 'Investors' },
+  { id: '/distributor/ledger',         icon: <BookOpen className="w-4 h-4" />,        label: 'Products' },
+  { id: '/distributor/transactions',   icon: <ArrowLeftRight className="w-4 h-4" />,  label: 'Transactions' },
+  { id: '/distributor/portfolio',      icon: <PieChart className="w-4 h-4" />,      label: 'Portfolio' },
+  { id: '/distributor/sip-dashboard',  icon: <RefreshCw className="w-4 h-4" />,      label: 'SIP / Mandates' },
+  { id: '/distributor/reports',        icon: <FileBarChart2 className="w-4 h-4" />,  label: 'Reports' },
+  { id: '/distributor/action-center',  icon: <ClipboardList className="w-4 h-4" />,  label: 'Action Centre' },
+  { id: '/distributor/communications', icon: <MessageSquare className="w-4 h-4" />,  label: 'Communications' },
 ];
 
-const DIST_NAV_SEC = [
-  { id: '/distributor/leads', icon: <Target className="w-4 h-4" />, label: 'Lead Pipeline' },
-  { id: '/distributor/earnings', icon: <TrendingUp className="w-4 h-4" />, label: 'Earnings' },
-  { id: '/distributor/notifications', icon: <BellRing className="w-4 h-4" />, label: 'Notifications', badge: 3 },
-  { id: '/distributor/profile', icon: <UserCircle2 className="w-4 h-4" />, label: 'Profile & Compliance' },
+const DIST_NAV_ACCOUNT = [
+  { id: '/distributor/profile',  icon: <UserCircle2 className="w-4 h-4" />, label: 'Profile & Compliance' },
+  { id: '/distributor/earnings', icon: <TrendingUp className="w-4 h-4" />,  label: 'Earnings' },
 ];
 
 const ADMIN_NAV = [
@@ -147,19 +152,17 @@ export default function AppLayout({ userData, onSignOut }: { userData: any, onSi
 
             {mode === 'distributor' && (
               <>
-                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-2 px-1">Main</p>
-                <nav className="space-y-1 mb-6">
-                  {DIST_NAV_MAIN.map(item => (
-                    <NavItem key={item.id} to={item.id} icon={item.icon} label={item.label} />
+                <nav className="space-y-0.5">
+                  {DIST_NAV_PRIMARY.map(item => (
+                    <NavItem key={item.id} to={item.id} icon={item.icon} label={item.label} comingSoon={(item as any).comingSoon} />
                   ))}
                 </nav>
 
-                <div className="border-t border-slate-100 my-4" />
+                <div className="border-t border-slate-100 my-3" />
 
-                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-2 px-1">Management</p>
-                <nav className="space-y-1">
-                  {DIST_NAV_SEC.map(item => (
-                    <NavItem key={item.id} to={item.id} icon={item.icon} label={item.label} badge={item.id === '/distributor/notifications' ? unreadNotifs : item.badge} />
+                <nav className="space-y-0.5">
+                  {DIST_NAV_ACCOUNT.map(item => (
+                    <NavItem key={item.id} to={item.id} icon={item.icon} label={item.label} />
                   ))}
                 </nav>
               </>
@@ -291,7 +294,26 @@ export default function AppLayout({ userData, onSignOut }: { userData: any, onSi
   );
 }
 
-const NavItem: React.FC<{ to: string, icon: React.ReactNode, label: string, badge?: number, adminMode?: boolean }> = ({ to, icon, label, badge, adminMode }) => {
+const NavItem: React.FC<{
+  to: string;
+  icon: React.ReactNode;
+  label: string;
+  badge?: number;
+  adminMode?: boolean;
+  comingSoon?: boolean;
+}> = ({ to, icon, label, badge, adminMode, comingSoon }) => {
+  if (comingSoon) {
+    return (
+      <div className="w-full flex items-center gap-3 px-4 py-2.5 text-sm font-medium rounded-lg text-slate-300 cursor-not-allowed select-none">
+        <span className="text-slate-300">{icon}</span>
+        <span className="flex-1">{label}</span>
+        <span className="ml-auto text-[9px] font-bold bg-slate-100 text-slate-400 px-1.5 py-0.5 rounded-md uppercase tracking-wide">
+          Soon
+        </span>
+      </div>
+    );
+  }
+
   return (
     <NavLink
       to={to}
