@@ -229,7 +229,8 @@ interface FormData {
   firstName: string; lastName: string; mobile: string;
   email: string; pan: string; dob: string; referredBy: string;
   password: string; confirmPassword: string;
-  arn: string; hasExtraNism: boolean; extraNismCerts: string[]; euin: string;
+  arn: string; arnExpiryDate: string; nismCertificateNumber: string; nismExpiryDate: string;
+  hasExtraNism: boolean; extraNismCerts: string[]; euin: string;
   currentAddress: AddressData;
   permanentSameAsCurrent: boolean; permanentAddress: AddressData;
   includeOffice: boolean; officeAddress: AddressData;
@@ -243,7 +244,8 @@ interface FormData {
 const initData: FormData = {
   firstName: '', lastName: '', mobile: '', email: '', pan: '', dob: '', referredBy: '',
   password: '', confirmPassword: '',
-  arn: '', hasExtraNism: false, extraNismCerts: [], euin: '',
+  arn: '', arnExpiryDate: '', nismCertificateNumber: '', nismExpiryDate: '',
+  hasExtraNism: false, extraNismCerts: [], euin: '',
   currentAddress: emptyAddr(),
   permanentSameAsCurrent: false, permanentAddress: emptyAddr(),
   includeOffice: false, officeAddress: emptyAddr(),
@@ -270,8 +272,10 @@ export default function Onboarding({ onComplete, onBack }: { onComplete: () => v
   const [bankQuery,   setBankQuery]   = useState('');
   const [showBankDD,  setShowBankDD]  = useState(false);
   const [pinFilled,   setPinFilled]   = useState<Set<string>>(new Set());
-  const [showPwd,     setShowPwd]     = useState(false);
-  const [showConfPwd, setShowConfPwd] = useState(false);
+  const [showPwd,      setShowPwd]      = useState(false);
+  const [showConfPwd,  setShowConfPwd]  = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitError,  setSubmitError]  = useState<string | null>(null);
 
   // ── Updaters ───────────────────────────────────────────────────────────────
   const set = <K extends keyof FormData>(k: K, v: FormData[K]) => {
@@ -349,6 +353,16 @@ export default function Onboarding({ onComplete, onBack }: { onComplete: () => v
     if (s === 2) {
       if (!/^ARN-\d+$/i.test(data.arn.trim()))
         e.arn = 'Enter a valid ARN (e.g. ARN-102943)';
+      if (!data.arnExpiryDate)
+        e.arnExpiryDate = 'Required';
+      else if (data.arnExpiryDate <= new Date().toISOString().split('T')[0])
+        e.arnExpiryDate = 'ARN expiry date must be in the future';
+      if (!data.nismCertificateNumber.trim())
+        e.nismCertificateNumber = 'Required';
+      if (!data.nismExpiryDate)
+        e.nismExpiryDate = 'Required';
+      else if (data.nismExpiryDate <= new Date().toISOString().split('T')[0])
+        e.nismExpiryDate = 'NISM expiry date must be in the future';
     }
     if (s === 3) {
       const a = data.currentAddress;
@@ -385,29 +399,39 @@ export default function Onboarding({ onComplete, onBack }: { onComplete: () => v
   };
   const goBack = () => { setErrors({}); setStep(s => s - 1); };
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
+    setIsSubmitting(true);
+    setSubmitError(null);
     try {
-      const users: any[] = JSON.parse(localStorage.getItem('apex_users') || '[]');
-      const newUser = {
-        firstName:         data.firstName.trim(),
-        lastName:          data.lastName.trim(),
-        mobile:            data.mobile.trim(),
-        email:             data.email.trim().toLowerCase(),
-        pan:               data.pan.trim().toUpperCase() || undefined,
-        password:          data.password,
-        arn:               data.arn.trim(),
-        euin:              data.euin.trim() || undefined,
-        accountHolderName: data.accountHolderName.trim() || undefined,
-        accountNumber:     data.accountNumber || undefined,
-        ifscCode:          data.ifscCode.toUpperCase() || undefined,
-        accountType:       data.accountType || undefined,
-        status:            'pending',
-        role:              'MASTER_DISTRIBUTOR',
+      const payload = {
+        fullName:              `${data.firstName.trim()} ${data.lastName.trim()}`,
+        mobileNumber:          data.mobile.trim(),
+        email:                 data.email.trim().toLowerCase(),
+        arnNumber:             data.arn.trim(),
+        arnExpiryDate:         data.arnExpiryDate,
+        nismCertificateNumber: data.nismCertificateNumber.trim(),
+        nismExpiryDate:        data.nismExpiryDate,
+        password:              data.password,
+        eUinNumber:            data.euin.trim()              || undefined,
+        bankAccountNumber:     data.accountNumber            || undefined,
+        bankIfsc:              data.ifscCode.toUpperCase()   || undefined,
+        bankAccountHolderName: data.accountHolderName.trim() || undefined,
       };
-      users.push(newUser);
-      localStorage.setItem('apex_users', JSON.stringify(users));
-    } catch { /* localStorage unavailable */ }
-    onComplete();
+      const res = await fetch('http://localhost:8081/api/v1/distributors/signup', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify(payload),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => null);
+        throw new Error(err?.message || `Server error: ${res.status}`);
+      }
+      onComplete();
+    } catch (err: any) {
+      setSubmitError(err.message || 'Something went wrong. Please try again.');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   // ── Address fields renderer ────────────────────────────────────────────────
@@ -706,11 +730,20 @@ export default function Onboarding({ onComplete, onBack }: { onComplete: () => v
                         : <p className="text-[11px] text-slate-400 mt-1">Format: ARN- followed by digits</p>}
                     </div>
                     <div>
-                      <label className={CLS_LABEL}>EUIN Number <span className="normal-case font-normal text-slate-400">(Optional)</span></label>
-                      <input type="text" value={data.euin} placeholder="e.g. E123456"
-                        onChange={e => set('euin', e.target.value)} className={CLS_INPUT} />
-                      <p className="text-[11px] text-slate-400 mt-1">Employee Unique Identification Number</p>
+                      <label className={CLS_LABEL}>ARN Expiry Date <span className="text-red-400">*</span></label>
+                      <input type="date" value={data.arnExpiryDate}
+                        min={new Date().toISOString().split('T')[0]}
+                        onChange={e => set('arnExpiryDate', e.target.value)}
+                        className={CLS_INPUT + (errors.arnExpiryDate ? ' border-red-300 ring-1 ring-red-200' : '')} />
+                      {errors.arnExpiryDate && <p className={CLS_ERR}><AlertCircle className="w-3 h-3" />{errors.arnExpiryDate}</p>}
                     </div>
+                  </div>
+
+                  <div>
+                    <label className={CLS_LABEL}>EUIN Number <span className="normal-case font-normal text-slate-400">(Optional)</span></label>
+                    <input type="text" value={data.euin} placeholder="e.g. E123456"
+                      onChange={e => set('euin', e.target.value)} className={CLS_INPUT} />
+                    <p className="text-[11px] text-slate-400 mt-1">Employee Unique Identification Number</p>
                   </div>
 
                   {/* NISM section */}
@@ -725,6 +758,25 @@ export default function Onboarding({ onComplete, onBack }: { onComplete: () => v
                       <div>
                         <p className="text-sm font-semibold text-blue-800">NISM-Series-V-A: Mutual Fund Distributors (MFD)</p>
                         <p className="text-xs text-blue-500 mt-0.5">Mandatory — required for ARN registration</p>
+                      </div>
+                    </div>
+
+                    {/* NISM certificate number and expiry */}
+                    <div className="grid grid-cols-2 gap-4 mb-3">
+                      <div>
+                        <label className={CLS_LABEL}>NISM Certificate Number <span className="text-red-400">*</span></label>
+                        <input type="text" value={data.nismCertificateNumber} placeholder="e.g. NISM-2024-123456"
+                          onChange={e => set('nismCertificateNumber', e.target.value)}
+                          className={CLS_INPUT + (errors.nismCertificateNumber ? ' border-red-300 ring-1 ring-red-200' : '')} />
+                        {errors.nismCertificateNumber && <p className={CLS_ERR}><AlertCircle className="w-3 h-3" />{errors.nismCertificateNumber}</p>}
+                      </div>
+                      <div>
+                        <label className={CLS_LABEL}>NISM Expiry Date <span className="text-red-400">*</span></label>
+                        <input type="date" value={data.nismExpiryDate}
+                          min={new Date().toISOString().split('T')[0]}
+                          onChange={e => set('nismExpiryDate', e.target.value)}
+                          className={CLS_INPUT + (errors.nismExpiryDate ? ' border-red-300 ring-1 ring-red-200' : '')} />
+                        {errors.nismExpiryDate && <p className={CLS_ERR}><AlertCircle className="w-3 h-3" />{errors.nismExpiryDate}</p>}
                       </div>
                     </div>
 
@@ -1040,12 +1092,17 @@ export default function Onboarding({ onComplete, onBack }: { onComplete: () => v
                 <ChevronLeft className="w-4 h-4" /> Back
               </button>
             )}
-            <button onClick={goNext}
-              className="flex-1 py-3 bg-[#0B1B3E] text-white font-semibold text-sm rounded-xl hover:bg-[#1A3066] transition-colors flex items-center justify-center gap-2 shadow-sm">
-              {step === 5 ? 'Submit Application' : 'Save & Continue'}
+            <button onClick={goNext} disabled={isSubmitting}
+              className="flex-1 py-3 bg-[#0B1B3E] text-white font-semibold text-sm rounded-xl hover:bg-[#1A3066] transition-colors flex items-center justify-center gap-2 shadow-sm disabled:opacity-60 disabled:cursor-not-allowed">
+              {step === 5 ? (isSubmitting ? 'Submitting…' : 'Submit Application') : 'Save & Continue'}
               {step < 5 && <ChevronRight className="w-4 h-4" />}
             </button>
           </div>
+          {submitError && (
+            <p className={CLS_ERR + ' justify-center mt-2'}>
+              <AlertCircle className="w-3 h-3" />{submitError}
+            </p>
+          )}
           <p className="text-center text-xs text-slate-400 mt-4">
             Fields marked <span className="text-red-400 font-bold">*</span> are mandatory
           </p>
