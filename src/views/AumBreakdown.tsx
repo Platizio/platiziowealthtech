@@ -66,21 +66,27 @@ export default function AumBreakdown({ onBack, userData }: AumBreakdownProps) {
           const amt = o.amount || 0;
           const invId = o.investorId;
           const s = schemeMap.get(o.productSchemeId);
-          const cat = s?.category || 'OTHER';
+          console.log('AumBreakdown Order:', o);
+          console.log('AumBreakdown Scheme:', s);
+
+          const rawCat = (o.productCategory || o.category || o.product_category || s?.productCategory || s?.category || s?.product_category || s?.assetClass || 'OTHER').toString().toUpperCase();
+          console.log('AumBreakdown Raw Cat:', rawCat);
+          
+          let cat = 'SIF'; // Default to SIF instead of OTHER
+          if (rawCat.includes('MF') || rawCat.includes('MUTUAL')) cat = 'MF';
+          console.log('AumBreakdown Bucket:', cat);
 
           if (!invAum[invId]) invAum[invId] = { mf: 0, sif: 0, others: 0 };
 
-          if (cat === 'MF' || cat === 'MUTUAL_FUND') { invAum[invId].mf += amt; mfAum += amt; }
-          else if (cat === 'SIF') { invAum[invId].sif += amt; sifAum += amt; }
-          else { invAum[invId].others += amt; othersAum += amt; }
+          if (cat === 'MF') { invAum[invId].mf += amt; mfAum += amt; }
+          else { invAum[invId].sif += amt; sifAum += amt; } // Everything else goes to SIF
           totalAum += amt;
 
           // Monthly bucketing
           const month = new Date(o.createdAt || Date.now()).getMonth(); // 0-indexed
           const amtCr = amt / 10000000; // in Crores for chart
-          if (cat === 'MF' || cat === 'MUTUAL_FUND') monthlyMf[month] = (monthlyMf[month] || 0) + amtCr;
-          else if (cat === 'SIF') monthlySif[month] = (monthlySif[month] || 0) + amtCr;
-          else monthlyOthers[month] = (monthlyOthers[month] || 0) + amtCr;
+          if (cat === 'MF') monthlyMf[month] = (monthlyMf[month] || 0) + amtCr;
+          else monthlySif[month] = (monthlySif[month] || 0) + amtCr;
         });
 
         setSummary({ totalAum, mfAum, sifAum, othersAum });
@@ -94,7 +100,6 @@ export default function AumBreakdown({ onBack, userData }: AumBreakdownProps) {
             month: MONTH_LABELS[m],
             MF: parseFloat((monthlyMf[m] || 0).toFixed(2)),
             SIF: parseFloat((monthlySif[m] || 0).toFixed(2)),
-            Others: parseFloat((monthlyOthers[m] || 0).toFixed(2)),
           });
         }
         setAumTrend(trend);
@@ -160,7 +165,7 @@ export default function AumBreakdown({ onBack, userData }: AumBreakdownProps) {
             {[
               { label: 'Total AUM', value: fmtInr(summary.totalAum), up: true, accent: 'border-blue-200   bg-blue-50   text-blue-700' },
               { label: 'Mutual Funds', value: fmtInr(summary.mfAum), up: true, accent: 'border-green-200  bg-green-50  text-green-700' },
-              { label: 'SIF & Others', value: fmtInr(summary.sifAum + summary.othersAum), up: true, accent: 'border-violet-200 bg-violet-50 text-violet-700' },
+              { label: 'Specialised Funds (SIF)', value: fmtInr(summary.sifAum), up: true, accent: 'border-violet-200 bg-violet-50 text-violet-700' },
             ].map(card => (
               <div key={card.label} className={`rounded-2xl border p-5 ${card.accent}`}>
                 <p className="text-[10px] font-bold uppercase tracking-wider opacity-60 mb-2">{card.label}</p>
@@ -189,8 +194,7 @@ export default function AumBreakdown({ onBack, userData }: AumBreakdownProps) {
                   <Tooltip formatter={(v: number) => `₹${v} Cr`} />
                   <Legend />
                   <Bar dataKey="MF" name="Mutual Funds" fill="#3b82f6" radius={[4, 4, 0, 0]} />
-                  <Bar dataKey="SIF" name="SIF" fill="#8b5cf6" radius={[4, 4, 0, 0]} />
-                  <Bar dataKey="Others" name="Others" fill="#10b981" radius={[4, 4, 0, 0]} />
+                  <Bar dataKey="SIF" name="Specialised Investment Fund" fill="#8b5cf6" radius={[4, 4, 0, 0]} />
                 </BarChart>
               </ResponsiveContainer>
             )}

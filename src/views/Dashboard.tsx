@@ -76,9 +76,18 @@ export default function Dashboard({ onNavigate, userData }: DashboardProps) {
           if (o.orderStatus === 'COMPLETED') {
             totalAum += o.amount || 0;
             const s = schemeMap.get(o.productSchemeId);
-            if (s?.productCategory === 'MUTUAL_FUND') mfAum += o.amount || 0;
-            else if (s?.productCategory === 'SIF') sifAum += o.amount || 0;
-            else othersAum += o.amount || 0;
+            console.log('Order:', o);
+            console.log('Matched Scheme:', s);
+            
+            const rawCat = (o.productCategory || o.category || o.product_category || s?.productCategory || s?.category || s?.product_category || s?.assetClass || 'OTHER').toString().toUpperCase();
+            console.log('Determined Raw Category:', rawCat);
+
+            let cat = 'SIF'; // Default to SIF instead of OTHER
+            if (rawCat.includes('MF') || rawCat.includes('MUTUAL')) cat = 'MF';
+            console.log('Final Category Bucket:', cat);
+
+            if (cat === 'MF') mfAum += o.amount || 0;
+            else sifAum += o.amount || 0; // Everything else goes to SIF
           }
 
           if (o.transactionType === 'SIP') {
@@ -147,8 +156,7 @@ export default function Dashboard({ onNavigate, userData }: DashboardProps) {
           todayOrders,
           aumSub: [
             { label: 'Mutual Funds', value: `₹${(mfAum / 100000).toFixed(2)} L`, change: '', up: true },
-            { label: 'SIF', value: `₹${(sifAum / 100000).toFixed(2)} L`, change: '', up: true },
-            { label: 'Others', value: `₹${(othersAum / 100000).toFixed(2)} L`, change: '', up: true },
+            { label: 'Specialised Funds', value: `₹${(sifAum / 100000).toFixed(2)} L`, change: '', up: true },
           ],
           pendingSub: [
             { label: 'KYC Pending', value: kycPending },
