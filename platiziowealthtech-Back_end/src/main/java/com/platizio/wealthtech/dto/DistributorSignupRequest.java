@@ -15,6 +15,7 @@ public record DistributorSignupRequest(
         @NotNull LocalDate arnExpiryDate,
         @NotBlank String nismCertificateNumber,
         @NotNull LocalDate nismExpiryDate,
+        @NotBlank String password,
         String eUinNumber,
         String bankAccountNumber,
         String bankIfsc,

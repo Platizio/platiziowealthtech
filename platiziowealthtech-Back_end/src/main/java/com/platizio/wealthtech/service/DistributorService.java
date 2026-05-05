@@ -87,6 +87,7 @@ public class DistributorService {
         distributor.setRole(role);
         distributor.setMasterDistributorId(request.masterDistributorId());
         distributor.setInternalRm(Boolean.TRUE.equals(request.internalRm()));
+        distributor.setPasswordHash(passwordEncoder.encode(request.password()));
         distributor.setStatus(DistributorStatus.PENDING_APPROVAL);
         distributor.setProfileCompletionPercent(85);
 
