@@ -33,6 +33,10 @@ import InvestorMgmt from './views/InvestorMgmt';
 
 import AppLayout from './layout/AppLayout';
 
+const ADMIN_ROLES = new Set(['ADMIN', 'MASTER_DISTRIBUTOR']);
+
+const normalizeRole = (role?: string) => role?.trim().toUpperCase() || '';
+
 export default function App() {
   const [userSession, setUserSession] = useState<any>(null);
   const [loadingSession, setLoadingSession] = useState(true);
@@ -65,6 +69,7 @@ export default function App() {
   };
 
   const userData = getUserData();
+  const canAccessAdmin = ADMIN_ROLES.has(normalizeRole(userData?.role));
 
   const handleLoginSuccess = (user?: any) => {
     console.log("App.tsx -> handleLoginSuccess called. Received user:", user);
@@ -124,10 +129,16 @@ export default function App() {
           <Route path="/distributor/investor-transaction" element={<InvestorTransactionWrapper />} />
 
           {/* Admin Routes */}
-          <Route path="/admin/overview" element={<AdminOverview />} />
-          <Route path="/admin/distributor-mgmt" element={<DistributorMgmt userData={userData} />} />
-          <Route path="/admin/product-mgmt" element={<ProductMgmtWrapper />} />
-          <Route path="/admin/investor-mgmt" element={<InvestorMgmt />} />
+          {canAccessAdmin ? (
+            <>
+              <Route path="/admin/overview" element={<AdminOverview />} />
+              <Route path="/admin/distributor-mgmt" element={<DistributorMgmt userData={userData} />} />
+              <Route path="/admin/product-mgmt" element={<ProductMgmtWrapper />} />
+              <Route path="/admin/investor-mgmt" element={<InvestorMgmt />} />
+            </>
+          ) : (
+            <Route path="/admin/*" element={<Navigate to="/distributor/dashboard" replace />} />
+          )}
 
         </Route>
       )}

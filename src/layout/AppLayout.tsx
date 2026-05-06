@@ -32,6 +32,9 @@ const ADMIN_NAV = [
   { id: '/admin/investor-mgmt', icon: <UserCheck className="w-4 h-4" />, label: 'Investor Management' },
 ];
 
+const ADMIN_ROLES = new Set(['ADMIN', 'MASTER_DISTRIBUTOR']);
+const normalizeRole = (role?: string) => role?.trim().toUpperCase() || '';
+
 export default function AppLayout({ userData, onSignOut }: { userData: any, onSignOut: () => void }) {
   const navigate = useNavigate();
   const location = useLocation();
@@ -61,7 +64,8 @@ export default function AppLayout({ userData, onSignOut }: { userData: any, onSi
 
   const displayName = userData?.fullName || userData?.full_name || userData?.firstName || 'uknown';
   const displayArn = userData?.arnNumber || userData?.arn_number || userData?.arn || 'uknown';
-  const displayRole = userData?.role || 'SUB_DISTRIBUTOR';
+  const displayRole = normalizeRole(userData?.role) || 'SUB_DISTRIBUTOR';
+  const canAccessAdmin = ADMIN_ROLES.has(displayRole);
   const nismExpiryDate = userData?.nismExpiryDate || userData?.nism_expiry_date || null;
   const arnExpiryDate  = userData?.arnExpiryDate  || userData?.arn_expiry_date  || null;
   
@@ -244,7 +248,7 @@ export default function AppLayout({ userData, onSignOut }: { userData: any, onSi
                 >
                   Distributor
                 </button>
-                {(displayRole === 'ADMIN' || displayRole === 'MASTER_DISTRIBUTOR') && (
+                {canAccessAdmin && (
                   <button
                     onClick={() => switchMode('admin')}
                     className={`px-3.5 py-1.5 text-xs font-semibold rounded-lg transition-all ${mode === 'admin'
