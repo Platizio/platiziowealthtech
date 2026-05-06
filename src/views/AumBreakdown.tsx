@@ -21,16 +21,101 @@ function fmtInr(amount: number): string {
 
 const MONTH_LABELS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
+type RangeKey = '1M' | '3M' | '6M' | '1Y' | 'ALL';
+
+const RANGES: { key: RangeKey; label: string }[] = [
+  { key: '1M',  label: '1M'  },
+  { key: '3M',  label: '3M'  },
+  { key: '6M',  label: '6M'  },
+  { key: '1Y',  label: '1Y'  },
+  { key: 'ALL', label: 'All' },
+];
+
+const RANGE_LABELS: Record<RangeKey, string> = {
+  '1M':  'Last 1 Month',
+  '3M':  'Last 3 Months',
+  '6M':  'Last 6 Months',
+  '1Y':  'Last 1 Year',
+  'ALL': 'All Time',
+};
+
+function buildTrend(orders: any[], schemeMap: Map<string, any>, range: RangeKey): any[] {
+  const now      = new Date();
+  const nowYear  = now.getFullYear();
+  const nowMonth = now.getMonth();
+  const useAll   = range === 'ALL';
+
+  const monthsBack = range === '1M' ? 1 : range === '3M' ? 3 : range === '6M' ? 6 : 12;
+  const cutoff     = useAll ? null : new Date(nowYear, nowMonth - monthsBack, 1);
+  const cutoffYear = cutoff?.getFullYear() ?? 0;
+  const cutoffMonth = cutoff?.getMonth() ?? 0;
+
+  const monthlyMf:  Record<string, number> = {};
+  const monthlySif: Record<string, number> = {};
+  let earliestKey: string | null = null;
+
+  for (const o of orders) {
+    if (o.orderStatus !== 'COMPLETED') continue;
+    const d  = new Date(o.createdAt || Date.now());
+    const yr = d.getFullYear();
+    const mo = d.getMonth();
+    if (!useAll && (yr < cutoffYear || (yr === cutoffYear && mo < cutoffMonth))) continue;
+
+    const key = `${yr}-${String(mo).padStart(2, '0')}`;
+    if (!earliestKey || key < earliestKey) earliestKey = key;
+
+    const amt = (o.amount || 0) / 10000000;
+    const s   = schemeMap.get(o.productSchemeId);
+    const rawCat = (
+      o.productCategory || o.category ||
+      s?.productCategory || s?.category || s?.assetClass || ''
+    ).toString().toUpperCase();
+    const cat = rawCat.includes('MF') || rawCat.includes('MUTUAL') ? 'MF' : 'SIF';
+
+    if (cat === 'MF') monthlyMf[key]  = (monthlyMf[key]  || 0) + amt;
+    else              monthlySif[key] = (monthlySif[key] || 0) + amt;
+  }
+
+  let startYear: number, startMonth: number;
+  if (useAll && earliestKey) {
+    [startYear, startMonth] = earliestKey.split('-').map(Number);
+  } else if (useAll) {
+    startYear = nowYear; startMonth = nowMonth;
+  } else {
+    startYear = cutoffYear; startMonth = cutoffMonth;
+  }
+
+  const showYear = range === '1Y' || range === 'ALL';
+  const trend: any[] = [];
+  let yr = startYear, mo = startMonth;
+
+  while (yr < nowYear || (yr === nowYear && mo <= nowMonth)) {
+    const key = `${yr}-${String(mo).padStart(2, '0')}`;
+    trend.push({
+      month: showYear
+        ? `${MONTH_LABELS[mo]} '${String(yr).slice(2)}`
+        : MONTH_LABELS[mo],
+      MF:  parseFloat((monthlyMf[key]  || 0).toFixed(2)),
+      SIF: parseFloat((monthlySif[key] || 0).toFixed(2)),
+    });
+    if (++mo > 11) { mo = 0; yr++; }
+  }
+  return trend;
+}
+
 interface AumBreakdownProps {
   onBack: () => void;
   userData?: any;
 }
 
 export default function AumBreakdown({ onBack, userData }: AumBreakdownProps) {
-  const [loading, setLoading] = useState(true);
+  const [loading,      setLoading]      = useState(true);
   const [investorRows, setInvestorRows] = useState<any[]>([]);
-  const [aumTrend, setAumTrend] = useState<any[]>([]);
-  const [summary, setSummary] = useState({ totalAum: 0, mfAum: 0, sifAum: 0, othersAum: 0 });
+  const [aumTrend,     setAumTrend]     = useState<any[]>([]);
+  const [summary,      setSummary]      = useState({ totalAum: 0, mfAum: 0, sifAum: 0, othersAum: 0 });
+  const [range,        setRange]        = useState<RangeKey>('6M');
+  const [rawOrders,    setRawOrders]    = useState<any[]>([]);
+  const [rawSchemes,   setRawSchemes]   = useState<Map<string, any>>(new Map());
 
   useEffect(() => {
     if (!userData?.id) return;
@@ -55,54 +140,24 @@ export default function AumBreakdown({ onBack, userData }: AumBreakdownProps) {
         const invAum: Record<string, { mf: number; sif: number; others: number }> = {};
         let totalAum = 0, mfAum = 0, sifAum = 0, othersAum = 0;
 
-        // ── Monthly trend accumulator ────────────────────────────────────
-        const monthlyMf: Record<number, number> = {};
-        const monthlySif: Record<number, number> = {};
-        const monthlyOthers: Record<number, number> = {};
-
         orders.forEach((o: any) => {
-          console.log(o);
           if (o.orderStatus !== 'COMPLETED') return;
-          const amt = o.amount || 0;
+          const amt   = o.amount || 0;
           const invId = o.investorId;
-          const s = schemeMap.get(o.productSchemeId);
-          console.log('AumBreakdown Order:', o);
-          console.log('AumBreakdown Scheme:', s);
+          const s     = schemeMap.get(o.productSchemeId);
 
           const rawCat = (o.productCategory || o.category || o.product_category || s?.productCategory || s?.category || s?.product_category || s?.assetClass || 'OTHER').toString().toUpperCase();
-          console.log('AumBreakdown Raw Cat:', rawCat);
-          
-          let cat = 'SIF'; // Default to SIF instead of OTHER
-          if (rawCat.includes('MF') || rawCat.includes('MUTUAL')) cat = 'MF';
-          console.log('AumBreakdown Bucket:', cat);
+          const cat    = rawCat.includes('MF') || rawCat.includes('MUTUAL') ? 'MF' : 'SIF';
 
           if (!invAum[invId]) invAum[invId] = { mf: 0, sif: 0, others: 0 };
-
           if (cat === 'MF') { invAum[invId].mf += amt; mfAum += amt; }
-          else { invAum[invId].sif += amt; sifAum += amt; } // Everything else goes to SIF
+          else              { invAum[invId].sif += amt; sifAum += amt; }
           totalAum += amt;
-
-          // Monthly bucketing
-          const month = new Date(o.createdAt || Date.now()).getMonth(); // 0-indexed
-          const amtCr = amt / 10000000; // in Crores for chart
-          if (cat === 'MF') monthlyMf[month] = (monthlyMf[month] || 0) + amtCr;
-          else monthlySif[month] = (monthlySif[month] || 0) + amtCr;
         });
 
         setSummary({ totalAum, mfAum, sifAum, othersAum });
-
-        // ── Build monthly trend (last 6 months) ──────────────────────────
-        const now = new Date();
-        const trend: any[] = [];
-        for (let i = 5; i >= 0; i--) {
-          const m = (now.getMonth() - i + 12) % 12;
-          trend.push({
-            month: MONTH_LABELS[m],
-            MF: parseFloat((monthlyMf[m] || 0).toFixed(2)),
-            SIF: parseFloat((monthlySif[m] || 0).toFixed(2)),
-          });
-        }
-        setAumTrend(trend);
+        setRawOrders(orders);
+        setRawSchemes(schemeMap);
 
         // ── Build investor table rows ────────────────────────────────────
         const rows = Object.entries(invAum).map(([invId, aum]) => {
@@ -129,6 +184,11 @@ export default function AumBreakdown({ onBack, userData }: AumBreakdownProps) {
 
     fetchData();
   }, [userData?.id]);
+
+  // ── Rebuild chart whenever range or raw orders change ─────────────────
+  useEffect(() => {
+    setAumTrend(buildTrend(rawOrders, rawSchemes, range));
+  }, [range, rawOrders, rawSchemes]);
 
   return (
     <motion.div
@@ -180,7 +240,26 @@ export default function AumBreakdown({ onBack, userData }: AumBreakdownProps) {
 
           {/* ── AUM Growth chart ─────────────────────────────────────────── */}
           <div className="bg-white rounded-2xl border border-slate-200 p-6">
-            <h2 className="font-semibold text-slate-800 mb-5">AUM Growth — Last 6 Months (₹ Cr)</h2>
+            <div className="flex items-center justify-between mb-5">
+              <h2 className="font-semibold text-slate-800">
+                AUM Growth — {RANGE_LABELS[range]} <span className="text-slate-400 font-normal">(₹ Cr)</span>
+              </h2>
+              <div className="flex items-center bg-slate-100 rounded-lg p-1 gap-0.5">
+                {RANGES.map(r => (
+                  <button
+                    key={r.key}
+                    onClick={() => setRange(r.key)}
+                    className={`px-3 py-1 text-xs font-semibold rounded-md transition-all ${
+                      range === r.key
+                        ? 'bg-white text-slate-900 shadow-sm'
+                        : 'text-slate-500 hover:text-slate-700'
+                    }`}
+                  >
+                    {r.label}
+                  </button>
+                ))}
+              </div>
+            </div>
             {aumTrend.every(t => t.MF === 0 && t.SIF === 0 && t.Others === 0) ? (
               <div className="h-48 flex items-center justify-center text-slate-400 text-sm">
                 No completed orders available to plot.
