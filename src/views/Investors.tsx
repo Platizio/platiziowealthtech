@@ -36,11 +36,6 @@ const riskConfig: Record<string, string> = {
   AGGRESSIVE:  'bg-red-50 text-red-600',
 };
 
-const performanceData = [
-  { month: 'Jan', value: 100 }, { month: 'Feb', value: 105 },
-  { month: 'Mar', value: 102 }, { month: 'Apr', value: 110 },
-  { month: 'May', value: 115 }, { month: 'Jun', value: 125 },
-];
 
 // ─── Component ────────────────────────────────────────────────────────────────
 export default function Investors({
@@ -265,6 +260,40 @@ function InvestorDetail({
   onInvest?: (investor: any) => void;
 }) {
   const [activeTab, setActiveTab] = useState('overview');
+  const [performanceData, setPerformanceData] = useState<any[]>([]);
+
+  useEffect(() => {
+    fetch(`http://localhost:8081/api/v1/orders/by-investor/${investor.id}`)
+      .then(res => res.ok ? res.json() : [])
+      .then(orders => {
+        let total = 0;
+        orders.forEach((o: any) => {
+          if (o.orderStatus === 'COMPLETED' || o.orderStatus === 'SUCCESSFUL') {
+            total += (o.amount || 0);
+          }
+        });
+        
+        const data = [];
+        const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun'];
+        for(let i=0; i<6; i++) {
+           const factor = 1 - (5 - i) * 0.05; // mock growth curve based on actual AUM
+           data.push({ month: months[i], value: Math.round(total * factor) });
+        }
+        setPerformanceData(data.length ? data : [
+          { month: 'Jan', value: 0 }, { month: 'Feb', value: 0 },
+          { month: 'Mar', value: 0 }, { month: 'Apr', value: 0 },
+          { month: 'May', value: 0 }, { month: 'Jun', value: 0 },
+        ]);
+      }).catch(err => {
+         console.error('Failed to fetch orders for performance data', err);
+         setPerformanceData([
+            { month: 'Jan', value: 0 }, { month: 'Feb', value: 0 },
+            { month: 'Mar', value: 0 }, { month: 'Apr', value: 0 },
+            { month: 'May', value: 0 }, { month: 'Jun', value: 0 },
+         ]);
+      });
+  }, [investor.id]);
+
   const kyc = kycConfig[investor.kycStatus] || kycConfig['NOT_STARTED'];
   const stCls = statusConfig[investor.investorStatus] || 'bg-slate-100 text-slate-500';
   const isKycDone = investor.kycStatus === 'COMPLETED';
