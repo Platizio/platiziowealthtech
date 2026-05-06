@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { motion } from 'motion/react';
 import { ArrowLeft, TrendingUp, TrendingDown } from 'lucide-react';
 import {
-  BarChart, Bar, XAxis, YAxis, CartesianGrid,
+  ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer, Legend,
 } from 'recharts';
 
@@ -100,6 +100,13 @@ function buildTrend(orders: any[], schemeMap: Map<string, any>, range: RangeKey)
     });
     if (++mo > 11) { mo = 0; yr++; }
   }
+  // Compute running cumulative total for the line
+  let cumulative = 0;
+  for (const point of trend) {
+    cumulative += point.MF + point.SIF;
+    point.cumulativeTotal = parseFloat(cumulative.toFixed(2));
+  }
+
   return trend;
 }
 
@@ -265,16 +272,28 @@ export default function AumBreakdown({ onBack, userData }: AumBreakdownProps) {
                 No completed orders available to plot.
               </div>
             ) : (
-              <ResponsiveContainer width="100%" height={240}>
-                <BarChart data={aumTrend} barSize={20}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
-                  <XAxis dataKey="month" tick={{ fontSize: 12 }} />
-                  <YAxis tick={{ fontSize: 12 }} tickFormatter={v => `₹${v}`} />
-                  <Tooltip formatter={(v: number) => `₹${v} Cr`} />
-                  <Legend />
-                  <Bar dataKey="MF" name="Mutual Funds" fill="#3b82f6" radius={[4, 4, 0, 0]} />
-                  <Bar dataKey="SIF" name="Specialised Investment Fund" fill="#8b5cf6" radius={[4, 4, 0, 0]} />
-                </BarChart>
+              <ResponsiveContainer width="100%" height={280}>
+                <ComposedChart data={aumTrend} barSize={18} margin={{ top: 10, right: 16, left: 0, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" vertical={false} />
+                  <XAxis dataKey="month" tick={{ fontSize: 12 }} axisLine={false} tickLine={false} />
+                  <YAxis tick={{ fontSize: 12 }} tickFormatter={v => `₹${v}`} axisLine={false} tickLine={false} />
+                  <Tooltip
+                    formatter={(v: number, name: string) => [`₹${v} Cr`, name]}
+                    contentStyle={{ borderRadius: 10, border: '1px solid #e2e8f0', fontSize: 12 }}
+                  />
+                  <Legend wrapperStyle={{ fontSize: 12, paddingTop: 12 }} />
+                  <Bar dataKey="MF"  name="Mutual Funds (Monthly)"         fill="#3b82f6" radius={[4, 4, 0, 0]} fillOpacity={0.85} />
+                  <Bar dataKey="SIF" name="Specialised Fund (Monthly)"     fill="#8b5cf6" radius={[4, 4, 0, 0]} fillOpacity={0.85} />
+                  <Line
+                    type="monotone"
+                    dataKey="cumulativeTotal"
+                    name="Total AUM (Cumulative)"
+                    stroke="#0f172a"
+                    strokeWidth={2.5}
+                    dot={{ r: 3, fill: '#0f172a', strokeWidth: 0 }}
+                    activeDot={{ r: 5, fill: '#0f172a' }}
+                  />
+                </ComposedChart>
               </ResponsiveContainer>
             )}
           </div>
