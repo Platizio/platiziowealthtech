@@ -4,6 +4,7 @@ import {
   ArrowLeft, AlertCircle, ShieldCheck, Landmark,
   ArrowLeftRight, RefreshCw, Package, ChevronRight,
 } from 'lucide-react';
+import { apiUrl } from '../config/api';
 
 type Category = 'All' | 'KYC' | 'Bank' | 'Transaction' | 'SIP' | 'Maturing';
 type Priority  = 'High' | 'Medium' | 'Low';
@@ -47,7 +48,7 @@ export default function ActionCenter({ onBack, userData }: { onBack: () => void;
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
     if (token) headers['Authorization'] = `Bearer ${token}`;
 
-    fetch(`http://localhost:8081/api/v1/dashboard/distributor/${userData.id}/actions`, { headers })
+    fetch(apiUrl(`/dashboard/distributor/${userData.id}/actions`), { headers })
       .then(res => res.json())
       .then(data => {
         setActions(data || []);

@@ -32,6 +32,7 @@ import ProductMgmt from './views/ProductMgmt';
 import InvestorMgmt from './views/InvestorMgmt';
 
 import AppLayout from './layout/AppLayout';
+import { apiUrl } from './config/api';
 
 const ADMIN_ROLES = new Set(['ADMIN', 'MASTER_DISTRIBUTOR']);
 
@@ -47,7 +48,7 @@ export default function App() {
     const match = document.cookie.match(new RegExp('(^| )distributorId=([^;]+)'));
     if (match && match[2]) {
       const id = match[2];
-      fetch(`http://localhost:8081/api/v1/distributors/${id}`)
+      fetch(apiUrl(`/distributors/${id}`))
         .then(res => {
           if (res.ok) return res.json();
           throw new Error('Failed to fetch user');
@@ -111,7 +112,7 @@ export default function App() {
           {/* Distributor Routes */}
           <Route path="/distributor/dashboard" element={<Dashboard userData={userData} onNavigate={(v) => navigate(`/distributor/${v}`)} />} />
           <Route path="/distributor/investors" element={<Investors onInvest={(inv) => navigate('/distributor/investor-transaction', { state: { investor: inv } })} userData={userData} />} />
-          <Route path="/distributor/ledger" element={<Ledger />} />
+          <Route path="/distributor/ledger" element={<Ledger userData={userData} />} />
           <Route path="/distributor/transactions" element={<Transactions userData={userData} />} />
           <Route path="/distributor/leads" element={<Leads userData={userData} onStartOnboarding={(prospect) => navigate('/distributor/investor-onboarding', { state: { prospect } })} />} />
           <Route path="/distributor/earnings" element={<Earnings />} />
@@ -134,7 +135,7 @@ export default function App() {
               <Route path="/admin/overview" element={<AdminOverview />} />
               <Route path="/admin/distributor-mgmt" element={<DistributorMgmt userData={userData} />} />
               <Route path="/admin/product-mgmt" element={<ProductMgmtWrapper />} />
-              <Route path="/admin/investor-mgmt" element={<InvestorMgmt />} />
+              <Route path="/admin/investor-mgmt" element={<InvestorMgmt userData={userData} />} />
             </>
           ) : (
             <Route path="/admin/*" element={<Navigate to="/distributor/dashboard" replace />} />

@@ -8,6 +8,7 @@ import {
 import {
   AreaChart as RechartsArea, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
 } from 'recharts';
+import { apiUrl } from '../config/api';
 
 // ─── KYC status config ─────────────────────────────────────────────────────────
 const kycConfig: Record<string, { label: string; color: string; icon: React.ReactNode }> = {
@@ -36,6 +37,23 @@ const riskConfig: Record<string, string> = {
   AGGRESSIVE:  'bg-red-50 text-red-600',
 };
 
+const matchesInvestorSearch = (inv: any, query: string) => {
+  if (!query) return true;
+  const normalized = query.toLowerCase();
+
+  const searchableFields = normalized.length === 1
+    ? [inv.fullName, inv.pan]
+    : [
+    inv.fullName,
+    inv.pan,
+    inv.email,
+    inv.mobileNumber,
+    inv.city,
+  ];
+
+  return searchableFields.some(value => String(value || '').toLowerCase().includes(normalized));
+};
+
 
 // ─── Component ────────────────────────────────────────────────────────────────
 export default function Investors({
@@ -52,42 +70,81 @@ export default function Investors({
   const [kycFilter, setKycFilter]         = useState('All');
   const [statusFilter, setStatusFilter]   = useState('All');
   const [selectedInvestor, setSelectedInvestor] = useState<any | null>(null);
+  const hasLoadedRef = React.useRef(false);
+  const baseInvestorsRef = React.useRef<any[]>([]);
+  const distributorId = userData?.id;
 
   useEffect(() => {
+    let cancelled = false;
+
     const fetchInvestors = async () => {
-      setLoading(true);
+      if (!hasLoadedRef.current) setLoading(true);
       setError('');
       try {
-        const distributorId = userData?.id;
-        const url = distributorId
-          ? `http://localhost:8081/api/v1/investors/by-distributor/${distributorId}`
-          : `http://localhost:8081/api/v1/investors`;
+        const query = search.trim();
+        const params = new URLSearchParams();
+        let url = distributorId
+          ? apiUrl(`/investors/by-distributor/${distributorId}`)
+          : apiUrl('/investors');
+
+        if (query.length === 1 && baseInvestorsRef.current.length > 0) {
+          console.log('[Investors] 1-char local search source:', {
+            query,
+            count: baseInvestorsRef.current.length,
+            data: baseInvestorsRef.current,
+          });
+          setInvestors(baseInvestorsRef.current);
+          hasLoadedRef.current = true;
+          setLoading(false);
+          return;
+        }
+
+        const shouldUseSearchApi = query.length >= 2;
+        if (shouldUseSearchApi) {
+          params.set('query', query);
+          params.set('limit', '50');
+          if (distributorId) {
+            params.set('distributorId', distributorId);
+          }
+          url = apiUrl(`/investors/search?${params.toString()}`);
+        }
 
         const res = await fetch(url);
+        const data = await res.json().catch(() => null);
+        console.log('[Investors] API response:', {
+          url,
+          status: res.status,
+          ok: res.ok,
+          query,
+          data,
+        });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const data = await res.json();
-        setInvestors(Array.isArray(data) ? data : []);
+        const nextInvestors = Array.isArray(data) ? data : [];
+        if (!shouldUseSearchApi) baseInvestorsRef.current = nextInvestors;
+        if (!cancelled) setInvestors(nextInvestors);
       } catch (e: any) {
         console.error('Error fetching investors:', e);
-        setError('Failed to load investors. Please try again.');
+        if (!cancelled && !hasLoadedRef.current) setError('Failed to load investors. Please try again.');
       } finally {
-        setLoading(false);
+        if (!cancelled) {
+          hasLoadedRef.current = true;
+          setLoading(false);
+        }
       }
     };
 
-    fetchInvestors();
-  }, [userData]);
+    const timer = window.setTimeout(fetchInvestors, search.trim().length >= 2 ? 250 : 0);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [search, distributorId]);
 
   const KYC_OPTIONS    = ['All', 'COMPLETED', 'PENDING', 'IN_PROGRESS', 'NOT_STARTED', 'FAILED', 'RETRY_REQUIRED'];
   const STATUS_OPTIONS = ['All', 'ACTIVE', 'READY_FOR_TRANSACTIONS', 'ONBOARDING', 'DRAFT', 'BLOCKED', 'ARCHIVED'];
 
   const filtered = investors.filter(inv => {
-    const name   = inv.fullName || '';
-    const pan    = inv.pan || '';
-    const city   = inv.city || '';
-    const matchSearch = name.toLowerCase().includes(search.toLowerCase())
-                     || pan.toLowerCase().includes(search.toLowerCase())
-                     || city.toLowerCase().includes(search.toLowerCase());
+    const matchSearch = matchesInvestorSearch(inv, search.trim());
     const matchKyc    = kycFilter    === 'All' || inv.kycStatus    === kycFilter;
     const matchStatus = statusFilter === 'All' || inv.investorStatus === statusFilter;
     return matchSearch && matchKyc && matchStatus;
@@ -126,7 +183,7 @@ export default function Investors({
               type="text"
               value={search}
               onChange={e => setSearch(e.target.value)}
-              placeholder="Search by name, PAN, or city…"
+              placeholder="Search by name, PAN, email, or mobile…"
               className="w-full pl-9 pr-4 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:bg-white focus:ring-2 focus:ring-blue-100 focus:border-blue-500 transition-all outline-none"
             />
           </div>
@@ -263,7 +320,7 @@ function InvestorDetail({
   const [performanceData, setPerformanceData] = useState<any[]>([]);
 
   useEffect(() => {
-    fetch(`http://localhost:8081/api/v1/orders/by-investor/${investor.id}`)
+    fetch(apiUrl(`/orders/by-investor/${investor.id}`))
       .then(res => res.ok ? res.json() : [])
       .then(orders => {
         let total = 0;

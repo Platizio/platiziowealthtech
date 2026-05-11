@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { MessageSquare, Phone, Mail, Send, Link2, ChevronDown, Clock, Search } from 'lucide-react';
+import { API_BASE_URL } from '../config/api';
 
-const BASE = 'http://localhost:8081/api/v1';
+const BASE = API_BASE_URL;
 
 const COMM_TYPES = [
   { id: 'whatsapp', label: 'WhatsApp',  icon: MessageSquare, badge: 'bg-green-50 text-green-600' },

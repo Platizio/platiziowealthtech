@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Info, CheckCircle2, ChevronRight, X, Search, RefreshCw, AlertCircle } from 'lucide-react';
+import { apiUrl } from '../config/api';
 
 // ─── Colour maps ──────────────────────────────────────────────────────────────
 const categoryStyle: Record<string, string> = {
@@ -20,7 +21,7 @@ const productTypeStyle: Record<string, string> = {
 };
 
 // ─── Ledger component ─────────────────────────────────────────────────────────
-export default function Ledger() {
+export default function Ledger({ userData }: { userData?: any }) {
   const [schemes, setSchemes]           = useState<any[]>([]);
   const [loading, setLoading]           = useState(true);
   const [refreshing, setRefreshing]     = useState(false);
@@ -35,7 +36,7 @@ export default function Ledger() {
     else setLoading(true);
     setError('');
     try {
-      const res = await fetch('http://localhost:8081/api/v1/products/schemes');
+      const res = await fetch(apiUrl('/products/schemes'));
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       // Only show active schemes
@@ -211,7 +212,7 @@ export default function Ledger() {
       {/* Transaction modal */}
       <AnimatePresence>
         {investModal && (
-          <TransactionModal fund={investModal} onClose={() => setInvestModal(null)} />
+          <TransactionModal fund={investModal} userData={userData} onClose={() => setInvestModal(null)} />
         )}
       </AnimatePresence>
     </motion.div>
@@ -219,9 +220,50 @@ export default function Ledger() {
 }
 
 // ─── Transaction Modal ────────────────────────────────────────────────────────
-function TransactionModal({ fund, onClose }: { fund: any; onClose: () => void }) {
+function TransactionModal({ fund, userData, onClose }: { fund: any; userData?: any; onClose: () => void }) {
   const [step, setStep] = useState(1);
   const [type, setType] = useState('SIP');
+  const [investorQuery, setInvestorQuery] = useState('');
+  const [investorResults, setInvestorResults] = useState<any[]>([]);
+  const [selectedInvestor, setSelectedInvestor] = useState<any | null>(null);
+  const [investorLoading, setInvestorLoading] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const searchInvestors = async () => {
+      const query = investorQuery.trim();
+      if (query.length < 1) {
+        setInvestorResults([]);
+        setInvestorLoading(false);
+        return;
+      }
+
+      setInvestorLoading(true);
+      try {
+        const params = new URLSearchParams({ query, limit: '10' });
+        if (userData?.id) {
+          params.set('distributorId', userData.id);
+        }
+
+        const res = await fetch(apiUrl(`/investors/search/transaction-eligible?${params.toString()}`));
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        if (!cancelled) setInvestorResults(Array.isArray(data) ? data : []);
+      } catch (err) {
+        console.error('Failed to search transaction eligible investors:', err);
+        if (!cancelled) setInvestorResults([]);
+      } finally {
+        if (!cancelled) setInvestorLoading(false);
+      }
+    };
+
+    const timer = window.setTimeout(searchInvestors, 300);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [investorQuery, userData]);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
@@ -260,9 +302,45 @@ function TransactionModal({ fund, onClose }: { fund: any; onClose: () => void })
                   <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-3">Select Investor</label>
                   <div className="relative">
                     <Search className="absolute left-4 top-3.5 w-4 h-4 text-slate-400" />
-                    <input type="text" placeholder="Search investor by name or PAN…"
+                    <input
+                      type="text"
+                      value={investorQuery}
+                      onChange={e => {
+                        setInvestorQuery(e.target.value);
+                        setSelectedInvestor(null);
+                      }}
+                      placeholder="Search investor by name or PAN…"
                       className="w-full pl-11 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-blue-100" />
                   </div>
+                  {selectedInvestor && (
+                    <div className="mt-3 rounded-xl border border-green-100 bg-green-50 p-3">
+                      <p className="text-sm font-semibold text-green-800">{selectedInvestor.fullName}</p>
+                      <p className="text-xs text-green-700 font-mono mt-0.5">{selectedInvestor.pan}</p>
+                    </div>
+                  )}
+                  {!selectedInvestor && investorQuery.trim().length >= 1 && (
+                    <div className="mt-3 max-h-48 overflow-auto rounded-xl border border-slate-200 bg-white">
+                      {investorLoading ? (
+                        <div className="p-4 text-sm text-slate-500">Searching investors...</div>
+                      ) : investorResults.length === 0 ? (
+                        <div className="p-4 text-sm text-slate-500">No transaction-ready investors found.</div>
+                      ) : (
+                        investorResults.map(inv => (
+                          <button
+                            key={inv.id}
+                            onClick={() => {
+                              setSelectedInvestor(inv);
+                              setInvestorQuery(inv.fullName || inv.pan || '');
+                            }}
+                            className="w-full px-4 py-3 text-left hover:bg-slate-50 border-b border-slate-100 last:border-b-0"
+                          >
+                            <p className="text-sm font-semibold text-slate-800">{inv.fullName}</p>
+                            <p className="text-xs text-slate-500 font-mono mt-0.5">{inv.pan}</p>
+                          </button>
+                        ))
+                      )}
+                    </div>
+                  )}
                 </div>
               </motion.div>
             )}
@@ -297,6 +375,10 @@ function TransactionModal({ fund, onClose }: { fund: any; onClose: () => void })
                     <p className="font-medium text-slate-800 text-sm">{fund.amcName}</p>
                   </div>
                   <div className="grid grid-cols-2 pt-4">
+                    <div className="col-span-2 pb-4">
+                      <p className="text-xs text-slate-400 font-semibold uppercase mb-1">Investor</p>
+                      <p className="font-medium text-slate-800 text-sm">{selectedInvestor?.fullName || 'Not selected'}</p>
+                    </div>
                     <div>
                       <p className="text-xs text-slate-400 font-semibold uppercase mb-1">{type}</p>
                       <p className="font-mono font-medium text-slate-800">₹{type === 'SIP' ? '5,000' : '1,00,000'}</p>
@@ -326,7 +408,8 @@ function TransactionModal({ fund, onClose }: { fund: any; onClose: () => void })
             )}
             <button
               onClick={() => step < 3 ? setStep(step + 1) : onClose()}
-              className="flex-1 py-3 bg-[#0B1B3E] text-white text-sm font-medium rounded-xl hover:bg-[#1A3066] transition-colors flex items-center justify-center gap-2"
+              disabled={step === 1 && !selectedInvestor}
+              className="flex-1 py-3 bg-[#0B1B3E] text-white text-sm font-medium rounded-xl hover:bg-[#1A3066] transition-colors flex items-center justify-center gap-2 disabled:bg-slate-200 disabled:text-slate-400 disabled:cursor-not-allowed"
             >
               {step === 3 ? 'Confirm & Trigger Link' : 'Continue'}
               {step !== 3 && <ChevronRight className="w-4 h-4" />}

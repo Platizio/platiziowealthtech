@@ -6,6 +6,7 @@ import {
   TrendingUp, TrendingDown, ChevronRight,
   Briefcase, Activity, Target,
 } from 'lucide-react';
+import { apiUrl } from '../config/api';
 
 /* ── Props ──────────────────────────────────────────────────────────────── */
 interface DashboardProps {
@@ -38,11 +39,11 @@ export default function Dashboard({ onNavigate, userData }: DashboardProps) {
     const fetchDashboard = async () => {
       try {
         const [ordersRes, investorsRes, schemesRes, leadsRes, onboardingRes] = await Promise.all([
-          fetch(`http://localhost:8081/api/v1/orders/by-distributor/${userData.id}`, { headers }),
-          fetch(`http://localhost:8081/api/v1/investors/by-distributor/${userData.id}`, { headers }),
-          fetch(`http://localhost:8081/api/v1/products/schemes`, { headers }),
-          fetch(`http://localhost:8081/api/v1/leads/distributor/${userData.id}`, { headers }),
-          fetch(`http://localhost:8081/api/v1/dashboard/distributor/${userData.id}/onboarding`, { headers })
+          fetch(apiUrl(`/orders/by-distributor/${userData.id}`), { headers }),
+          fetch(apiUrl(`/investors/by-distributor/${userData.id}`), { headers }),
+          fetch(apiUrl('/products/schemes'), { headers }),
+          fetch(apiUrl(`/leads/distributor/${userData.id}`), { headers }),
+          fetch(apiUrl(`/dashboard/distributor/${userData.id}/onboarding`), { headers })
         ]);
 
         let orders: any[] = [], investors: any[] = [], schemes: any[] = [], leads: any[] = [], onboarding: any = { kycPending: [], bankPending: [], readyToInvest: [] };

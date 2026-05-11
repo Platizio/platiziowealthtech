@@ -1,18 +1,20 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Search, Filter, Upload, UserPlus, X, CheckCircle2, Clock, XCircle, AlertCircle, ChevronDown, Download } from 'lucide-react';
+import { apiUrl } from '../config/api';
 
 interface Investor {
-  id: number;
+  id: number | string;
   name: string;
   distributor: string;
+  distributorId?: string;
   productClasses: string[];
   invested: string;
   kyc: 'Verified' | 'Pending' | 'In Progress' | 'Failed';
   pan: string;
 }
 
-const investors: Investor[] = [
+const mockInvestors: Investor[] = [
   { id:  1, name: 'Aditya Sharma',       distributor: 'Direct (Master)',    productClasses: ['MF', 'SIF'], invested: '₹1.2 Cr',  kyc: 'Verified',    pan: 'ABCDE1234F' },
   { id:  2, name: 'Meera Iyer',          distributor: 'Rahul Distributors', productClasses: ['MF'],        invested: '₹45 L',    kyc: 'Pending',     pan: 'FGHIJ5678K' },
   { id:  3, name: 'Rahul Verma',         distributor: 'WealthEdge Advisory',productClasses: ['MF'],        invested: '₹15 Cr',   kyc: 'Verified',    pan: 'KLMNO9012P' },
@@ -36,22 +38,120 @@ const kycConfig: Record<string, { color: string; bg: string; icon: React.ReactNo
 
 const DISTRIBUTORS = ['All', 'Direct (Master)', 'Rahul Distributors', 'WealthEdge Advisory', 'ProFunds India', 'Apex Partners', 'FinTree Wealth', 'MoneyGrow'];
 const KYC_STATUSES = ['All', 'Verified', 'Pending', 'In Progress', 'Failed'];
+const normalizeRole = (role?: string) => role?.trim().toUpperCase() || '';
 
-export default function InvestorMgmt() {
+const getKycLabel = (status?: string): Investor['kyc'] => {
+  const normalized = status?.trim().toUpperCase() || '';
+  if (normalized === 'COMPLETED' || normalized === 'VERIFIED') return 'Verified';
+  if (normalized === 'IN_PROGRESS') return 'In Progress';
+  if (normalized === 'FAILED' || normalized === 'RETRY_REQUIRED') return 'Failed';
+  return 'Pending';
+};
+
+export default function InvestorMgmt({ userData }: { userData?: any }) {
+  const [investors,      setInvestors]      = useState<Investor[]>([]);
+  const [distributors,   setDistributors]   = useState<any[]>([]);
+  const [loading,        setLoading]        = useState(true);
   const [search,         setSearch]         = useState('');
   const [kycFilter,      setKycFilter]      = useState('All');
   const [distFilter,     setDistFilter]     = useState('All');
   const [showFilters,    setShowFilters]    = useState(false);
   const [addModal,       setAddModal]       = useState<'manual' | 'csv' | null>(null);
+  const hasLoadedRef = React.useRef(false);
+  const userId = userData?.id;
+  const userRole = userData?.role;
+
+  const distributorNameById = React.useMemo(() => {
+    return new Map(distributors.map((d: any) => [d.id, d.fullName || d.name || d.email || d.id]));
+  }, [distributors]);
+
+  const mapInvestor = React.useCallback((inv: any): Investor => ({
+    id: inv.id,
+    name: inv.fullName || inv.name || 'Unnamed Investor',
+    distributorId: inv.distributorId,
+    distributor: distributorNameById.get(inv.distributorId) || inv.distributor || inv.distributorId || 'Direct (Master)',
+    productClasses: inv.productClasses || ['MF'],
+    invested: inv.invested || '—',
+    kyc: getKycLabel(inv.kycStatus || inv.kyc),
+    pan: inv.pan || '—',
+  }), [distributorNameById]);
+
+  React.useEffect(() => {
+    let cancelled = false;
+
+    const fetchDistributors = async () => {
+      try {
+        const role = normalizeRole(userRole);
+        const params = new URLSearchParams();
+        let url = apiUrl('/distributors');
+
+        if (role === 'MASTER_DISTRIBUTOR' && userId) {
+          params.set('requesterId', userId);
+          url = apiUrl(`/distributors/sub-distributors?${params.toString()}`);
+        }
+
+        const res = await fetch(url);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        if (!cancelled) setDistributors(Array.isArray(data) ? data : []);
+      } catch (err) {
+        console.error('Failed to fetch distributors for investor filters:', err);
+        if (!cancelled) setDistributors([]);
+      }
+    };
+
+    fetchDistributors();
+    return () => { cancelled = true; };
+  }, [userId, userRole]);
+
+  React.useEffect(() => {
+    let cancelled = false;
+
+    const fetchInvestors = async () => {
+      if (!hasLoadedRef.current) setLoading(true);
+      try {
+        const query = search.trim();
+        const params = new URLSearchParams();
+        let url = userId
+          ? apiUrl(`/investors/visible-to/${userId}`)
+          : apiUrl('/investors');
+
+        if (query.length >= 1) {
+          params.set('query', query);
+          params.set('limit', '50');
+          if (userId) params.set('requesterId', userId);
+          url = apiUrl(`/investors/search?${params.toString()}`);
+        }
+
+        const res = await fetch(url);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        if (!cancelled) setInvestors((Array.isArray(data) ? data : []).map(mapInvestor));
+      } catch (err) {
+        console.error('Failed to fetch investors:', err);
+        if (!cancelled) setInvestors(mockInvestors);
+      } finally {
+        if (!cancelled) {
+          hasLoadedRef.current = true;
+          setLoading(false);
+        }
+      }
+    };
+
+    const timer = window.setTimeout(fetchInvestors, search.trim().length >= 1 ? 250 : 0);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [search, userId, mapInvestor]);
 
   const filtered = investors.filter(inv => {
-    const matchSearch = inv.name.toLowerCase().includes(search.toLowerCase()) ||
-                        inv.pan.toLowerCase().includes(search.toLowerCase()) ||
-                        inv.distributor.toLowerCase().includes(search.toLowerCase());
     const matchKyc  = kycFilter  === 'All' || inv.kyc         === kycFilter;
     const matchDist = distFilter === 'All' || inv.distributor  === distFilter;
-    return matchSearch && matchKyc && matchDist;
+    return matchKyc && matchDist;
   });
+
+  const distributorOptions = ['All', ...Array.from(new Set(investors.map(i => i.distributor).filter(Boolean)))];
 
   // KYC stats
   const total       = investors.length;
@@ -59,7 +159,8 @@ export default function InvestorMgmt() {
   const pending     = investors.filter(i => i.kyc === 'Pending').length;
   const inProgress  = investors.filter(i => i.kyc === 'In Progress').length;
   const failed      = investors.filter(i => i.kyc === 'Failed').length;
-  const verifiedPct = Math.round((verified / total) * 100);
+  const pct = (count: number) => total ? Math.round((count / total) * 100) : 0;
+  const verifiedPct = pct(verified);
   const actionNeeded = pending + failed;
 
   return (
@@ -67,7 +168,9 @@ export default function InvestorMgmt() {
       <div className="flex justify-between items-center">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight text-slate-800">Investor Management</h1>
-          <p className="text-slate-500 text-sm mt-1">{total} investors across all distributors</p>
+          <p className="text-slate-500 text-sm mt-1">
+            {loading ? 'Loading investors…' : `${total} investors across visible distributors`}
+          </p>
         </div>
         <div className="flex gap-3">
           <button onClick={() => setAddModal('csv')}
@@ -105,20 +208,20 @@ export default function InvestorMgmt() {
             <span className="text-slate-400">{total} Total</span>
           </div>
           <div className="h-3 bg-slate-100 rounded-full overflow-hidden flex">
-            <div className="h-full bg-green-500 transition-all" style={{ width: `${(verified / total) * 100}%` }} />
-            <div className="h-full bg-blue-400 transition-all"  style={{ width: `${(inProgress / total) * 100}%` }} />
-            <div className="h-full bg-amber-400 transition-all" style={{ width: `${(pending / total) * 100}%` }} />
-            <div className="h-full bg-red-400 transition-all"   style={{ width: `${(failed / total) * 100}%` }} />
+            <div className="h-full bg-green-500 transition-all" style={{ width: `${pct(verified)}%` }} />
+            <div className="h-full bg-blue-400 transition-all"  style={{ width: `${pct(inProgress)}%` }} />
+            <div className="h-full bg-amber-400 transition-all" style={{ width: `${pct(pending)}%` }} />
+            <div className="h-full bg-red-400 transition-all"   style={{ width: `${pct(failed)}%` }} />
           </div>
         </div>
 
         {/* Stat pills */}
         <div className="grid grid-cols-4 gap-4">
           {[
-            { label: 'Verified',     count: verified,   pct: Math.round((verified   / total) * 100), color: 'bg-green-50 border-green-200 text-green-700' },
-            { label: 'In Progress',  count: inProgress, pct: Math.round((inProgress / total) * 100), color: 'bg-blue-50  border-blue-200  text-blue-700'  },
-            { label: 'Pending',      count: pending,    pct: Math.round((pending    / total) * 100), color: 'bg-amber-50 border-amber-200 text-amber-700' },
-            { label: 'Failed',       count: failed,     pct: Math.round((failed     / total) * 100), color: 'bg-red-50   border-red-200   text-red-700'   },
+            { label: 'Verified',     count: verified,   pct: pct(verified), color: 'bg-green-50 border-green-200 text-green-700' },
+            { label: 'In Progress',  count: inProgress, pct: pct(inProgress), color: 'bg-blue-50  border-blue-200  text-blue-700'  },
+            { label: 'Pending',      count: pending,    pct: pct(pending), color: 'bg-amber-50 border-amber-200 text-amber-700' },
+            { label: 'Failed',       count: failed,     pct: pct(failed), color: 'bg-red-50   border-red-200   text-red-700'   },
           ].map(s => (
             <div key={s.label} className={`rounded-xl p-4 border ${s.color}`}>
               <p className="text-2xl font-bold">{s.count}</p>
@@ -164,7 +267,7 @@ export default function InvestorMgmt() {
                 <div>
                   <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">Distributor</p>
                   <div className="flex gap-2 flex-wrap">
-                    {DISTRIBUTORS.slice(0, 5).map(d => (
+                    {distributorOptions.slice(0, 5).map(d => (
                       <button key={d} onClick={() => setDistFilter(d)}
                         className={`px-3 py-1 text-xs font-semibold rounded-md border transition-colors ${distFilter === d ? 'bg-[#0B1B3E] text-white border-[#0B1B3E]' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-100'}`}>
                         {d === 'Direct (Master)' ? 'Direct' : d.split(' ')[0]}
@@ -184,6 +287,12 @@ export default function InvestorMgmt() {
         </AnimatePresence>
 
         <div className="overflow-auto">
+          {loading ? (
+            <div className="p-12 text-center text-slate-500 font-medium">
+              <div className="animate-spin w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full mx-auto mb-4"></div>
+              Loading investors...
+            </div>
+          ) : (
           <table className="w-full text-left">
             <thead className="bg-slate-50 text-[10px] uppercase tracking-wider text-slate-500 font-semibold sticky top-0 z-10">
               <tr>
@@ -235,6 +344,7 @@ export default function InvestorMgmt() {
               })}
             </tbody>
           </table>
+          )}
         </div>
       </div>
 

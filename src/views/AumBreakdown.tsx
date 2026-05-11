@@ -5,6 +5,7 @@ import {
   ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer, Legend,
 } from 'recharts';
+import { apiUrl } from '../config/api';
 
 const typeBadge: Record<string, string> = {
   INSTITUTIONAL: 'bg-blue-100 text-blue-700',
@@ -131,9 +132,9 @@ export default function AumBreakdown({ onBack, userData }: AumBreakdownProps) {
       try {
         setLoading(true);
         const [ordersRes, investorsRes, schemesRes] = await Promise.all([
-          fetch(`http://localhost:8081/api/v1/orders/by-distributor/${userData.id}`),
-          fetch(`http://localhost:8081/api/v1/investors/by-distributor/${userData.id}`),
-          fetch(`http://localhost:8081/api/v1/products/schemes`),
+          fetch(apiUrl(`/orders/by-distributor/${userData.id}`)),
+          fetch(apiUrl(`/investors/by-distributor/${userData.id}`)),
+          fetch(apiUrl('/products/schemes')),
         ]);
 
         const orders: any[] = ordersRes.ok ? await ordersRes.json() : [];

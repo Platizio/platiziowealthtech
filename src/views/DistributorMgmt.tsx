@@ -4,6 +4,7 @@ import { Search, Filter, X, CheckCircle2, Clock, XCircle, ChevronDown } from 'lu
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer
 } from 'recharts';
+import { apiUrl } from '../config/api';
 
 interface Distributor {
   id: number;
@@ -57,6 +58,12 @@ const statusConfig: Record<string, { color: string; icon: React.ReactNode }> = {
 
 const TIERS   = ['All', 'Platinum', 'Gold', 'Silver', 'Bronze'];
 const STATUSES = ['All', 'Active', 'Pending', 'Inactive'];
+const normalizeRole = (role?: string) => role?.trim().toUpperCase() || '';
+
+const isPendingStatus = (status?: string) => {
+  const normalized = status?.trim().toUpperCase() || '';
+  return normalized === 'PENDING' || normalized === 'PENDING_APPROVAL' || normalized === 'SUBMITTED' || normalized === 'DRAFT';
+};
 
 export default function DistributorMgmt({ userData }: { userData: any }) {
   const [distributors, setDistributors] = useState<any[]>([]);
@@ -66,40 +73,61 @@ export default function DistributorMgmt({ userData }: { userData: any }) {
   const [statusFilter, setStatusFilter] = useState('All');
   const [showAddModal, setShowAddModal] = useState(false);
   const [showFilters, setShowFilters] = useState(false);
+  const hasLoadedRef = React.useRef(false);
+  const userId = userData?.id;
+  const userRole = userData?.role;
 
   React.useEffect(() => {
+    let cancelled = false;
+
     const fetchDistributors = async () => {
+      if (!hasLoadedRef.current) setLoading(true);
       try {
-        const response = await fetch('http://localhost:8081/api/v1/distributors');
+        const query = search.trim();
+        const role = normalizeRole(userRole);
+        const params = new URLSearchParams();
+        let url = apiUrl('/distributors');
+
+        if (query.length >= 1) {
+          params.set('query', query);
+          params.set('limit', '50');
+          if (userId) params.set('requesterId', userId);
+          url = apiUrl(`/distributors/search?${params.toString()}`);
+        } else if (role === 'MASTER_DISTRIBUTOR' && userId) {
+          params.set('requesterId', userId);
+          url = apiUrl(`/distributors/sub-distributors?${params.toString()}`);
+        }
+
+        const response = await fetch(url);
         if (!response.ok) throw new Error('Failed to fetch distributors');
         const data = await response.json();
-        
-        // Filter logic requested by user:
-        // if role=master_distributor then only show distributors where masterDistributorId matches current user's id
-        let filteredData = data;
-        if (userData?.role === 'MASTER_DISTRIBUTOR') {
-          filteredData = data.filter((d: any) => d.masterDistributorId === userData.id);
-        }
-        
-        setDistributors(filteredData);
+
+        if (!cancelled) setDistributors(Array.isArray(data) ? data : []);
       } catch (err) {
         console.error('Error fetching distributors:', err);
+        if (!cancelled) setDistributors([]);
       } finally {
-        setLoading(false);
+        if (!cancelled) {
+          hasLoadedRef.current = true;
+          setLoading(false);
+        }
       }
     };
 
-    fetchDistributors();
-  }, [userData]);
+    const timer = window.setTimeout(fetchDistributors, search.trim().length >= 1 ? 250 : 0);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [search, userId, userRole]);
 
   const filtered = distributors.filter(d => {
-    const name = d.name || d.fullName || '';
-    const arn = d.arn || d.arnNumber || '';
-    const matchSearch = name.toLowerCase().includes(search.toLowerCase()) ||
-                        arn.toLowerCase().includes(search.toLowerCase());
     const matchTier   = tierFilter   === 'All' || d.tier   === tierFilter;
-    const matchStatus = statusFilter === 'All' || d.status === statusFilter || d.status?.toUpperCase() === statusFilter?.toUpperCase();
-    return matchSearch && matchTier && matchStatus;
+    const matchStatus = statusFilter === 'All'
+      || d.status === statusFilter
+      || d.status?.toUpperCase() === statusFilter?.toUpperCase()
+      || (statusFilter === 'Pending' && isPendingStatus(d.status));
+    return matchTier && matchStatus;
   });
 
   const tierCounts = TIERS.slice(1).reduce((acc, t) => {

@@ -5,6 +5,7 @@ import {
   Plus, Youtube, Instagram, Globe, UserCheck, X,
   CheckCircle2,
 } from 'lucide-react';
+import { apiUrl } from '../config/api';
 
 interface Lead {
   id: string;
@@ -286,7 +287,7 @@ export default function Leads({
       }
       try {
         setLoading(true);
-        const response = await fetch(`http://localhost:8081/api/v1/leads/distributor/${userData.id}`);
+        const response = await fetch(apiUrl(`/leads/distributor/${userData.id}`));
         if (!response.ok) throw new Error('Failed to fetch leads');
         const data = await response.json();
         console.log("Leads: Fetched raw data from backend:", data);

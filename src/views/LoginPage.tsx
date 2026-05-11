@@ -5,6 +5,7 @@ import {
   CheckSquare, Square, Mail, KeyRound, ChevronLeft,
   CheckCircle2, Smartphone, RefreshCw, MessageSquare, Check,
 } from 'lucide-react';
+import { apiUrl } from '../config/api';
 
 const REMEMBER_KEY = 'apex_remembered_email';
 
@@ -124,7 +125,7 @@ export default function LoginPage({
   /* ── Helpers: look up users ─────────────────────────────────────────── */
   const getUsers = async (): Promise<any[]> => {
     try {
-      const response = await fetch('http://localhost:8081/api/v1/distributors');
+      const response = await fetch(apiUrl('/distributors'));
       const data = await response.json();
       console.log("Fetched data:", data);
 

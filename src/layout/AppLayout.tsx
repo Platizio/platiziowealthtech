@@ -6,6 +6,7 @@ import {
   BarChart3, Network, Layers, UserCheck, ShieldCheck, X, AlertTriangle,
   PieChart, RefreshCw, FileBarChart2, MessageSquare, ClipboardList
 } from 'lucide-react';
+import { apiUrl } from '../config/api';
 
 const DIST_NAV_PRIMARY = [
   { id: '/distributor/dashboard',      icon: <LayoutDashboard className="w-4 h-4" />, label: 'Dashboard' },
@@ -47,7 +48,7 @@ export default function AppLayout({ userData, onSignOut }: { userData: any, onSi
       const headers: Record<string, string> = { 'Content-Type': 'application/json' };
       if (token) headers['Authorization'] = `Bearer ${token}`;
 
-      fetch(`http://localhost:8081/api/v1/notifications/distributor/${userData.id}`, { headers })
+      fetch(apiUrl(`/notifications/distributor/${userData.id}`), { headers })
         .then(res => {
           if (res.ok) return res.json();
           throw new Error('Failed to fetch notifs');
