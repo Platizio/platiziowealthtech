@@ -1,6 +1,7 @@
 package com.platizio.wealthtech.service;
 
 import com.platizio.wealthtech.domain.*;
+import com.platizio.wealthtech.dto.BulkOrderCreateRequest;
 import com.platizio.wealthtech.dto.OrderCreateRequest;
 import com.platizio.wealthtech.integration.CybrillaClient;
 import com.platizio.wealthtech.repository.RedemptionRecordRepository;
@@ -61,6 +62,24 @@ public class OrderService {
     public List<RedemptionRecord> listRedemptionsByOrder(UUID orderId) {
         return redemptionRecordRepository.findByOrderId(orderId);
     }
+
+    @Transactional
+    public List<TransactionOrder> createOrders(BulkOrderCreateRequest request) {
+        return request.investorIds().stream()
+                .distinct()
+                .map(investorId -> createOrder(new OrderCreateRequest(
+                        investorId,
+                        request.distributorId(),
+                        request.productSchemeId(),
+                        request.transactionType(),
+                        request.amount(),
+                        request.units(),
+                        request.paymentMode(),
+                        request.mandateMode()
+                )))
+                .toList();
+    }
+
     @Transactional
     public TransactionOrder createOrder(OrderCreateRequest request) {
         Investor investor = investorService.getInvestor(request.investorId());

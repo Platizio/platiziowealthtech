@@ -3,6 +3,7 @@ package com.platizio.wealthtech.controller;
 import com.platizio.wealthtech.domain.OrderStatus;
 import com.platizio.wealthtech.domain.RedemptionRecord;
 import com.platizio.wealthtech.domain.TransactionOrder;
+import com.platizio.wealthtech.dto.BulkOrderCreateRequest;
 import com.platizio.wealthtech.dto.OrderCreateRequest;
 import com.platizio.wealthtech.service.OrderService;
 import jakarta.validation.Valid;
@@ -24,6 +25,11 @@ public class OrderController {
     @PostMapping
     public TransactionOrder createOrder(@Valid @RequestBody OrderCreateRequest request) {
         return orderService.createOrder(request);
+    }
+
+    @PostMapping("/bulk")
+    public List<TransactionOrder> createOrders(@Valid @RequestBody BulkOrderCreateRequest request) {
+        return orderService.createOrders(request);
     }
 
     @GetMapping("/{orderId}")

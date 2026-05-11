@@ -11,9 +11,11 @@ public class SipItemDto {
     private String nextDue;
     private String mandate;
 
+    private String category;
+
     public SipItemDto() {}
 
-    public SipItemDto(String id, String investor, String fund, String amount, String status, String nextDue, String mandate) {
+    public SipItemDto(String id, String investor, String fund, String amount, String status, String nextDue, String mandate, String category) {
         this.id = id;
         this.investor = investor;
         this.fund = fund;
@@ -21,6 +23,7 @@ public class SipItemDto {
         this.status = status;
         this.nextDue = nextDue;
         this.mandate = mandate;
+        this.category = category;
     }
 
     public String getId() { return id; }
@@ -37,4 +40,6 @@ public class SipItemDto {
     public void setNextDue(String nextDue) { this.nextDue = nextDue; }
     public String getMandate() { return mandate; }
     public void setMandate(String mandate) { this.mandate = mandate; }
+    public String getCategory() { return category; }
+    public void setCategory(String category) { this.category = category; }
 }

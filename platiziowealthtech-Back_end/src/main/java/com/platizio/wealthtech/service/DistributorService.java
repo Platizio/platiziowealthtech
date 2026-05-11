@@ -10,6 +10,7 @@ import jakarta.persistence.EntityNotFoundException;
 import java.util.List;
 import java.util.UUID;
 import com.platizio.wealthtech.dto.AuthLoginRequest;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -29,6 +30,29 @@ public class DistributorService {
 
     public List<Distributor> findAll() {
         return distributorRepository.findAll();
+    }
+
+    public List<Distributor> search(String query, UUID requesterId, int limit) {
+        if (query == null || query.trim().isEmpty()) {
+            throw new IllegalArgumentException("Search query must contain at least 1 character");
+        }
+        int normalizedLimit = limit < 1 ? 10 : Math.min(limit, 50);
+        if (requesterId == null) {
+            return distributorRepository.search(query.trim(), PageRequest.of(0, normalizedLimit));
+        }
+
+        Distributor requester = getDistributor(requesterId);
+        if (requester.getRole() == DistributorRole.ADMIN) {
+            return distributorRepository.search(query.trim(), PageRequest.of(0, normalizedLimit));
+        }
+        if (requester.getRole() == DistributorRole.MASTER_DISTRIBUTOR) {
+            return distributorRepository.searchByMasterDistributor(
+                    requester.getId(),
+                    query.trim(),
+                    PageRequest.of(0, normalizedLimit)
+            );
+        }
+        throw new IllegalStateException("Only an admin or master distributor can search distributors");
     }
 
     public Distributor login(AuthLoginRequest request) {

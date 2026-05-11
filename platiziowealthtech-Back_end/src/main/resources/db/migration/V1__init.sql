@@ -1,4 +1,4 @@
-
+-- Triggering clean and rebuild
 create table if not exists distributors (
     id uuid primary key,
     created_at timestamptz not null,

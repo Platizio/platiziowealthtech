@@ -33,7 +33,7 @@ public class MockCybrillaClient implements CybrillaClient {
         equityScheme.setExternalSchemeCode("EQ-101");
         equityScheme.setExternalIsin("INF001");
         equityScheme.setProductType("MUTUAL_FUND");
-        equityScheme.setMetadataJson("{\"risk\":\"high\"}");
+        equityScheme.setMetadataJson("{\"risk\":\"high\",\"returns\":{\"daily\":0.8,\"ytd\":12.4,\"1y\":18.5,\"5y\":85.2}}");
 
         ProductScheme mfScheme = new ProductScheme();
         mfScheme.setSchemeName("Balanced Mutual Fund");
@@ -42,7 +42,7 @@ public class MockCybrillaClient implements CybrillaClient {
         mfScheme.setExternalSchemeCode("MF-201");
         mfScheme.setExternalIsin("INF002");
         mfScheme.setProductType("MUTUAL_FUND");
-        mfScheme.setMetadataJson("{\"risk\":\"medium\"}");
+        mfScheme.setMetadataJson("{\"risk\":\"medium\",\"returns\":{\"daily\":0.2,\"ytd\":8.1,\"1y\":12.4,\"5y\":55.8}}");
 
         ProductScheme sifScheme = new ProductScheme();
         sifScheme.setSchemeName("Social Impact Fund");
@@ -51,7 +51,7 @@ public class MockCybrillaClient implements CybrillaClient {
         sifScheme.setExternalSchemeCode("SIF-301");
         sifScheme.setExternalIsin("INF003");
         sifScheme.setProductType("SIF");
-        sifScheme.setMetadataJson("{\"impact\":\"high\"}");
+        sifScheme.setMetadataJson("{\"impact\":\"high\",\"returns\":{\"daily\":-0.1,\"ytd\":5.4,\"1y\":8.2,\"5y\":32.1}}");
 
         return List.of(equityScheme, mfScheme, sifScheme);
     }

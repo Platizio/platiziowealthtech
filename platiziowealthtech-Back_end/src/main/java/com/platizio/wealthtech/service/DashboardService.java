@@ -48,6 +48,17 @@ public class DashboardService {
             ProductScheme scheme = schemeMap.get(o.getProductSchemeId());
             String status = o.getOrderStatus() == OrderStatus.COMPLETED ? "Active" : 
                             (o.getOrderStatus() == OrderStatus.FAILED ? "Failed" : "Paused");
+            
+            // Apply robust bucketing logic
+            String rawCat = "OTHER";
+            if (o.getProductCategory() != null) {
+                rawCat = o.getProductCategory().toString();
+            } else if (scheme != null && scheme.getCategory() != null) {
+                rawCat = scheme.getCategory().toString();
+            }
+            rawCat = rawCat.toUpperCase();
+            String category = (rawCat.contains("MF") || rawCat.contains("MUTUAL")) ? "MF" : "SIF";
+
             return new SipItemDto(
                     o.getId().toString(),
                     inv != null ? inv.getFullName() : "Unknown",
@@ -55,7 +66,8 @@ public class DashboardService {
                     "₹" + (o.getAmount() != null ? o.getAmount().toString() : "0"),
                     status,
                     "N/A",
-                    o.getMandateMode() != null ? o.getMandateMode() : "Unknown"
+                    o.getMandateMode() != null ? o.getMandateMode() : "Unknown",
+                    category
             );
         }).collect(Collectors.toList());
 

@@ -10,6 +10,7 @@ import com.platizio.wealthtech.repository.InvestorRepository;
 import jakarta.persistence.EntityNotFoundException;
 import java.util.List;
 import java.util.UUID;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -42,6 +43,55 @@ public class InvestorService {
 
     public List<Investor> listAll() {
         return investorRepository.findAll();
+    }
+
+    public List<Investor> filterByKycStatus(String status, UUID distributorId) {
+        KycStatus kycStatus = parseKycStatusFilter(status);
+        if (kycStatus == null) {
+            return distributorId == null ? investorRepository.findAll() : investorRepository.findByDistributorId(distributorId);
+        }
+        if (distributorId != null) {
+            return investorRepository.findByDistributorIdAndKycStatus(distributorId, kycStatus);
+        }
+        return investorRepository.findByKycStatus(kycStatus);
+    }
+
+    public List<Investor> search(String query, UUID distributorId, UUID requesterId, int limit) {
+        String normalizedQuery = normalizeSearchQuery(query);
+        PageRequest pageRequest = PageRequest.of(0, normalizeLimit(limit));
+        if (distributorId != null) {
+            if (requesterId != null && !requesterId.equals(distributorId)) {
+                listVisibleToDistributor(requesterId, distributorId);
+            }
+            return investorRepository.searchByDistributor(distributorId, normalizedQuery, pageRequest);
+        }
+        if (requesterId != null) {
+            Distributor requester = distributorService.getDistributor(requesterId);
+            if (requester.getRole() == DistributorRole.ADMIN) {
+                return investorRepository.search(normalizedQuery, pageRequest);
+            }
+            List<UUID> distributorIds;
+            if (requester.getRole() == DistributorRole.MASTER_DISTRIBUTOR) {
+                distributorIds = distributorService.findSubDistributors(requesterId).stream()
+                        .map(Distributor::getId)
+                        .toList();
+                distributorIds = new java.util.ArrayList<>(distributorIds);
+                distributorIds.add(requester.getId());
+            } else {
+                distributorIds = List.of(requester.getId());
+            }
+            return distributorIds.isEmpty()
+                    ? List.of()
+                    : investorRepository.searchByDistributorIds(distributorIds, normalizedQuery, pageRequest);
+        }
+        return investorRepository.search(normalizedQuery, pageRequest);
+    }
+
+    public List<Investor> searchEligibleForTransactions(String query, UUID distributorId, UUID requesterId, int limit) {
+        return search(query, distributorId, requesterId, limit).stream()
+                .filter(investor -> investor.getKycStatus() == KycStatus.COMPLETED)
+                .filter(investor -> investor.getBankVerificationStatus() == BankVerificationStatus.VERIFIED)
+                .toList();
     }
 
     public List<Investor> listVisibleToDistributor(UUID requesterId, UUID distributorId) {
@@ -173,6 +223,34 @@ public class InvestorService {
 
     public List<Investor> findByPostalCode(String postalCode) {
         return investorRepository.findByPostalCode(postalCode);
+    }
+
+    private String normalizeSearchQuery(String query) {
+        if (query == null || query.trim().isEmpty()) {
+            throw new IllegalArgumentException("Search query must contain at least 1 character");
+        }
+        return query.trim();
+    }
+
+    private int normalizeLimit(int limit) {
+        if (limit < 1) {
+            return 10;
+        }
+        return Math.min(limit, 50);
+    }
+
+    private KycStatus parseKycStatusFilter(String status) {
+        if (status == null || status.isBlank() || "ALL".equalsIgnoreCase(status.trim())) {
+            return null;
+        }
+        String normalizedStatus = status.trim()
+                .toUpperCase()
+                .replace(' ', '_')
+                .replace('-', '_');
+        if ("KYC_VERIFIED".equals(normalizedStatus) || "VERIFIED".equals(normalizedStatus)) {
+            return KycStatus.COMPLETED;
+        }
+        return KycStatus.valueOf(normalizedStatus);
     }
 
     @Transactional

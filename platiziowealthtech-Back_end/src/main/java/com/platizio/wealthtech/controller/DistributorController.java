@@ -38,6 +38,15 @@ public class DistributorController {
         return distributorService.findAll();
     }
 
+    @GetMapping("/search")
+    public List<Distributor> search(
+            @RequestParam String query,
+            @RequestParam(required = false) UUID requesterId,
+            @RequestParam(defaultValue = "10") int limit
+    ) {
+        return distributorService.search(query, requesterId, limit);
+    }
+
     @GetMapping("/{distributorId}")
     public Distributor getById(@PathVariable UUID distributorId) {
         return distributorService.getDistributor(distributorId);

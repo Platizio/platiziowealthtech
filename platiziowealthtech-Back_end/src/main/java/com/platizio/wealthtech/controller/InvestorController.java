@@ -47,6 +47,34 @@ public class InvestorController {
         return investorService.createInvestor(request);
     }
 
+    @GetMapping("/filter/kyc")
+    public List<Investor> filterByKycStatus(
+            @RequestParam(defaultValue = "ALL") String status,
+            @RequestParam(required = false) UUID distributorId
+    ) {
+        return investorService.filterByKycStatus(status, distributorId);
+    }
+
+    @GetMapping("/search")
+    public List<Investor> search(
+            @RequestParam String query,
+            @RequestParam(required = false) UUID distributorId,
+            @RequestParam(required = false) UUID requesterId,
+            @RequestParam(defaultValue = "10") int limit
+    ) {
+        return investorService.search(query, distributorId, requesterId, limit);
+    }
+
+    @GetMapping("/search/transaction-eligible")
+    public List<Investor> searchTransactionEligible(
+            @RequestParam String query,
+            @RequestParam(required = false) UUID distributorId,
+            @RequestParam(required = false) UUID requesterId,
+            @RequestParam(defaultValue = "10") int limit
+    ) {
+        return investorService.searchEligibleForTransactions(query, distributorId, requesterId, limit);
+    }
+
     @GetMapping("/by-distributor/{distributorId}")
     public List<Investor> listByDistributor(@PathVariable UUID distributorId) {
         return investorService.listByDistributor(distributorId);
