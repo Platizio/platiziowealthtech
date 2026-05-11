@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
 import { FileText, Download, Search, Filter } from 'lucide-react';
+import { API_BASE_URL } from '../config/api';
 
-const BASE = 'http://localhost:8081/api/v1';
+const BASE = API_BASE_URL;
 
 const REPORT_TYPES = [
   { id: 'investors',    label: 'Investor Report',         desc: 'All investors with KYC and status details' },

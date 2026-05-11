@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from 'recharts';
 import { DollarSign, BarChart2, TrendingUp, Users } from 'lucide-react';
+import { API_BASE_URL } from '../config/api';
 
-const BASE = 'http://localhost:8081/api/v1';
+const BASE = API_BASE_URL;
 
 function fmt(n: number) {
   if (n >= 10_000_000) return `₹${(n / 10_000_000).toFixed(2)}Cr`;

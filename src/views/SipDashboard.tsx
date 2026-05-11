@@ -5,6 +5,7 @@ import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer,
 } from 'recharts';
+import { apiUrl } from '../config/api';
 
 interface Sip {
   id: string; investor: string; fund: string;
@@ -38,7 +39,7 @@ export default function SipDashboard({ onBack, userData }: { onBack: () => void;
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
     if (token) headers['Authorization'] = `Bearer ${token}`;
 
-    fetch(`http://localhost:8081/api/v1/dashboard/distributor/${userData.id}/sips`, { headers })
+    fetch(apiUrl(`/dashboard/distributor/${userData.id}/sips`), { headers })
       .then(res => res.json())
       .then(data => {
         setSips(data.sips || []);

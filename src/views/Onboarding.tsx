@@ -5,6 +5,7 @@ import {
   Eye, EyeOff, Upload, X, Info, AlertCircle, MapPin, Briefcase,
   ShieldCheck,
 } from 'lucide-react';
+import { apiUrl } from '../config/api';
 
 // ─── Password strength helpers ────────────────────────────────────────────────
 
@@ -417,7 +418,7 @@ export default function Onboarding({ onComplete, onBack }: { onComplete: () => v
         bankIfsc:              data.ifscCode.toUpperCase()   || undefined,
         bankAccountHolderName: data.accountHolderName.trim() || undefined,
       };
-      const res = await fetch('http://localhost:8081/api/v1/distributors/signup', {
+      const res = await fetch(apiUrl('/distributors/signup'), {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify(payload),

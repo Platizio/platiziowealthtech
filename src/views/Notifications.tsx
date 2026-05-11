@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { motion } from 'motion/react';
 import { CheckCircle2, XCircle, AlertCircle, Clock, RefreshCw } from 'lucide-react';
+import { apiUrl } from '../config/api';
 
 type NotifType = 'success' | 'error' | 'warning' | 'info';
 
@@ -76,7 +77,7 @@ export default function Notifications({ userData }: { userData?: any }) {
     const fetchNotifications = async () => {
       try {
         setLoading(true);
-        const res = await fetch(`http://localhost:8081/api/v1/notifications/distributor/${userData.id}`, { headers });
+        const res = await fetch(apiUrl(`/notifications/distributor/${userData.id}`), { headers });
         if (res.ok) {
           const data = await res.json();
           const mapped: Notif[] = data.map((n: any) => {
@@ -121,7 +122,7 @@ export default function Notifications({ userData }: { userData?: any }) {
       const headers: Record<string, string> = { 'Content-Type': 'application/json' };
       if (token) headers['Authorization'] = `Bearer ${token}`;
 
-      await fetch(`http://localhost:8081/api/v1/notifications/${id}/read`, {
+      await fetch(apiUrl(`/notifications/${id}/read`), {
         method: 'PATCH',
         headers
       });

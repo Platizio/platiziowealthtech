@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Search, Filter, ChevronLeft, CheckCircle2, Clock, XCircle, AlertCircle, RefreshCw } from 'lucide-react';
+import { apiUrl } from '../config/api';
 
 type StatusKey = 'Successful' | 'Processing' | 'Submitted' | 'Payment Pending' | 'Pending Investor Action' | 'Failed' | 'Retry Available' | 'Draft' | 'Created' | 'SUCCESSFUL' | 'FAILED' | 'PENDING_PAYMENT' | 'DRAFT';
 
@@ -63,9 +64,9 @@ export default function Transactions({ userData }: { userData?: any }) {
         setLoading(true);
         // Fetch orders, investors, and schemes to map data correctly
         const [ordersRes, investorsRes, schemesRes] = await Promise.all([
-          fetch(`http://localhost:8081/api/v1/orders/by-distributor/${userData.id}`, { headers }),
-          fetch(`http://localhost:8081/api/v1/investors/by-distributor/${userData.id}`, { headers }),
-          fetch(`http://localhost:8081/api/v1/products/schemes`, { headers })
+          fetch(apiUrl(`/orders/by-distributor/${userData.id}`), { headers }),
+          fetch(apiUrl(`/investors/by-distributor/${userData.id}`), { headers }),
+          fetch(apiUrl('/products/schemes'), { headers })
         ]);
 
         const orders = ordersRes.ok ? await ordersRes.json() : [];
