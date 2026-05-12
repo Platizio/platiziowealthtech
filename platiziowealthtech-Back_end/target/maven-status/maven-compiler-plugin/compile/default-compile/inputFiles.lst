@@ -1,3 +1,4 @@
+C:\Users\HP\Downloads\platiziowealthtech-Back_end\platiziowealthtech-Back_end\src\main\java\com\platizio\wealthtech\common\AccountNotApprovedException.java
 C:\Users\HP\Downloads\platiziowealthtech-Back_end\platiziowealthtech-Back_end\src\main\java\com\platizio\wealthtech\common\BaseEntity.java
 C:\Users\HP\Downloads\platiziowealthtech-Back_end\platiziowealthtech-Back_end\src\main\java\com\platizio\wealthtech\config\JwtAuthFilter.java
 C:\Users\HP\Downloads\platiziowealthtech-Back_end\platiziowealthtech-Back_end\src\main\java\com\platizio\wealthtech\config\OpenApiConfig.java
@@ -73,6 +74,7 @@ C:\Users\HP\Downloads\platiziowealthtech-Back_end\platiziowealthtech-Back_end\sr
 C:\Users\HP\Downloads\platiziowealthtech-Back_end\platiziowealthtech-Back_end\src\main\java\com\platizio\wealthtech\repository\RedemptionRecordRepository.java
 C:\Users\HP\Downloads\platiziowealthtech-Back_end\platiziowealthtech-Back_end\src\main\java\com\platizio\wealthtech\repository\TransactionOrderRepository.java
 C:\Users\HP\Downloads\platiziowealthtech-Back_end\platiziowealthtech-Back_end\src\main\java\com\platizio\wealthtech\service\AuditService.java
+C:\Users\HP\Downloads\platiziowealthtech-Back_end\platiziowealthtech-Back_end\src\main\java\com\platizio\wealthtech\service\AuthCookieService.java
 C:\Users\HP\Downloads\platiziowealthtech-Back_end\platiziowealthtech-Back_end\src\main\java\com\platizio\wealthtech\service\AuthService.java
 C:\Users\HP\Downloads\platiziowealthtech-Back_end\platiziowealthtech-Back_end\src\main\java\com\platizio\wealthtech\service\CustomUserDetailsService.java
 C:\Users\HP\Downloads\platiziowealthtech-Back_end\platiziowealthtech-Back_end\src\main\java\com\platizio\wealthtech\service\DashboardService.java

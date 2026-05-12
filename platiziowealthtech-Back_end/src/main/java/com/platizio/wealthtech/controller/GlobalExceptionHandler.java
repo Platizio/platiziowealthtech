@@ -1,9 +1,12 @@
 package com.platizio.wealthtech.controller;
 
+import com.platizio.wealthtech.common.AccountNotApprovedException;
 import com.platizio.wealthtech.dto.ApiErrorResponse;
 import jakarta.persistence.EntityNotFoundException;
 import jakarta.servlet.http.HttpServletRequest;
 import java.time.OffsetDateTime;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -60,6 +63,20 @@ public class GlobalExceptionHandler {
     public ApiErrorResponse handleUnauthorized(BadCredentialsException ex, HttpServletRequest request) {
         logger.warn("Unauthorized access attempt: {} at {}", ex.getMessage(), request.getRequestURI());
         return new ApiErrorResponse(OffsetDateTime.now(), 401, "UNAUTHORIZED", ex.getMessage(), request.getRequestURI());
+    }
+
+    @ExceptionHandler(AccountNotApprovedException.class)
+    @ResponseStatus(HttpStatus.FORBIDDEN)
+    public Map<String, Object> handleAccountNotApproved(AccountNotApprovedException ex, HttpServletRequest request) {
+        logger.warn("Login blocked for account status {} at {}", ex.getAccountStatus(), request.getRequestURI());
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("timestamp", OffsetDateTime.now());
+        response.put("status", 403);
+        response.put("error", "ACCOUNT_NOT_APPROVED");
+        response.put("message", ex.getMessage());
+        response.put("accountStatus", ex.getAccountStatus());
+        response.put("path", request.getRequestURI());
+        return response;
     }
 
     @ExceptionHandler(AccessDeniedException.class)

@@ -1,5 +1,6 @@
 package com.platizio.wealthtech.service;
 
+import com.platizio.wealthtech.common.AccountNotApprovedException;
 import com.platizio.wealthtech.domain.Distributor;
 import com.platizio.wealthtech.domain.DistributorRole;
 import com.platizio.wealthtech.domain.DistributorStatus;
@@ -7,7 +8,6 @@ import com.platizio.wealthtech.dto.AuthLoginRequest;
 import com.platizio.wealthtech.dto.AuthResponse;
 import com.platizio.wealthtech.dto.AuthSignupRequest;
 import com.platizio.wealthtech.repository.DistributorRepository;
-import jakarta.persistence.EntityNotFoundException;
 import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
@@ -45,7 +45,7 @@ public class AuthService {
             throw new IllegalArgumentException("Email already registered");
         }
 
-        DistributorRole role = request.role() == null ? DistributorRole.MASTER_DISTRIBUTOR : request.role();
+        DistributorRole role = request.role() == null ? DistributorRole.SUB_DISTRIBUTOR : request.role();
 
         Distributor distributor = new Distributor();
         distributor.setFullName(request.fullName());
@@ -68,8 +68,15 @@ public class AuthService {
         Distributor saved = distributorRepository.save(distributor);
         auditService.log("DISTRIBUTOR", saved.getId(), "SIGNUP_SUBMITTED", saved.getId(), "{\"status\":\"PENDING_APPROVAL\"}");
 
-        String token = jwtService.generateToken(saved.getId(), saved.getEmail(), saved.getRole().name());
-        return new AuthResponse(token, saved.getId(), saved.getEmail(), saved.getFullName(), saved.getRole());
+        return new AuthResponse(
+                null,
+                saved.getId(),
+                saved.getEmail(),
+                saved.getFullName(),
+                saved.getRole(),
+                saved.getStatus(),
+                "Approval remaining. Your account is pending admin approval."
+        );
     }
 
     public AuthResponse login(AuthLoginRequest request) {
@@ -81,10 +88,28 @@ public class AuthService {
             throw new BadCredentialsException("Invalid email or password");
         }
 
+        if (distributor.getStatus() != DistributorStatus.APPROVED) {
+            throw new AccountNotApprovedException(distributor.getStatus());
+        }
+
         String token = jwtService.generateToken(
                 distributor.getId(), distributor.getEmail(), distributor.getRole().name());
         return new AuthResponse(
                 token, distributor.getId(), distributor.getEmail(),
-                distributor.getFullName(), distributor.getRole());
+                distributor.getFullName(), distributor.getRole(), distributor.getStatus(), "Login successful");
+    }
+
+    public AuthResponse currentUser(String email) {
+        Distributor distributor = distributorRepository.findByEmail(email)
+                .orElseThrow(() -> new BadCredentialsException("Authenticated user no longer exists"));
+        return new AuthResponse(
+                null,
+                distributor.getId(),
+                distributor.getEmail(),
+                distributor.getFullName(),
+                distributor.getRole(),
+                distributor.getStatus(),
+                "Authenticated"
+        );
     }
 }

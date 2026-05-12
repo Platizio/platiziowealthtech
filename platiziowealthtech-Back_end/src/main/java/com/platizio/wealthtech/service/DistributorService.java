@@ -1,5 +1,6 @@
 package com.platizio.wealthtech.service;
 
+import com.platizio.wealthtech.common.AccountNotApprovedException;
 import com.platizio.wealthtech.domain.Distributor;
 import com.platizio.wealthtech.domain.DistributorRole;
 import com.platizio.wealthtech.domain.DistributorStatus;
@@ -11,6 +12,7 @@ import java.util.List;
 import java.util.UUID;
 import com.platizio.wealthtech.dto.AuthLoginRequest;
 import org.springframework.data.domain.PageRequest;
+import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -57,20 +59,17 @@ public class DistributorService {
 
     public Distributor login(AuthLoginRequest request) {
         Distributor distributor = distributorRepository.findByEmail(request.email())
-                .orElseThrow(() -> new IllegalArgumentException("Invalid email or password"));
+                .orElseThrow(() -> new BadCredentialsException("Invalid email or password"));
 
-        // First check the plaintext 'password' field I added for you
-        if (request.password().equals(distributor.getPassword())) {
+        if (distributor.getPasswordHash() != null &&
+                passwordEncoder.matches(request.password(), distributor.getPasswordHash())) {
+            if (distributor.getStatus() != DistributorStatus.APPROVED) {
+                throw new AccountNotApprovedException(distributor.getStatus());
+            }
             return distributor;
         }
 
-        // Then check the secure BCrypt 'password_hash'
-        if (distributor.getPasswordHash() != null && 
-            passwordEncoder.matches(request.password(), distributor.getPasswordHash())) {
-            return distributor;
-        }
-
-        throw new IllegalArgumentException("Invalid email or password");
+        throw new BadCredentialsException("Invalid email or password");
     }
 
     public List<Distributor> findSubDistributors(UUID requesterId) {
@@ -93,7 +92,7 @@ public class DistributorService {
             throw new IllegalArgumentException("Distributor with same EUIN already exists");
         }
 
-        DistributorRole role = request.role() == null ? DistributorRole.MASTER_DISTRIBUTOR : request.role();
+        DistributorRole role = request.role() == null ? DistributorRole.SUB_DISTRIBUTOR : request.role();
         validateDistributorHierarchy(role, request.masterDistributorId());
 
         Distributor distributor = new Distributor();
@@ -152,12 +151,11 @@ public class DistributorService {
 
     private void validateDistributorHierarchy(DistributorRole role, UUID masterDistributorId) {
         if (role == DistributorRole.SUB_DISTRIBUTOR) {
-            if (masterDistributorId == null) {
-                throw new IllegalArgumentException("Sub distributor must have a masterDistributorId");
-            }
-            Distributor master = getDistributor(masterDistributorId);
-            if (master.getRole() != DistributorRole.MASTER_DISTRIBUTOR) {
-                throw new IllegalArgumentException("masterDistributorId must point to a master distributor");
+            if (masterDistributorId != null) {
+                Distributor master = getDistributor(masterDistributorId);
+                if (master.getRole() != DistributorRole.MASTER_DISTRIBUTOR) {
+                    throw new IllegalArgumentException("masterDistributorId must point to a master distributor");
+                }
             }
             return;
         }

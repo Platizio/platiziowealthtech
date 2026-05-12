@@ -1,5 +1,6 @@
 package com.platizio.wealthtech.domain;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.platizio.wealthtech.common.BaseEntity;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
@@ -54,8 +55,9 @@ public class Distributor extends BaseEntity {
     private String bankAccountHolderName;
     private Integer profileCompletionPercent = 0;
     private Boolean internalRm = Boolean.FALSE;
+
+    @JsonIgnore
     private String passwordHash;
-    private String password;
 
     public String getFullName() { return fullName; }
     public void setFullName(String fullName) { this.fullName = fullName; }
@@ -93,6 +95,4 @@ public class Distributor extends BaseEntity {
     public void setInternalRm(Boolean internalRm) { this.internalRm = internalRm; }
     public String getPasswordHash() { return passwordHash; }
     public void setPasswordHash(String passwordHash) { this.passwordHash = passwordHash; }
-    public String getPassword() { return password; }
-    public void setPassword(String password) { this.password = password; }
 }
