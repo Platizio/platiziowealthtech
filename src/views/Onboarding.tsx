@@ -5,7 +5,7 @@ import {
   Eye, EyeOff, Upload, X, Info, AlertCircle, MapPin, Briefcase,
   ShieldCheck,
 } from 'lucide-react';
-import { apiUrl } from '../config/api';
+import { apiFetch } from '../config/api';
 
 // ─── Password strength helpers ────────────────────────────────────────────────
 
@@ -418,7 +418,7 @@ export default function Onboarding({ onComplete, onBack }: { onComplete: () => v
         bankIfsc:              data.ifscCode.toUpperCase()   || undefined,
         bankAccountHolderName: data.accountHolderName.trim() || undefined,
       };
-      const res = await fetch(apiUrl('/distributors/signup'), {
+      const res = await apiFetch('/auth/signup', {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify(payload),
@@ -427,6 +427,7 @@ export default function Onboarding({ onComplete, onBack }: { onComplete: () => v
         const err = await res.json().catch(() => null);
         throw new Error(err?.message || `Server error: ${res.status}`);
       }
+      await apiFetch('/auth/logout', { method: 'POST' }).catch(() => undefined);
       onComplete();
     } catch (err: any) {
       setSubmitError(err.message || 'Something went wrong. Please try again.');

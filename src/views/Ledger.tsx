@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Info, CheckCircle2, ChevronRight, X, Search, RefreshCw, AlertCircle } from 'lucide-react';
-import { apiUrl } from '../config/api';
+import { apiFetch } from '../config/api';
 
 // ─── Colour maps ──────────────────────────────────────────────────────────────
 const categoryStyle: Record<string, string> = {
@@ -36,7 +36,7 @@ export default function Ledger({ userData }: { userData?: any }) {
     else setLoading(true);
     setError('');
     try {
-      const res = await fetch(apiUrl('/products/schemes'));
+      const res = await apiFetch('/products/schemes');
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       // Only show active schemes
@@ -246,7 +246,7 @@ function TransactionModal({ fund, userData, onClose }: { fund: any; userData?: a
           params.set('distributorId', userData.id);
         }
 
-        const res = await fetch(apiUrl(`/investors/search/transaction-eligible?${params.toString()}`));
+        const res = await apiFetch(`/investors/search/transaction-eligible?${params.toString()}`);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
         if (!cancelled) setInvestorResults(Array.isArray(data) ? data : []);

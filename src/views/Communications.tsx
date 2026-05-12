@@ -1,8 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { MessageSquare, Phone, Mail, Send, Link2, ChevronDown, Clock, Search } from 'lucide-react';
-import { API_BASE_URL } from '../config/api';
-
-const BASE = API_BASE_URL;
+import { apiFetch } from '../config/api';
 
 const COMM_TYPES = [
   { id: 'whatsapp', label: 'WhatsApp',  icon: MessageSquare, badge: 'bg-green-50 text-green-600' },
@@ -42,13 +40,11 @@ export default function Communications({ userData }: { userData?: any }) {
   useEffect(() => {
     if (!userData?.id) { setLoading(false); return; }
 
-    const token = userData.token || sessionStorage.getItem('token') || '';
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-    if (token) headers['Authorization'] = `Bearer ${token}`;
 
     Promise.all([
-      fetch(`${BASE}/investors/by-distributor/${userData.id}`, { headers }).then(r => r.ok ? r.json() : []),
-      fetch(`${BASE}/leads/distributor/${userData.id}`, { headers }).then(r => r.ok ? r.json() : []),
+      apiFetch(`/investors/by-distributor/${userData.id}`, { headers }).then(r => r.ok ? r.json() : []),
+      apiFetch(`/leads/distributor/${userData.id}`, { headers }).then(r => r.ok ? r.json() : []),
     ])
       .then(([investors, leads]) => {
         const inv = (Array.isArray(investors) ? investors : []).map((i: any) => ({

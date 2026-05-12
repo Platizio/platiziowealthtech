@@ -8,7 +8,7 @@ import {
 import {
   AreaChart as RechartsArea, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
 } from 'recharts';
-import { apiUrl } from '../config/api';
+import { apiFetch, apiUrl } from '../config/api';
 
 // ─── KYC status config ─────────────────────────────────────────────────────────
 const kycConfig: Record<string, { label: string; color: string; icon: React.ReactNode }> = {
@@ -109,7 +109,7 @@ export default function Investors({
           url = apiUrl(`/investors/search?${params.toString()}`);
         }
 
-        const res = await fetch(url);
+        const res = await apiFetch(url);
         const data = await res.json().catch(() => null);
         console.log('[Investors] API response:', {
           url,
@@ -320,7 +320,7 @@ function InvestorDetail({
   const [performanceData, setPerformanceData] = useState<any[]>([]);
 
   useEffect(() => {
-    fetch(apiUrl(`/orders/by-investor/${investor.id}`))
+    apiFetch(`/orders/by-investor/${investor.id}`)
       .then(res => res.ok ? res.json() : [])
       .then(orders => {
         let total = 0;

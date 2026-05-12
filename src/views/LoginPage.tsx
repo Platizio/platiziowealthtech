@@ -2,12 +2,10 @@ import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   Eye, EyeOff, ArrowLeft, AlertCircle, ShieldCheck,
-  CheckSquare, Square, Mail, KeyRound, ChevronLeft,
+  Mail, KeyRound, ChevronLeft,
   CheckCircle2, Smartphone, RefreshCw, MessageSquare, Check,
 } from 'lucide-react';
-import { apiUrl } from '../config/api';
-
-const REMEMBER_KEY = 'apex_remembered_email';
+import { apiFetch } from '../config/api';
 
 // ── Password strength (shown while typing on login too) ───────────────────────
 const PWD_CHECKS = [
@@ -80,10 +78,8 @@ export default function LoginPage({
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPwd, setShowPwd] = useState(false);
-  const [rememberMe, setRememberMe] = useState(false);
   const [pwError, setPwError] = useState('');
   const [pwLoading, setPwLoading] = useState(false);
-  const [users, setUsers] = useState<any[]>([]);
   /* ── Forgot state ───────────────────────────────────────────────────── */
   const [forgotMode, setForgotMode] = useState(false);
   const [forgotEmail, setForgotEmail] = useState('');
@@ -102,12 +98,6 @@ export default function LoginPage({
   const otpRefs = useRef<(HTMLInputElement | null)[]>([]);
 
   /* ── Effects ────────────────────────────────────────────────────────── */
-  // Pre-fill remembered email
-  useEffect(() => {
-    const saved = localStorage.getItem(REMEMBER_KEY);
-    if (saved) { setEmail(saved); setRememberMe(true); }
-  }, []);
-
   // Auto-focus first OTP box after OTP is sent
   useEffect(() => {
     if (otpStep === 'verify') {
@@ -121,26 +111,6 @@ export default function LoginPage({
     const t = setTimeout(() => setCountdown(c => c - 1), 1000);
     return () => clearTimeout(t);
   }, [countdown]);
-
-  /* ── Helpers: look up users ─────────────────────────────────────────── */
-  const getUsers = async (): Promise<any[]> => {
-    try {
-      const response = await fetch(apiUrl('/distributors'));
-      const data = await response.json();
-      console.log("Fetched data:", data);
-
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-
-      setUsers(data);
-      return data; // Return the data so it can be used immediately
-    }
-    catch (error) {
-      console.error('Error fetching users:', error);
-      return [];
-    }
-  };
 
   /* ── Password login ─────────────────────────────────────────────────── */
   const handlePasswordLogin = async () => {
@@ -156,37 +126,28 @@ export default function LoginPage({
     }
 
     setPwLoading(true);
-    console.log("login:these are the login credentioals ", em, pwd);
 
     try {
-      // 1. Fetch distributors from the backend
-      const allDistributors = await getUsers();
+      const response = await apiFetch('/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: em, password: pwd }),
+      });
+      const data = await response.json().catch(() => null);
+      console.log('[Login] API response:', {
+        status: response.status,
+        ok: response.ok,
+        data,
+      });
 
-      // 2. Check whether email and password exist in the returned array
-      const user = allDistributors.filter(
-        (u: any) => u?.email?.toLowerCase() === em && u?.password === pwd
-      );
+      if (!response.ok) {
+        throw new Error(data?.message || 'Incorrect email or password. Please try again.');
+      }
 
-      // 3. Keep the timeout for the UI loading effect, but resolve login inside it
-      setTimeout(() => {
-        console.log("LoginPage.tsx -> setTimeout execution. Found users array:", user);
-        console.log("LoginPage.tsx -> First matching user:", user[0]);
-
-        if (user.length > 0) {
-          if (rememberMe) localStorage.setItem(REMEMBER_KEY, em);
-          else localStorage.removeItem(REMEMBER_KEY);
-          
-          console.log("LoginPage.tsx -> Calling onLogin with:", user[0]);
-          onLogin(user[0]);
-        } else {
-          console.warn("LoginPage.tsx -> No matching user found. Returning error.");
-          setPwError('Incorrect email or password. Please try again.');
-          setPwLoading(false);
-        }
-      }, 700);
+      onLogin(data);
     } catch (error) {
       console.error('Login failed:', error);
-      setPwError('Failed to fetch data. Please try again later.');
+      setPwError(error instanceof Error ? error.message : 'Login failed. Please try again.');
       setPwLoading(false);
     }
   };
@@ -196,12 +157,9 @@ export default function LoginPage({
     const em = forgotEmail.trim().toLowerCase();
     if (!em || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(em)) return;
     setForgotStatus('loading');
-    setTimeout(async () => {
-      const users = await getUsers();
-      // Using arn_number based on your DB schema
-      const match = users.find(u => u.email?.toLowerCase() === em);
-      if (match) { setRecoveredArn(match.arn_number || match.arn); setForgotStatus('sent'); }
-      else setForgotStatus('notfound');
+    setTimeout(() => {
+      setRecoveredArn('');
+      setForgotStatus('sent');
     }, 800);
   };
 
@@ -215,23 +173,8 @@ export default function LoginPage({
     const id = otpId.trim();
     if (!id) { setOtpError('Please enter your email or mobile number.'); return; }
     setOtpLoading(true);
-    setTimeout(async () => {
-      const normalised = id.toLowerCase();
-      const mobile = id.replace(/^\+91\s?/, '').replace(/\s/g, '');
-      const users = await getUsers();
-      // Check mobile_number as defined in your DB schema
-      const user = users.find(
-        (u: any) => u?.email?.toLowerCase() === normalised || u?.mobile_number === mobile || u?.mobile === mobile
-      );
-      if (user) {
-        const code = Math.floor(100000 + Math.random() * 900000).toString();
-        setOtpGenerated(code);
-        setOtpUser(user);
-        setOtpStep('verify');
-        setCountdown(30);
-      } else {
-        setOtpError('No account found. Check your email / mobile, or sign up.');
-      }
+    setTimeout(() => {
+      setOtpError('OTP login is not connected to the secure backend yet. Please use password login.');
       setOtpLoading(false);
     }, 800);
   };
@@ -495,7 +438,7 @@ export default function LoginPage({
                     <span className="text-blue-400 mt-0.5 text-sm">ℹ</span>
                     <div className="text-xs text-blue-700 leading-relaxed">
                       <p className="font-semibold mb-0.5">Demo credentials</p>
-                      <p>Email: <span className="font-mono font-bold">aditya@apexwealth.in</span></p>
+                      <p>Email: <span className="font-mono font-bold">alice@example.com</span></p>
                       <p>Password: <span className="font-mono font-bold">Apex@2024</span></p>
                     </div>
                   </div>
@@ -545,19 +488,6 @@ export default function LoginPage({
                         {showPwd ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
                       </button>
                     </div>
-                  </div>
-
-                  {/* Remember me */}
-                  <div className="mb-7">
-                    <button type="button" onClick={() => setRememberMe(p => !p)}
-                      className="flex items-center gap-2.5 group select-none">
-                      {rememberMe
-                        ? <CheckSquare className="w-4 h-4 text-blue-600" />
-                        : <Square className="w-4 h-4 text-slate-300 group-hover:text-slate-400 transition-colors" />}
-                      <span className="text-sm text-slate-600 group-hover:text-slate-800 transition-colors">
-                        Remember me on this device
-                      </span>
-                    </button>
                   </div>
 
                   {/* Submit */}

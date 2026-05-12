@@ -1,8 +1,6 @@
 import React, { useState } from 'react';
 import { FileText, Download, Search, Filter } from 'lucide-react';
-import { API_BASE_URL } from '../config/api';
-
-const BASE = API_BASE_URL;
+import { apiFetch } from '../config/api';
 
 const REPORT_TYPES = [
   { id: 'investors',    label: 'Investor Report',         desc: 'All investors with KYC and status details' },
@@ -84,10 +82,7 @@ export default function Reports({ userData }: { userData?: any }) {
   const [statusFilter, setStatusFilter] = useState('');
 
   const getHeaders = () => {
-    const token = userData?.token || sessionStorage.getItem('token') || '';
-    const h: Record<string, string> = { 'Content-Type': 'application/json' };
-    if (token) h['Authorization'] = `Bearer ${token}`;
-    return h;
+    return { 'Content-Type': 'application/json' };
   };
 
   const fetchReport = (type: string) => {
@@ -99,15 +94,15 @@ export default function Reports({ userData }: { userData?: any }) {
     setStatusFilter('');
 
     const urlMap: Record<string, string> = {
-      investors:    `${BASE}/investors/by-distributor/${userData.id}`,
-      transactions: `${BASE}/orders/by-distributor/${userData.id}`,
-      sip:          `${BASE}/orders/by-distributor/${userData.id}`,
-      leads:        `${BASE}/leads/distributor/${userData.id}`,
-      actions:      `${BASE}/dashboard/distributor/${userData.id}/actions`,
-      aum:          `${BASE}/orders/by-distributor/${userData.id}`,
+      investors:    `/investors/by-distributor/${userData.id}`,
+      transactions: `/orders/by-distributor/${userData.id}`,
+      sip:          `/orders/by-distributor/${userData.id}`,
+      leads:        `/leads/distributor/${userData.id}`,
+      actions:      `/dashboard/distributor/${userData.id}/actions`,
+      aum:          `/orders/by-distributor/${userData.id}`,
     };
 
-    fetch(urlMap[type], { headers: getHeaders() })
+    apiFetch(urlMap[type], { headers: getHeaders() })
       .then(r => r.ok ? r.json() : [])
       .then(d => {
         let rows = Array.isArray(d) ? d : (d?.items ?? d?.actions ?? []);

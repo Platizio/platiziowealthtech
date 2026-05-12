@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { motion } from 'motion/react';
 import { CheckCircle2, XCircle, AlertCircle, Clock, RefreshCw } from 'lucide-react';
-import { apiUrl } from '../config/api';
+import { apiFetch } from '../config/api';
 
 type NotifType = 'success' | 'error' | 'warning' | 'info';
 
@@ -66,18 +66,14 @@ export default function Notifications({ userData }: { userData?: any }) {
   useEffect(() => {
     if (!userData?.id) return;
 
-    const token = userData?.token || sessionStorage.getItem('token') || '';
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
     };
-    if (token) {
-      headers['Authorization'] = `Bearer ${token}`;
-    }
 
     const fetchNotifications = async () => {
       try {
         setLoading(true);
-        const res = await fetch(apiUrl(`/notifications/distributor/${userData.id}`), { headers });
+        const res = await apiFetch(`/notifications/distributor/${userData.id}`, { headers });
         if (res.ok) {
           const data = await res.json();
           const mapped: Notif[] = data.map((n: any) => {
@@ -118,11 +114,9 @@ export default function Notifications({ userData }: { userData?: any }) {
     setNotifications(prev => prev.map(x => x.id === id ? { ...x, read: true } : x));
 
     try {
-      const token = userData?.token || sessionStorage.getItem('token') || '';
       const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-      if (token) headers['Authorization'] = `Bearer ${token}`;
 
-      await fetch(apiUrl(`/notifications/${id}/read`), {
+      await apiFetch(`/notifications/${id}/read`, {
         method: 'PATCH',
         headers
       });

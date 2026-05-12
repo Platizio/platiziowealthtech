@@ -32,11 +32,19 @@ import ProductMgmt from './views/ProductMgmt';
 import InvestorMgmt from './views/InvestorMgmt';
 
 import AppLayout from './layout/AppLayout';
-import { apiUrl } from './config/api';
+import { apiFetch } from './config/api';
 
 const ADMIN_ROLES = new Set(['ADMIN', 'MASTER_DISTRIBUTOR']);
 
 const normalizeRole = (role?: string) => role?.trim().toUpperCase() || '';
+
+const normalizeAuthUser = (user: any) => {
+  if (!user) return null;
+  return {
+    ...user,
+    id: user.id || user.distributorId,
+  };
+};
 
 export default function App() {
   const [userSession, setUserSession] = useState<any>(null);
@@ -44,24 +52,18 @@ export default function App() {
   const navigate = useNavigate();
 
   useEffect(() => {
-    // Check if distributorId cookie exists
-    const match = document.cookie.match(new RegExp('(^| )distributorId=([^;]+)'));
-    if (match && match[2]) {
-      const id = match[2];
-      fetch(apiUrl(`/distributors/${id}`))
-        .then(res => {
-          if (res.ok) return res.json();
-          throw new Error('Failed to fetch user');
-        })
-        .then(user => setUserSession(user))
-        .catch(err => {
-          console.error('Session restore failed:', err);
-          document.cookie = 'distributorId=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;';
-        })
-        .finally(() => setLoadingSession(false));
-    } else {
-      setLoadingSession(false);
-    }
+    apiFetch('/auth/me')
+      .then(res => {
+        if (res.status === 401 || res.status === 403) return null;
+        if (res.ok) return res.json();
+        throw new Error('Failed to restore session');
+      })
+      .then(user => setUserSession(normalizeAuthUser(user)))
+      .catch(err => {
+        console.error('Session restore failed:', err);
+        setUserSession(null);
+      })
+      .finally(() => setLoadingSession(false));
   }, []);
 
   const getUserData = () => {
@@ -74,18 +76,19 @@ export default function App() {
 
   const handleLoginSuccess = (user?: any) => {
     console.log("App.tsx -> handleLoginSuccess called. Received user:", user);
-    if (user && user.id) {
-      setUserSession(user);
-      // Set cookie to expire in 24 hours
-      document.cookie = `distributorId=${user.id}; path=/; max-age=86400`;
+    const normalizedUser = normalizeAuthUser(user);
+    if (normalizedUser?.id) {
+      setUserSession(normalizedUser);
     }
     navigate('/distributor/dashboard');
   };
 
   const handleSignOut = () => {
     console.log("App.tsx -> handleSignOut called. Clearing user session.");
+    apiFetch('/auth/logout', { method: 'POST' }).catch(err => {
+      console.error('Logout request failed:', err);
+    });
     setUserSession(null);
-    document.cookie = 'distributorId=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;';
     navigate('/');
   };
 

@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Search, Filter, Upload, UserPlus, X, CheckCircle2, Clock, XCircle, AlertCircle, ChevronDown, Download } from 'lucide-react';
-import { apiUrl } from '../config/api';
+import { apiFetch, apiUrl } from '../config/api';
 
 interface Investor {
   id: number | string;
@@ -90,7 +90,7 @@ export default function InvestorMgmt({ userData }: { userData?: any }) {
           url = apiUrl(`/distributors/sub-distributors?${params.toString()}`);
         }
 
-        const res = await fetch(url);
+        const res = await apiFetch(url);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
         if (!cancelled) setDistributors(Array.isArray(data) ? data : []);
@@ -123,7 +123,7 @@ export default function InvestorMgmt({ userData }: { userData?: any }) {
           url = apiUrl(`/investors/search?${params.toString()}`);
         }
 
-        const res = await fetch(url);
+        const res = await apiFetch(url);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
         if (!cancelled) setInvestors((Array.isArray(data) ? data : []).map(mapInvestor));

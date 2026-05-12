@@ -6,7 +6,7 @@ import {
   TrendingUp, TrendingDown, ChevronRight,
   Briefcase, Activity, Target,
 } from 'lucide-react';
-import { apiUrl } from '../config/api';
+import { apiFetch } from '../config/api';
 
 /* ── Props ──────────────────────────────────────────────────────────────── */
 interface DashboardProps {
@@ -32,18 +32,16 @@ export default function Dashboard({ onNavigate, userData }: DashboardProps) {
 
   React.useEffect(() => {
     if (!userData?.id) return;
-    const token = userData.token || sessionStorage.getItem('token') || '';
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-    if (token) headers['Authorization'] = `Bearer ${token}`;
 
     const fetchDashboard = async () => {
       try {
         const [ordersRes, investorsRes, schemesRes, leadsRes, onboardingRes] = await Promise.all([
-          fetch(apiUrl(`/orders/by-distributor/${userData.id}`), { headers }),
-          fetch(apiUrl(`/investors/by-distributor/${userData.id}`), { headers }),
-          fetch(apiUrl('/products/schemes'), { headers }),
-          fetch(apiUrl(`/leads/distributor/${userData.id}`), { headers }),
-          fetch(apiUrl(`/dashboard/distributor/${userData.id}/onboarding`), { headers })
+          apiFetch(`/orders/by-distributor/${userData.id}`, { headers }),
+          apiFetch(`/investors/by-distributor/${userData.id}`, { headers }),
+          apiFetch('/products/schemes', { headers }),
+          apiFetch(`/leads/distributor/${userData.id}`, { headers }),
+          apiFetch(`/dashboard/distributor/${userData.id}/onboarding`, { headers })
         ]);
 
         let orders: any[] = [], investors: any[] = [], schemes: any[] = [], leads: any[] = [], onboarding: any = { kycPending: [], bankPending: [], readyToInvest: [] };

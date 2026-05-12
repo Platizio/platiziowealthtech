@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Search, Filter, ChevronLeft, CheckCircle2, Clock, XCircle, AlertCircle, RefreshCw } from 'lucide-react';
-import { apiUrl } from '../config/api';
+import { apiFetch } from '../config/api';
 
 type StatusKey = 'Successful' | 'Processing' | 'Submitted' | 'Payment Pending' | 'Pending Investor Action' | 'Failed' | 'Retry Available' | 'Draft' | 'Created' | 'SUCCESSFUL' | 'FAILED' | 'PENDING_PAYMENT' | 'DRAFT';
 
@@ -51,22 +51,18 @@ export default function Transactions({ userData }: { userData?: any }) {
   useEffect(() => {
     if (!userData?.id) return;
     
-    const token = userData?.token || sessionStorage.getItem('token') || '';
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
     };
-    if (token) {
-      headers['Authorization'] = `Bearer ${token}`;
-    }
 
     const fetchData = async () => {
       try {
         setLoading(true);
         // Fetch orders, investors, and schemes to map data correctly
         const [ordersRes, investorsRes, schemesRes] = await Promise.all([
-          fetch(apiUrl(`/orders/by-distributor/${userData.id}`), { headers }),
-          fetch(apiUrl(`/investors/by-distributor/${userData.id}`), { headers }),
-          fetch(apiUrl('/products/schemes'), { headers })
+          apiFetch(`/orders/by-distributor/${userData.id}`, { headers }),
+          apiFetch(`/investors/by-distributor/${userData.id}`, { headers }),
+          apiFetch('/products/schemes', { headers })
         ]);
 
         const orders = ordersRes.ok ? await ordersRes.json() : [];

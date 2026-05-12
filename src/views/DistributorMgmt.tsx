@@ -4,7 +4,7 @@ import { Search, Filter, X, CheckCircle2, Clock, XCircle, ChevronDown } from 'lu
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer
 } from 'recharts';
-import { apiUrl } from '../config/api';
+import { apiFetch, apiUrl } from '../config/api';
 
 interface Distributor {
   id: number;
@@ -98,7 +98,7 @@ export default function DistributorMgmt({ userData }: { userData: any }) {
           url = apiUrl(`/distributors/sub-distributors?${params.toString()}`);
         }
 
-        const response = await fetch(url);
+        const response = await apiFetch(url);
         if (!response.ok) throw new Error('Failed to fetch distributors');
         const data = await response.json();
 
