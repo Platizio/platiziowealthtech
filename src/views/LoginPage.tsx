@@ -80,6 +80,7 @@ export default function LoginPage({
   const [showPwd, setShowPwd] = useState(false);
   const [pwError, setPwError] = useState('');
   const [pwLoading, setPwLoading] = useState(false);
+  const [approvalPopup, setApprovalPopup] = useState('');
   /* ── Forgot state ───────────────────────────────────────────────────── */
   const [forgotMode, setForgotMode] = useState(false);
   const [forgotEmail, setForgotEmail] = useState('');
@@ -115,12 +116,23 @@ export default function LoginPage({
   /* ── Password login ─────────────────────────────────────────────────── */
   const handlePasswordLogin = async () => {
     setPwError('');
+    setApprovalPopup('');
 
     const em = email.trim().toLowerCase();
     const pwd = password;
 
-    if (!em || !pwd) { setPwError('Please enter your Email Address and Password.'); return; }
+    console.log('[Login] Password login started:', {
+      email: em,
+      hasPassword: Boolean(pwd),
+    });
+
+    if (!em || !pwd) {
+      console.warn('[Login] Validation failed: missing email or password');
+      setPwError('Please enter your Email Address and Password.');
+      return;
+    }
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(em)) {
+      console.warn('[Login] Validation failed: invalid email format', { email: em });
       setPwError('Email address format is invalid (e.g. you@example.com).');
       return;
     }
@@ -128,6 +140,7 @@ export default function LoginPage({
     setPwLoading(true);
 
     try {
+      console.log('[Login] Sending /auth/login request');
       const response = await apiFetch('/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -141,9 +154,25 @@ export default function LoginPage({
       });
 
       if (!response.ok) {
+        if (data?.error === 'ACCOUNT_NOT_APPROVED' || data?.accountStatus === 'PENDING_APPROVAL') {
+          const message = data?.message || 'Approval remaining. Your account is pending admin approval.';
+          console.warn('[Login] Login blocked: account not approved', {
+            status: response.status,
+            accountStatus: data?.accountStatus,
+            message,
+          });
+          setApprovalPopup(message);
+          setPwLoading(false);
+          return;
+        }
         throw new Error(data?.message || 'Incorrect email or password. Please try again.');
       }
 
+      console.log('[Login] Login successful. HttpOnly cookie should now be set by backend.', {
+        distributorId: data?.distributorId,
+        role: data?.role,
+        email: data?.email,
+      });
       onLogin(data);
     } catch (error) {
       console.error('Login failed:', error);
@@ -156,10 +185,12 @@ export default function LoginPage({
   const handleForgotSubmit = () => {
     const em = forgotEmail.trim().toLowerCase();
     if (!em || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(em)) return;
+    console.log('[Login] Forgot password requested:', { email: em });
     setForgotStatus('loading');
     setTimeout(() => {
       setRecoveredArn('');
       setForgotStatus('sent');
+      console.log('[Login] Forgot password demo flow completed');
     }, 800);
   };
 
@@ -172,10 +203,12 @@ export default function LoginPage({
   const handleSendOtp = () => {
     const id = otpId.trim();
     if (!id) { setOtpError('Please enter your email or mobile number.'); return; }
+    console.log('[Login] OTP login requested:', { identifier: id });
     setOtpLoading(true);
     setTimeout(() => {
       setOtpError('OTP login is not connected to the secure backend yet. Please use password login.');
       setOtpLoading(false);
+      console.warn('[Login] OTP login stopped: backend OTP endpoint is not connected yet');
     }, 800);
   };
 
@@ -384,6 +417,24 @@ export default function LoginPage({
   ════════════════════════════════════════════════════════════════════ */
   return (
     <div className="min-h-screen flex">
+      {approvalPopup && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/40 px-4">
+          <div className="w-full max-w-sm rounded-2xl bg-white p-6 shadow-xl">
+            <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-amber-100 text-amber-600">
+              <AlertCircle className="h-6 w-6" />
+            </div>
+            <h2 className="mb-2 text-lg font-semibold text-slate-900">Approval remaining</h2>
+            <p className="mb-6 text-sm leading-6 text-slate-600">{approvalPopup}</p>
+            <button
+              type="button"
+              onClick={() => setApprovalPopup('')}
+              className="w-full rounded-xl bg-[#0B1B3E] px-4 py-3 text-sm font-semibold text-white transition-colors hover:bg-[#1A3066]"
+            >
+              Okay
+            </button>
+          </div>
+        </div>
+      )}
       {LeftPanel}
 
       <div className="flex-1 bg-white flex flex-col">
@@ -445,7 +496,7 @@ export default function LoginPage({
 
                   {/* Error */}
                   <AnimatePresence>
-                    {pwError && (
+                    {pwError && !approvalPopup && (
                       <motion.div initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }}
                         className="mb-5 flex items-start gap-2.5 bg-red-50 border border-red-100 rounded-xl px-4 py-3">
                         <AlertCircle className="w-4 h-4 text-red-500 flex-shrink-0 mt-0.5" />
@@ -460,7 +511,7 @@ export default function LoginPage({
                       Email Address <span className="text-red-400">*</span>
                     </label>
                     <input type="email" value={email}
-                      onChange={e => { setEmail(e.target.value); setPwError(''); }}
+                      onChange={e => { setEmail(e.target.value); setPwError(''); setApprovalPopup(''); }}
                       onKeyDown={e => e.key === 'Enter' && handlePasswordLogin()}
                       placeholder="you@example.com"
                       className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm focus:ring-2 focus:ring-blue-100 focus:border-blue-500 outline-none transition-all" />
@@ -479,7 +530,7 @@ export default function LoginPage({
                     </div>
                     <div className="relative">
                       <input type={showPwd ? 'text' : 'password'} value={password}
-                        onChange={e => { setPassword(e.target.value); setPwError(''); }}
+                        onChange={e => { setPassword(e.target.value); setPwError(''); setApprovalPopup(''); }}
                         onKeyDown={e => e.key === 'Enter' && handlePasswordLogin()}
                         placeholder="Enter your password"
                         className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 pr-11 text-sm focus:ring-2 focus:ring-blue-100 focus:border-blue-500 outline-none transition-all" />
