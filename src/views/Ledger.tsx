@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Info, CheckCircle2, ChevronRight, X, Search, RefreshCw, AlertCircle } from 'lucide-react';
+import { Info, CheckCircle2, ChevronLeft, ChevronRight, X, Search, RefreshCw, AlertCircle } from 'lucide-react';
 import { apiFetch } from '../config/api';
 
 // ─── Colour maps ──────────────────────────────────────────────────────────────
@@ -15,9 +15,23 @@ const categoryStyle: Record<string, string> = {
 
 const productTypeStyle: Record<string, string> = {
   MF:    'bg-blue-50 text-blue-600',
+  SIF:   'bg-amber-50 text-amber-700',
   ETF:   'bg-violet-50 text-violet-700',
   BOND:  'bg-emerald-50 text-emerald-700',
   OTHER: 'bg-slate-100 text-slate-500',
+};
+
+const LIVE_SCHEME_SYNC_INTERVAL_MS = 30 * 60 * 1000;
+const LIVE_SCHEME_SYNC_KEY = 'platizio:fundSchemes:lastLiveSync:v2';
+const PAGE_SIZE = 12;
+const ASSET_FILTERS = ['All', 'MF', 'SIF'] as const;
+type AssetFilter = typeof ASSET_FILTERS[number];
+
+const getAssetClass = (scheme: any): Exclude<AssetFilter, 'All'> => {
+  const productType = String(scheme.productType || '').toUpperCase();
+  const category = String(scheme.category || '').toUpperCase();
+  const name = String(scheme.schemeName || '').toUpperCase();
+  return productType.includes('SIF') || category.includes('SIF') || name.includes('SIF') ? 'SIF' : 'MF';
 };
 
 // ─── Ledger component ─────────────────────────────────────────────────────────
@@ -26,49 +40,142 @@ export default function Ledger({ userData }: { userData?: any }) {
   const [loading, setLoading]           = useState(true);
   const [refreshing, setRefreshing]     = useState(false);
   const [error, setError]               = useState('');
+  const [assetFilter, setAssetFilter]   = useState<AssetFilter>('All');
   const [categoryFilter, setCategoryFilter] = useState('All');
   const [typeFilter, setTypeFilter]     = useState('All');
   const [search, setSearch]             = useState('');
+  const [page, setPage]                 = useState(1);
   const [investModal, setInvestModal]   = useState<any | null>(null);
+  const refreshInFlightRef = useRef(false);
+
+  const readJsonSafely = async (response: Response) => {
+    const text = await response.text();
+    if (!text) return null;
+    try {
+      return JSON.parse(text);
+    } catch {
+      return text;
+    }
+  };
+
+  const shouldSyncLiveOnLoad = () => {
+    const lastSync = Number(window.localStorage.getItem(LIVE_SCHEME_SYNC_KEY) || 0);
+    return !lastSync || Date.now() - lastSync >= LIVE_SCHEME_SYNC_INTERVAL_MS;
+  };
 
   const fetchSchemes = async (isRefresh = false) => {
+    if (isRefresh && refreshInFlightRef.current) return;
+    if (isRefresh) refreshInFlightRef.current = true;
     if (isRefresh) setRefreshing(true);
     else setLoading(true);
     setError('');
+    console.groupCollapsed('[Cybrilla Workflow] Display fund schemes');
+    console.log('frontend_route=', '/distributor/ledger');
+    console.log('frontend_request=', isRefresh ? 'POST /api/v1/products/schemes/refresh' : 'GET /api/v1/products/schemes');
+    console.log('backend_expected_external_call=', isRefresh ? 'GET https://s.finprim.com/v2/mf_scheme_plans/cybrillapoa?expand=mf_scheme,mf_fund&page=0&size=100' : 'none; using locally cached schemes');
+    console.log('frontend_note=', 'Browser calls Platizio backend only. Backend uses the currently valid server-side bearer token and never exposes credentials to the frontend.');
+
     try {
-      const res = await apiFetch('/products/schemes');
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
+      const res = await apiFetch(isRefresh ? '/products/schemes/refresh' : '/products/schemes', { method: isRefresh ? 'POST' : 'GET' });
+      const data = await readJsonSafely(res);
+      console.log('frontend_response=', {
+        status: res.status,
+        ok: res.ok,
+        count: Array.isArray(data) ? data.length : undefined,
+        sample: Array.isArray(data) ? data.slice(0, 3) : data,
+      });
+
+      if (!res.ok) throw new Error(typeof data === 'string' ? data : data?.message || `HTTP ${res.status}`);
       // Only show active schemes
       const active = (Array.isArray(data) ? data : []).filter((s: any) => s.active !== false);
       setSchemes(active);
+      setPage(1);
+
+      if (isRefresh) {
+        window.localStorage.setItem(LIVE_SCHEME_SYNC_KEY, String(Date.now()));
+      }
+
+      console.log('workflow_status=', 'completed');
     } catch (e: any) {
       console.error('Error fetching product schemes:', e);
-      setError('Failed to load products. Please try again.');
+      console.error('workflow_status=', 'failed');
+      if (isRefresh) {
+        try {
+          console.log('fallback_request=', 'GET /api/v1/products/schemes');
+          const cachedRes = await apiFetch('/products/schemes');
+          const cachedData = cachedRes.ok ? await cachedRes.json() : [];
+          const cachedActive = (Array.isArray(cachedData) ? cachedData : []).filter((s: any) => s.active !== false);
+          setSchemes(cachedActive);
+          if (cachedActive.length > 0) {
+            setError('Showing locally cached products because live Cybrilla fetch failed.');
+          } else {
+            setError('Failed to refresh products from Cybrilla. Please try again later.');
+          }
+        } catch (fallbackError) {
+          console.error('Fallback product scheme fetch failed:', fallbackError);
+          setError('Failed to refresh products from Cybrilla. Please try again later.');
+        }
+      } else {
+        setError('Failed to load cached products. Please try again.');
+      }
     } finally {
+      console.groupEnd();
+      refreshInFlightRef.current = false;
       setLoading(false);
       setRefreshing(false);
     }
   };
 
-  useEffect(() => { fetchSchemes(); }, []);
+  useEffect(() => {
+    fetchSchemes(shouldSyncLiveOnLoad());
+  }, []);
+
+  useEffect(() => {
+    setPage(1);
+  }, [assetFilter, categoryFilter, typeFilter, search]);
 
   // Derived filter options
   const categories = ['All', ...Array.from(new Set(schemes.map(s => s.category).filter(Boolean)))];
   const types      = ['All', ...Array.from(new Set(schemes.map(s => s.productType).filter(Boolean)))];
+  const assetCounts = ASSET_FILTERS.reduce((counts, filter) => {
+    counts[filter] = filter === 'All'
+      ? schemes.length
+      : schemes.filter(s => getAssetClass(s) === filter).length;
+    return counts;
+  }, {} as Record<AssetFilter, number>);
 
   const filtered = schemes.filter(s => {
     const name = s.schemeName || '';
     const amc  = s.amcName   || '';
     const code = s.externalSchemeCode || '';
-    const matchSearch   = !search
-      || name.toLowerCase().includes(search.toLowerCase())
-      || amc.toLowerCase().includes(search.toLowerCase())
-      || code.toLowerCase().includes(search.toLowerCase());
+    const searchTerm = search.trim().toLowerCase();
+    const matchSearch   = !searchTerm
+      || name.toLowerCase().includes(searchTerm)
+      || amc.toLowerCase().includes(searchTerm)
+      || code.toLowerCase().includes(searchTerm);
+    const matchAsset    = assetFilter    === 'All' || getAssetClass(s) === assetFilter;
     const matchCategory = categoryFilter === 'All' || s.category   === categoryFilter;
     const matchType     = typeFilter      === 'All' || s.productType === typeFilter;
-    return matchSearch && matchCategory && matchType;
+    return matchSearch && matchAsset && matchCategory && matchType;
   });
+
+  const filtersActive = assetFilter !== 'All' || categoryFilter !== 'All' || typeFilter !== 'All' || search.trim() !== '';
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const currentPage = Math.min(page, totalPages);
+  const pageStart = (currentPage - 1) * PAGE_SIZE;
+  const paginated = filtered.slice(pageStart, pageStart + PAGE_SIZE);
+  const pageEnd = Math.min(pageStart + paginated.length, filtered.length);
+  const firstPageButton = Math.min(Math.max(1, currentPage - 2), Math.max(1, totalPages - 4));
+  const pageButtons = Array.from({ length: Math.min(5, totalPages) }, (_, index) => firstPageButton + index)
+    .filter(pageNumber => pageNumber <= totalPages);
+
+  const clearFilters = () => {
+    setAssetFilter('All');
+    setCategoryFilter('All');
+    setTypeFilter('All');
+    setSearch('');
+    setPage(1);
+  };
 
   return (
     <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="p-8">
@@ -88,13 +195,31 @@ export default function Ledger({ userData }: { userData?: any }) {
             className="flex items-center gap-2 px-3 py-2 text-xs font-semibold bg-white border border-slate-200 text-slate-600 rounded-lg hover:bg-slate-50 transition-colors disabled:opacity-50"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? 'animate-spin' : ''}`} />
-            Refresh
+            {refreshing ? 'Syncing...' : 'Sync from Cybrilla'}
           </button>
         </div>
       </div>
 
       {/* Search + filter bar */}
       <div className="flex flex-wrap gap-3 mb-6 items-center">
+        <div className="flex bg-white border border-slate-200 rounded-lg p-1">
+          {ASSET_FILTERS.map(filter => (
+            <button
+              key={filter}
+              onClick={() => setAssetFilter(filter)}
+              className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-md transition-colors ${
+                assetFilter === filter
+                  ? 'bg-[#0B1B3E] text-white'
+                  : 'text-slate-600 hover:bg-slate-50'
+              }`}
+            >
+              <span>{filter === 'All' ? 'All' : filter}</span>
+              <span className={`text-[10px] ${assetFilter === filter ? 'text-white/75' : 'text-slate-400'}`}>
+                {assetCounts[filter]}
+              </span>
+            </button>
+          ))}
+        </div>
         <div className="relative flex-1 min-w-[220px] max-w-sm">
           <Search className="w-4 h-4 absolute left-3 top-2.5 text-slate-400" />
           <input
@@ -152,14 +277,34 @@ export default function Ledger({ userData }: { userData?: any }) {
           <div className="w-14 h-14 rounded-2xl bg-slate-100 flex items-center justify-center mb-4">
             <Info className="w-6 h-6 text-slate-300" />
           </div>
-          <p className="text-base font-semibold text-slate-500">No products available</p>
-          <p className="text-sm mt-1">Products will appear here once activated by the admin team</p>
+          <p className="text-base font-semibold text-slate-500">
+            {filtersActive ? 'No products match these filters' : 'No products available'}
+          </p>
+          <p className="text-sm mt-1">
+            {filtersActive
+              ? 'Try a different MF/SIF, category, type, or search filter.'
+              : 'No cached products found. Sync once from Cybrilla to populate the catalog.'}
+          </p>
+          <button
+            onClick={() => (filtersActive ? clearFilters() : fetchSchemes(true))}
+            disabled={!filtersActive && refreshing}
+            className="mt-5 flex items-center gap-2 px-4 py-2 text-sm font-semibold bg-[#0B1B3E] text-white rounded-lg hover:bg-[#1A3066] transition-colors disabled:opacity-50"
+          >
+            {filtersActive ? (
+              <X className="w-4 h-4" />
+            ) : (
+              <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />
+            )}
+            {filtersActive ? 'Clear filters' : refreshing ? 'Syncing...' : 'Sync from Cybrilla'}
+          </button>
         </div>
       ) : (
+        <>
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {filtered.map(scheme => {
+          {paginated.map(scheme => {
+            const assetClass = getAssetClass(scheme);
             const catCls  = categoryStyle[scheme.category]    || categoryStyle['Other'];
-            const typeCls = productTypeStyle[scheme.productType] || productTypeStyle['OTHER'];
+            const typeCls = productTypeStyle[scheme.productType] || productTypeStyle[assetClass] || productTypeStyle['OTHER'];
             return (
               <div
                 key={scheme.id}
@@ -168,7 +313,10 @@ export default function Ledger({ userData }: { userData?: any }) {
                 {/* Badges */}
                 <div className="flex justify-between items-start mb-4">
                   <div className="flex gap-1.5 flex-wrap">
-                    {scheme.productType && (
+                    <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${productTypeStyle[assetClass]}`}>
+                      {assetClass}
+                    </span>
+                    {scheme.productType && scheme.productType !== assetClass && (
                       <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${typeCls}`}>
                         {scheme.productType}
                       </span>
@@ -207,6 +355,49 @@ export default function Ledger({ userData }: { userData?: any }) {
             );
           })}
         </div>
+        {filtered.length > PAGE_SIZE && (
+          <div className="mt-6 flex flex-col sm:flex-row items-center justify-between gap-3">
+            <p className="text-xs text-slate-500">
+              Showing <span className="font-semibold text-slate-700">{pageStart + 1}</span>
+              {' '}to <span className="font-semibold text-slate-700">{pageEnd}</span>
+              {' '}of <span className="font-semibold text-slate-700">{filtered.length}</span> products
+            </p>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setPage(Math.max(1, currentPage - 1))}
+                disabled={currentPage === 1}
+                className="flex items-center gap-1 px-3 py-2 text-xs font-semibold bg-white border border-slate-200 text-slate-600 rounded-lg hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                <ChevronLeft className="w-3.5 h-3.5" />
+                Prev
+              </button>
+              <div className="flex items-center gap-1">
+                {pageButtons.map(pageNumber => (
+                  <button
+                    key={pageNumber}
+                    onClick={() => setPage(pageNumber)}
+                    className={`w-8 h-8 text-xs font-semibold rounded-lg transition-colors ${
+                      currentPage === pageNumber
+                        ? 'bg-[#0B1B3E] text-white'
+                        : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
+                    }`}
+                  >
+                    {pageNumber}
+                  </button>
+                ))}
+              </div>
+              <button
+                onClick={() => setPage(Math.min(totalPages, currentPage + 1))}
+                disabled={currentPage === totalPages}
+                className="flex items-center gap-1 px-3 py-2 text-xs font-semibold bg-white border border-slate-200 text-slate-600 rounded-lg hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                Next
+                <ChevronRight className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          </div>
+        )}
+        </>
       )}
 
       {/* Transaction modal */}

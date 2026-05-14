@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Search, Filter, Trash2, X, ChevronDown, Lock, Rocket, Eye, EyeOff } from 'lucide-react';
+import { Search, Filter, Trash2, X, ChevronDown, Lock, Rocket, Eye, EyeOff, RefreshCw, AlertCircle } from 'lucide-react';
 import { Product } from '../data/products';
+import { apiFetch } from '../config/api';
 
 // ─── Display helpers ──────────────────────────────────────────────────────────
 
@@ -30,6 +31,81 @@ const riskColor: Record<string, string> = {
 const ASSET_CLASSES = ['All', 'MF', 'SIF'];
 const CATEGORIES    = ['All', 'Equity', 'Debt', 'ELSS', 'Hybrid', 'Strategic'];
 
+interface BackendProductScheme {
+  id?: string;
+  schemeName?: string;
+  amcName?: string;
+  category?: string;
+  externalSchemeCode?: string;
+  externalIsin?: string;
+  productType?: string;
+  active?: boolean;
+  metadataJson?: string;
+}
+
+const parseMetadata = (metadataJson?: string) => {
+  if (!metadataJson) return {};
+  try {
+    return JSON.parse(metadataJson);
+  } catch {
+    return {};
+  }
+};
+
+const firstMetadataValue = (metadata: any, keys: string[]) => {
+  for (const key of keys) {
+    const value = metadata?.[key];
+    if (value !== undefined && value !== null && value !== '') return value;
+  }
+  return undefined;
+};
+
+const formatCurrency = (value: unknown, fallback = 'Rs 0') => {
+  const numberValue = typeof value === 'number' ? value : Number(String(value ?? '').replace(/[^0-9.]/g, ''));
+  return Number.isFinite(numberValue) && numberValue > 0
+    ? `Rs ${numberValue.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`
+    : fallback;
+};
+
+const formatReturn = (value: unknown) => {
+  const numberValue = typeof value === 'number' ? value : Number(String(value ?? '').replace(/[^0-9.-]/g, ''));
+  if (!Number.isFinite(numberValue)) return '+0.0%';
+  return `${numberValue >= 0 ? '+' : ''}${numberValue.toFixed(1)}%`;
+};
+
+const normalizeCategory = (value?: string) => {
+  const normalized = (value || '').toLowerCase();
+  if (normalized.includes('equity')) return 'Equity';
+  if (normalized.includes('debt') || normalized.includes('income')) return 'Debt';
+  if (normalized.includes('elss') || normalized.includes('tax')) return 'ELSS';
+  if (normalized.includes('hybrid') || normalized.includes('balanced')) return 'Hybrid';
+  if (normalized.includes('sif') || normalized.includes('strategic')) return 'Strategic';
+  return 'Equity';
+};
+
+const mapBackendSchemeToProduct = (scheme: BackendProductScheme, index: number): Product => {
+  const metadata = parseMetadata(scheme.metadataJson);
+  const rawCategory = firstMetadataValue(metadata, ['category', 'scheme_category', 'sub_category']) || scheme.category;
+  const rawRisk = firstMetadataValue(metadata, ['risk_level', 'riskometer', 'risk', 'risk_grade']);
+  const rawReturn = metadata?.returns?.['1y'] ?? metadata?.returns?.one_year ?? firstMetadataValue(metadata, ['return_1y', 'one_year_return']);
+  const rawMinInvestment = firstMetadataValue(metadata, ['minimum_purchase_amount', 'min_purchase_amount', 'min_initial_investment', 'purchase_amount_minimum']);
+  const rawNav = firstMetadataValue(metadata, ['nav', 'current_nav', 'last_nav']);
+
+  return {
+    id: index + 1,
+    name: scheme.schemeName || scheme.externalSchemeCode || 'Unnamed Fund Scheme',
+    assetClass: scheme.category === 'SIF' ? 'SIF' : 'MF',
+    category: normalizeCategory(String(rawCategory || '')),
+    return1y: formatReturn(rawReturn),
+    minInvest: formatCurrency(rawMinInvestment, 'Rs 100'),
+    nav: formatCurrency(rawNav, 'Rs 0'),
+    visibility: 'All Tiers',
+    riskLevel: rawRisk ? String(rawRisk) : 'Moderate',
+    status: scheme.active === false ? 'Inactive' : 'Active',
+    amc: scheme.amcName || 'Unknown AMC',
+  };
+};
+
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export default function ProductMgmt({
@@ -44,6 +120,79 @@ export default function ProductMgmt({
   const [categoryFilter, setCategoryFilter] = useState('All');
   const [showFilters,    setShowFilters]    = useState(false);
   const [showAddModal,   setShowAddModal]   = useState(false);
+  const [loadingProducts, setLoadingProducts] = useState(false);
+  const [syncError, setSyncError] = useState('');
+  const refreshInFlightRef = useRef(false);
+
+  const readJsonSafely = async (response: Response) => {
+    const text = await response.text();
+    if (!text) return null;
+    try {
+      return JSON.parse(text);
+    } catch {
+      return text;
+    }
+  };
+
+  const loadCachedProducts = async () => {
+    setLoadingProducts(true);
+    setSyncError('');
+    try {
+      const response = await apiFetch('/products/schemes');
+      const result = response.ok ? await response.json() : [];
+      const schemes = Array.isArray(result) ? result : [];
+      setProducts(schemes.map(mapBackendSchemeToProduct));
+    } catch (error) {
+      console.error('Failed to load cached product schemes:', error);
+      setSyncError(error instanceof Error ? error.message : 'Unable to load cached products');
+    } finally {
+      setLoadingProducts(false);
+    }
+  };
+
+  useEffect(() => {
+    loadCachedProducts();
+  }, []);
+
+  const fetchProductsFromCybrilla = async () => {
+    if (refreshInFlightRef.current) return;
+    refreshInFlightRef.current = true;
+    setLoadingProducts(true);
+    setSyncError('');
+    console.groupCollapsed('[Cybrilla Workflow] Fetch fund schemes');
+    console.log('frontend_route=', '/admin/product-mgmt');
+    console.log('frontend_request=', 'POST /api/v1/products/schemes/refresh');
+    console.log('backend_expected_external_call=', 'GET https://s.finprim.com/api/oms/fund_schemes?page=0&size=100');
+    console.log('frontend_note=', 'Browser calls Platizio backend only. Backend uses the server-side Fintech Primitives bearer token.');
+
+    try {
+      const response = await apiFetch('/products/schemes/refresh', { method: 'POST' });
+      const result = await readJsonSafely(response);
+      console.log('frontend_response=', {
+        status: response.status,
+        ok: response.ok,
+        count: Array.isArray(result) ? result.length : undefined,
+        sample: Array.isArray(result) ? result.slice(0, 3) : result,
+      });
+
+      if (!response.ok) {
+        throw new Error(typeof result === 'string' ? result : result?.message || 'Unable to fetch fund schemes from Cybrilla/FP');
+      }
+
+      const schemes = Array.isArray(result) ? result : [];
+      setProducts(schemes.map(mapBackendSchemeToProduct));
+      console.log('workflow_status=', 'completed');
+    } catch (error) {
+      console.error('workflow_status=', 'failed');
+      console.error('workflow_error=', error);
+      setSyncError(error instanceof Error ? error.message : 'Unable to fetch fund schemes from Cybrilla/FP');
+      await loadCachedProducts();
+    } finally {
+      console.groupEnd();
+      refreshInFlightRef.current = false;
+      setLoadingProducts(false);
+    }
+  };
 
   // ── Derived state ──────────────────────────────────────────────────────────
   const filtered = products.filter(p => {
@@ -81,13 +230,30 @@ export default function ProductMgmt({
           <h1 className="text-2xl font-semibold tracking-tight text-slate-800">Product Management</h1>
           <p className="text-slate-500 text-sm mt-1">Manage fund listings, visibility and tier access</p>
         </div>
-        <button
-          onClick={() => setShowAddModal(true)}
-          className="flex items-center gap-2 px-4 py-2 text-sm font-medium bg-[#0B1B3E] text-white rounded-lg shadow-sm hover:bg-[#1A3066] transition-colors"
-        >
-          + Add New Product
-        </button>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={fetchProductsFromCybrilla}
+            disabled={loadingProducts}
+            className="flex items-center gap-2 px-4 py-2 text-sm font-medium bg-white border border-slate-200 text-slate-700 rounded-lg shadow-sm hover:bg-slate-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <RefreshCw className={`w-4 h-4 ${loadingProducts ? 'animate-spin' : ''}`} />
+            {loadingProducts ? 'Fetching...' : 'Fetch from Cybrilla'}
+          </button>
+          <button
+            onClick={() => setShowAddModal(true)}
+            className="flex items-center gap-2 px-4 py-2 text-sm font-medium bg-[#0B1B3E] text-white rounded-lg shadow-sm hover:bg-[#1A3066] transition-colors"
+          >
+            + Add New Product
+          </button>
+        </div>
       </div>
+
+      {syncError && (
+        <div className="flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          <AlertCircle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+          <span>{syncError}</span>
+        </div>
+      )}
 
       {/* Asset class banner */}
       <div className="grid grid-cols-2 gap-4">
@@ -197,7 +363,9 @@ export default function ProductMgmt({
             <tbody className="divide-y divide-slate-100">
               {filtered.length === 0 && (
                 <tr>
-                  <td colSpan={8} className="px-6 py-10 text-center text-sm text-slate-400">No products match your filters</td>
+                  <td colSpan={8} className="px-6 py-10 text-center text-sm text-slate-400">
+                    {loadingProducts ? 'Fetching fund schemes from Cybrilla...' : 'No products match your filters'}
+                  </td>
                 </tr>
               )}
               {filtered.map(p => (

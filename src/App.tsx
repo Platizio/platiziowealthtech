@@ -129,7 +129,7 @@ export default function App() {
           <Route path="/distributor/communications"  element={<Communications userData={userData} />} />
           
           {/* Pass state dynamically or let the components grab it from location state */}
-          <Route path="/distributor/investor-onboarding" element={<InvestorOnboardingWrapper />} />
+          <Route path="/distributor/investor-onboarding" element={<InvestorOnboardingWrapper userData={userData} />} />
           <Route path="/distributor/investor-transaction" element={<InvestorTransactionWrapper />} />
 
           {/* Admin Routes */}
@@ -156,11 +156,11 @@ export default function App() {
 // Helper wrappers for components that were relying on App.tsx state
 import { useLocation } from 'react-router-dom';
 
-function InvestorOnboardingWrapper() {
+function InvestorOnboardingWrapper({ userData }: { userData?: any }) {
   const location = useLocation();
   const navigate = useNavigate();
   const prospect = location.state?.prospect || null;
-  return <InvestorOnboarding prospect={prospect} onComplete={() => navigate('/distributor/investors')} onBack={() => navigate('/distributor/leads')} />;
+  return <InvestorOnboarding prospect={prospect} userData={userData} onComplete={() => navigate('/distributor/investors')} onBack={() => navigate('/distributor/leads')} />;
 }
 
 function InvestorTransactionWrapper() {

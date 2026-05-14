@@ -4,6 +4,7 @@ import {
   ArrowLeft, ArrowRight, CheckCircle2, Loader2, Check,
   ShieldCheck, Upload, Building2, User,
 } from 'lucide-react';
+import { apiFetch } from '../config/api';
 
 // ── Step metadata ────────────────────────────────────────────────────────────
 const STEPS = [
@@ -41,6 +42,12 @@ interface Props {
     pan?: string;
     dob?: string;
   };
+  userData?: {
+    id?: string;
+    distributorId?: string;
+    email?: string;
+    role?: string;
+  } | null;
   onComplete: () => void;
   onBack: () => void;
 }
@@ -64,9 +71,11 @@ const inp = 'w-full px-3.5 py-2.5 text-sm bg-white border border-slate-200 round
 const sel = inp + ' cursor-pointer';
 
 // ═══════════════════════════════════════════════════════════════════════════════
-export default function InvestorOnboarding({ prospect, onComplete, onBack }: Props) {
+export default function InvestorOnboarding({ prospect, userData, onComplete, onBack }: Props) {
   const [step, setStep] = useState(1);
   const [submitted, setSubmitted] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState('');
   const [refNum] = useState(() => 'APX' + Date.now().toString().slice(-8));
 
   // ── Step 1 — Basic Identity ─────────────────────────────────────────────────
@@ -171,9 +180,139 @@ export default function InvestorOnboarding({ prospect, onComplete, onBack }: Pro
     }
   })();
 
+  const readJsonSafely = async (response: Response) => {
+    const text = await response.text();
+    if (!text) return null;
+    try {
+      return JSON.parse(text);
+    } catch {
+      return text;
+    }
+  };
+
+  const maskAccountNumber = (value: string) => {
+    if (!value) return '';
+    return value.length <= 4 ? '****' : `${'*'.repeat(Math.max(value.length - 4, 4))}${value.slice(-4)}`;
+  };
+
+  const submitInvestorToBackend = async () => {
+    const distributorId = userData?.id || userData?.distributorId;
+    const fullName = `${s1.firstName} ${s1.lastName}`.trim();
+
+    if (!distributorId) {
+      setSubmitError('Distributor session was not found. Please log in again and retry.');
+      console.error('[Cybrilla Workflow] Missing distributor id in user session', userData);
+      return;
+    }
+
+    const investorPayload = {
+      distributorId,
+      fullName,
+      mobileNumber: s1.mobile,
+      email: s1.email,
+      pan: s1.pan.trim().toUpperCase(),
+      dateOfBirth: s1.dob || null,
+      addressLine1: '',
+      addressLine2: '',
+      city: '',
+      state: '',
+      postalCode: '',
+      onboardingNotes: [
+        `frontend_reference=${refNum}`,
+        `gender=${s4.gender}`,
+        `occupation=${s4.occupation}`,
+        `income=${s4.income}`,
+        `contact_owner=${s4.contactOwner}`,
+        `tax_residency=${s6.taxResidency}`,
+        `pep=${s6.politicalExp}`,
+      ].join('; '),
+    };
+
+    const bankPayload = {
+      accountHolderName: fullName,
+      accountNumber: s5.accNumber,
+      ifscCode: s5.ifsc,
+      bankName: bankName || undefined,
+      branchName: '',
+    };
+
+    setSubmitting(true);
+    setSubmitError('');
+    console.groupCollapsed('[Cybrilla Workflow] Investor onboarding submit');
+    console.log('frontend_route=', '/distributor/investor-onboarding');
+    console.log('frontend_note=', 'Browser calls Platizio backend only. Backend then calls FP/Cybrilla using server-side bearer tokens.');
+    console.log('step_1_create_investor_request=', investorPayload);
+    console.log('step_1_expected_backend_work=', [
+      'POST /api/v1/investors',
+      'InvestorService saves local investor copy',
+      'Backend creates FP/Cybrilla investor profile, email, and phone',
+      'Backend stores cybrillaInvestorId on the local investor',
+    ]);
+
+    try {
+      const investorResponse = await apiFetch('/investors', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(investorPayload),
+      });
+      const investorResult = await readJsonSafely(investorResponse);
+      console.log('step_1_create_investor_response=', {
+        status: investorResponse.status,
+        ok: investorResponse.ok,
+        body: investorResult,
+        cybrillaInvestorId: investorResult?.cybrillaInvestorId,
+      });
+
+      if (!investorResponse.ok) {
+        throw new Error(typeof investorResult === 'string' ? investorResult : investorResult?.message || 'Investor creation failed');
+      }
+
+      console.log('step_2_add_bank_request=', {
+        ...bankPayload,
+        accountNumber: maskAccountNumber(bankPayload.accountNumber),
+      });
+      console.log('step_2_expected_backend_work=', [
+        `POST /api/v1/investors/${investorResult.id}/bank-accounts?actorId=${distributorId}`,
+        'InvestorService saves local bank copy',
+        'Backend creates FP/Cybrilla bank account using cybrillaInvestorId',
+        'Backend stores cybrillaBankId on the local bank account',
+      ]);
+
+      const bankResponse = await apiFetch(`/investors/${investorResult.id}/bank-accounts?actorId=${distributorId}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(bankPayload),
+      });
+      const bankResult = await readJsonSafely(bankResponse);
+      console.log('step_2_add_bank_response=', {
+        status: bankResponse.status,
+        ok: bankResponse.ok,
+        body: bankResult,
+        cybrillaBankId: bankResult?.cybrillaBankId,
+      });
+
+      if (!bankResponse.ok) {
+        throw new Error(typeof bankResult === 'string' ? bankResult : bankResult?.message || 'Bank account creation failed');
+      }
+
+      console.log('workflow_status=', 'completed');
+      setSubmitted(true);
+    } catch (error) {
+      console.error('workflow_status=', 'failed');
+      console.error('workflow_error=', error);
+      setSubmitError(error instanceof Error ? error.message : 'Investor onboarding failed');
+    } finally {
+      console.groupEnd();
+      setSubmitting(false);
+    }
+  };
+
   // ── Navigation ────────────────────────────────────────────────────────────────
   const goNext = () => {
-    if (step === 7) { setSubmitted(true); return; }
+    if (step === 7) {
+      submitInvestorToBackend();
+      return;
+    }
     setStep(s=> s + 1);
   };
 
@@ -726,6 +865,12 @@ export default function InvestorOnboarding({ prospect, onComplete, onBack }: Pro
       </AnimatePresence>
 
       {/* ── Navigation bar ────────────────────────────────────────────────── */}
+      {submitError && (
+        <div className="mt-6 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-700">
+          {submitError}
+        </div>
+      )}
+
       <div className="flex items-center justify-between mt-6">
         <button
           onClick={goBack}
@@ -739,11 +884,11 @@ export default function InvestorOnboarding({ prospect, onComplete, onBack }: Pro
           <span className="text-xs text-slate-400 font-medium">{step} / {STEPS.length}</span>
           <button
             onClick={goNext}
-            disabled={!canNext}
+            disabled={!canNext || submitting}
             className="flex items-center gap-2 px-6 py-2.5 text-sm font-semibold bg-[#0B1B3E] text-white rounded-xl hover:bg-[#1A3066] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
           >
-            {step === 7 ? 'Submit Application' : 'Continue'}
-            {step < 7 && <ArrowRight className="w-4 h-4" />}
+            {submitting ? 'Submitting...' : step === 7 ? 'Submit Application' : 'Continue'}
+            {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : step < 7 && <ArrowRight className="w-4 h-4" />}
           </button>
         </div>
       </div>
