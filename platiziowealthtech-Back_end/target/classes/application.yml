@@ -1,4 +1,6 @@
 spring:
+  config:
+    import: optional:file:./.env[.properties]
   application:
     name: wealthtech-backend
   datasource:
@@ -29,9 +31,38 @@ server:
   port: 8081
 
 cybrilla:
-  base-url: ${CYBRILLA_BASE_URL:https://api.cybrilla.example}
-  api-key: ${CYBRILLA_API_KEY:}
-  partner-id: ${CYBRILLA_PARTNER_ID:}
+  integration:
+    real-client-enabled: ${CYBRILLA_REAL_CLIENT_ENABLED:true}
+  pre-verification:
+    base-url: ${CYBRILLA_PRE_VERIFICATION_BASE_URL:https://api.sandbox.cybrilla.com}
+    auth:
+      token-url: ${CYBRILLA_PRE_VERIFICATION_TOKEN_URL:https://s.finprim.com/v2/auth/cybrillarta/token}
+      client-id: ${CYBRILLA_PRE_VERIFICATION_CLIENT_ID:}
+      client-secret: ${CYBRILLA_PRE_VERIFICATION_CLIENT_SECRET:}
+      refresh-buffer-seconds: ${CYBRILLA_TOKEN_REFRESH_BUFFER_SECONDS:0}
+
+finprim:
+  base-url: ${FINPRIM_BASE_URL:https://s.finprim.com}
+  tenant:
+    name: ${FINPRIM_TENANT_NAME:platizio}
+    id: ${FINPRIM_TENANT_ID:}
+    auth:
+      token-url: ${FINPRIM_TENANT_TOKEN_URL:}
+      client-id: ${FINPRIM_TENANT_CLIENT_ID:}
+      client-secret: ${FINPRIM_TENANT_CLIENT_SECRET:}
+      refresh-buffer-seconds: ${FINPRIM_TOKEN_REFRESH_BUFFER_SECONDS:0}
+
+external-auth:
+  auto-refresh:
+    enabled: ${EXTERNAL_AUTH_AUTO_REFRESH_ENABLED:false}
+    check-interval-ms: ${EXTERNAL_AUTH_AUTO_REFRESH_CHECK_INTERVAL_MS:60000}
+    startup-delay-ms: ${EXTERNAL_AUTH_AUTO_REFRESH_STARTUP_DELAY_MS:60000}
+  token-cache:
+    enabled: ${EXTERNAL_AUTH_TOKEN_CACHE_ENABLED:true}
+    file: ${EXTERNAL_AUTH_TOKEN_CACHE_FILE:${user.home}/.platizio-wealthtech/external-auth-token-cache.json}
+  debug:
+    enabled: ${EXTERNAL_AUTH_DEBUG_ENABLED:false}
+    log-raw-tokens: ${EXTERNAL_AUTH_LOG_RAW_TOKENS:false}
 
 jwt:
   secret: ${JWT_SECRET:wealthtech-super-secret-key-change-in-production-must-be-256-bits-long}

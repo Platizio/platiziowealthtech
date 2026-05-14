@@ -14,10 +14,54 @@ This file is the handoff point for wiring the real Cybrilla / Fintech Primitives
 ## Environment Variables
 
 ```text
-CYBRILLA_BASE_URL=https://<cybrilla-base-url>
-CYBRILLA_API_KEY=<api-key-or-token>
-CYBRILLA_PARTNER_ID=<partner-id-if-required>
+CYBRILLA_PRE_VERIFICATION_BASE_URL=https://api.sandbox.cybrilla.com
+CYBRILLA_PRE_VERIFICATION_TOKEN_URL=https://s.finprim.com/v2/auth/cybrillarta/token
+CYBRILLA_PRE_VERIFICATION_CLIENT_ID=<pre-verification-client-id>
+CYBRILLA_PRE_VERIFICATION_CLIENT_SECRET=<pre-verification-client-secret>
+CYBRILLA_TOKEN_REFRESH_BUFFER_SECONDS=120
+
+FINPRIM_BASE_URL=https://s.finprim.com
+FINPRIM_TENANT_NAME=platizio
+FINPRIM_TENANT_ID=<tenant-id-header-value-if-different>
+FINPRIM_TENANT_TOKEN_URL=<optional override; leave unset to use /v2/auth/{FINPRIM_TENANT_NAME}/token>
+FINPRIM_TENANT_CLIENT_ID=<tenant-client-id>
+FINPRIM_TENANT_CLIENT_SECRET=<tenant-client-secret>
+FINPRIM_TOKEN_REFRESH_BUFFER_SECONDS=120
+
+EXTERNAL_AUTH_TOKEN_CACHE_ENABLED=true
+EXTERNAL_AUTH_TOKEN_CACHE_FILE=<optional override; defaults to user home .platizio-wealthtech/external-auth-token-cache.json>
+EXTERNAL_AUTH_DEBUG_ENABLED=false
+EXTERNAL_AUTH_LOG_RAW_TOKENS=false
 ```
+
+## Bearer Token Handling
+
+The backend owns all Cybrilla and Fintech Primitives credentials. Do not pass client ids,
+client secrets, or provider bearer tokens to the frontend.
+
+- Token service: `src/main/java/com/platizio/wealthtech/integration/auth/ExternalBearerTokenService.java`
+- Pre-verification token: `externalBearerTokenService.getCybrillaPreVerificationAccessToken()`
+- FP tenant token: `externalBearerTokenService.getFinprimTenantAccessToken()`
+- Cache behavior: tokens are cached in memory and also stored in a local file under the user's home directory by default. After a backend restart, the token is reused from that local cache if it is still before the refresh time. With a 30 minute token and the default 120 second buffer, the backend reuses a token for about 28 minutes.
+- Console logs: each token access logs a compact line with `status`, `token`, `new_token_in`, and `expires_in`. By default `token` is a masked SHA-256 fingerprint; with `EXTERNAL_AUTH_LOG_RAW_TOKENS=true`, `token` is the raw bearer token for temporary local debugging.
+- Temporary local debugging: set `EXTERNAL_AUTH_DEBUG_ENABLED=true` to enable trigger endpoints and `EXTERNAL_AUTH_LOG_RAW_TOKENS=true` to print raw bearer tokens in the backend console. Turn both off after checking.
+- Retry behavior for future API clients: if a provider call returns `401`, invalidate the relevant cached token, fetch once again, and retry that provider request one time.
+
+Future Cybrilla API clients should set bearer auth internally:
+
+```java
+String token = externalBearerTokenService.getCybrillaPreVerificationAccessToken();
+
+restClient.post()
+        .uri("/poa/pre_verifications")
+        .headers(headers -> headers.setBearerAuth(token))
+        .body(request)
+        .retrieve()
+        .body(ResponseType.class);
+```
+
+For Fintech Primitives tenant APIs, use `getFinprimTenantAccessToken()` and include
+the `x-tenant-id` header when the FP endpoint requires it.
 
 ## Suggested Real API Implementation
 
@@ -28,11 +72,15 @@ Create `RealCybrillaClient` in `src/main/java/com/platizio/wealthtech/integratio
 @Profile("cybrilla")
 public class RealCybrillaClient implements CybrillaClient {
     private final RestClient restClient;
+    private final ExternalBearerTokenService tokenService;
 
-    public RealCybrillaClient(CybrillaProperties properties) {
+    public RealCybrillaClient(
+            CybrillaPreVerificationProperties properties,
+            ExternalBearerTokenService tokenService
+    ) {
+        this.tokenService = tokenService;
         this.restClient = RestClient.builder()
-                .baseUrl(properties.baseUrl())
-                .defaultHeader("Authorization", "Bearer " + properties.apiKey())
+                .baseUrl(properties.getBaseUrl())
                 .build();
     }
 

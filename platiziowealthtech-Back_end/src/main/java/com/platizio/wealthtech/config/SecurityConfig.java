@@ -50,6 +50,7 @@ public class SecurityConfig {
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers(
                     "/api/v1/auth/**",
+                    "/api/v1/debug/external-auth/**",
                     "/actuator/health",
                     "/actuator/info",
                     "/v3/api-docs/**",

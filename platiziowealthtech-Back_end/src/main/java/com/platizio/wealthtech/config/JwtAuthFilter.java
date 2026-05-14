@@ -44,6 +44,11 @@ public class JwtAuthFilter extends OncePerRequestFilter {
                                     FilterChain filterChain) throws ServletException, IOException {
 
         String path = request.getRequestURI();
+        if ("/favicon.ico".equals(path)) {
+            filterChain.doFilter(request, response);
+            return;
+        }
+
         Optional<String> tokenOptional = extractToken(request);
         if (tokenOptional.isEmpty()) {
             filterChain.doFilter(request, response);

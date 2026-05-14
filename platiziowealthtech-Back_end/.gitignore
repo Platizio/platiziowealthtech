@@ -1,0 +1,5 @@
+.env
+.env.*
+!.env.example
+target/
+.external-auth-token-cache.json

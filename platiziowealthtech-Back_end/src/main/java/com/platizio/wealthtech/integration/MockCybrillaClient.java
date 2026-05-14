@@ -7,21 +7,33 @@ import com.platizio.wealthtech.domain.ProductScheme;
 import com.platizio.wealthtech.domain.TransactionOrder;
 import java.util.List;
 import java.util.UUID;
-import org.springframework.context.annotation.Primary;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
 @Component
-@Primary
+@ConditionalOnProperty(prefix = "cybrilla.integration", name = "real-client-enabled", havingValue = "false")
 public class MockCybrillaClient implements CybrillaClient {
+
+    private static final Logger logger = LoggerFactory.getLogger(MockCybrillaClient.class);
+
+    public MockCybrillaClient() {
+        logger.warn("cybrilla_client mode='mock' external_calls='disabled' reason='CYBRILLA_REAL_CLIENT_ENABLED=false'");
+    }
 
     @Override
     public String createInvestorProfile(Investor investor) {
-        return "cyb-inv-" + UUID.randomUUID();
+        String mockId = "cyb-inv-" + UUID.randomUUID();
+        logger.warn("cybrilla_client mode='mock' operation='create_investor_profile' local_investor_id='{}' mock_id='{}'", investor.getId(), mockId);
+        return mockId;
     }
 
     @Override
     public void captureBankAccount(Investor investor, InvestorBankAccount bankAccount) {
-        bankAccount.setCybrillaBankId("cyb-bank-" + UUID.randomUUID());
+        String mockId = "cyb-bank-" + UUID.randomUUID();
+        logger.warn("cybrilla_client mode='mock' operation='capture_bank_account' local_investor_id='{}' local_bank_id='{}' mock_id='{}'", investor.getId(), bankAccount.getId(), mockId);
+        bankAccount.setCybrillaBankId(mockId);
     }
 
     @Override
