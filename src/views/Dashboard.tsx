@@ -187,10 +187,10 @@ export default function Dashboard({ onNavigate, userData }: DashboardProps) {
     <motion.div
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
-      className="p-8 space-y-6"
+      className="p-4 md:p-8 space-y-6"
     >
       {/* ── Page header ─────────────────────────────────────────────────── */}
-      <div className="flex justify-between items-end">
+      <div className="flex flex-wrap justify-between items-end gap-3">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight text-slate-800">Distributor Overview</h1>
           <p className="text-slate-500 text-sm mt-1">Real-time snapshot of your AUM and business growth</p>
@@ -205,7 +205,7 @@ export default function Dashboard({ onNavigate, userData }: DashboardProps) {
       {/* ══════════════════════════════════════════════════════════════════
           5 SNAPSHOT CARDS  (PRD: Key Business Snapshot)
       ══════════════════════════════════════════════════════════════════ */}
-      <div className="grid grid-cols-5 gap-4">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
 
         {/* ── Card 1: Total AUM ── */}
         <SnapshotCard onClick={() => onNavigate('aum-breakdown')} accent="border-t-blue-500">
@@ -300,9 +300,9 @@ export default function Dashboard({ onNavigate, userData }: DashboardProps) {
       </div>
 
       {/* ── Lower section: kanban + donut ───────────────────────────────── */}
-      <div className="grid grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Onboarding Pipeline */}
-        <div className="col-span-2 bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden flex flex-col">
+        <div className="col-span-1 lg:col-span-2 bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden flex flex-col">
           <div className="p-5 border-b border-slate-100 flex justify-between items-center">
             <h2 className="font-semibold text-slate-800">Onboarding Pipeline</h2>
             <button className="text-[#0B1B3E] text-xs font-semibold flex items-center gap-1 hover:underline">

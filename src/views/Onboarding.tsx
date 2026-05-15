@@ -162,7 +162,7 @@ const IFSC_LOOKUP: Record<string, { bank: string; branch: string }> = {
 const AGREEMENT_TEXT: Record<string, string> = {
   agreeDistributor: `DISTRIBUTOR AGREEMENT — PLACEHOLDER
 
-This Distributor Agreement ("Agreement") is entered into between Apex Wealth Private Limited
+This Distributor Agreement ("Agreement") is entered into between Platizio Private Limited
 ("Company") and the undersigned Distributor.
 
 [Full agreement terms will be added once legally reviewed and finalised]
@@ -177,7 +177,7 @@ Key provisions (summary):
 
   agreeRevenue: `REVENUE SHARING TERMS — PLACEHOLDER
 
-Revenue Sharing Schedule between Apex Wealth Private Limited and the Distributor.
+Revenue Sharing Schedule between Platizio Private Limited and the Distributor.
 
 [Detailed schedule will be added once finalized]
 
@@ -191,7 +191,7 @@ Summary:
 
   agreePlatform: `PLATFORM TERMS & CONDITIONS — PLACEHOLDER
 
-Terms and Conditions for use of the Apex Wealth Distributor Platform.
+Terms and Conditions for use of the Platizio Distributor Platform.
 
 [Full Terms & Conditions will be published once the platform launches commercially]
 
@@ -519,8 +519,8 @@ export default function Onboarding({ onComplete, onBack }: { onComplete: () => v
 
         {/* Logo */}
         <div className="relative z-10 flex items-center gap-3 mb-10">
-          <div className="w-9 h-9 rounded-xl bg-white/10 border border-white/20 flex items-center justify-center text-white font-bold text-lg shadow-lg">A</div>
-          <span className="text-white font-bold text-lg tracking-tight">Apex Wealth</span>
+          <div className="w-9 h-9 rounded-xl bg-white/10 border border-white/20 flex items-center justify-center text-white font-bold text-lg shadow-lg">P</div>
+          <span className="text-white font-bold text-lg tracking-tight">Platizio</span>
         </div>
 
         {/* Step progress */}

@@ -292,9 +292,9 @@ export default function LoginPage({
       <div className="relative z-10">
         <div className="flex items-center gap-3 mb-16">
           <div className="w-10 h-10 rounded-xl bg-white/10 border border-white/20 flex items-center justify-center text-white font-bold text-xl shadow-lg">
-            A
+            P
           </div>
-          <span className="text-white font-bold text-xl tracking-tight">Apex Wealth</span>
+          <span className="text-white font-bold text-xl tracking-tight">Platizio</span>
         </div>
         <h2 className="text-3xl font-bold text-white mb-3 leading-snug">{leftTitle}</h2>
         <p className="text-blue-200/60 text-sm leading-relaxed mb-10">{leftSubtitle}</p>
@@ -360,7 +360,7 @@ export default function LoginPage({
                     <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 mb-5 text-left">
                       <p className="text-[11px] text-amber-800 leading-relaxed">
                         <span className="font-bold">Demo note:</span> No real email is sent. Use the demo password{' '}
-                        <span className="font-mono font-bold">Apex@2024</span> to sign in.
+                        <span className="font-mono font-bold">Platizio@2024</span> to sign in.
                       </p>
                     </div>
                     <button onClick={resetForgot} className="w-full py-3 bg-[#0B1B3E] text-white font-semibold text-sm rounded-xl hover:bg-[#1A3066] transition-colors">
@@ -490,7 +490,7 @@ export default function LoginPage({
                     <div className="text-xs text-blue-700 leading-relaxed">
                       <p className="font-semibold mb-0.5">Demo credentials</p>
                       <p>Email: <span className="font-mono font-bold">alice@example.com</span></p>
-                      <p>Password: <span className="font-mono font-bold">Apex@2024</span></p>
+                      <p>Password: <span className="font-mono font-bold">Platizio@2024</span></p>
                     </div>
                   </div>
 
@@ -572,7 +572,7 @@ export default function LoginPage({
                           <span className="text-blue-400 mt-0.5 text-sm">ℹ</span>
                           <p className="text-xs text-blue-700 leading-relaxed">
                             <span className="font-semibold">Demo accounts:</span>{' '}
-                            Email: <span className="font-mono font-bold">aditya@apexwealth.in</span>&nbsp;|&nbsp;
+                            Email: <span className="font-mono font-bold">aditya@platizio.in</span>&nbsp;|&nbsp;
                             Mobile: <span className="font-mono font-bold">9876543210</span>
                           </p>
                         </div>

@@ -112,6 +112,29 @@ interface ProspectForm {
   source: string; amount: string; notes: string;
 }
 
+// ── Hoisted to module scope so identity is stable across re-renders.
+// Defining these inside AddProspectModal caused React to treat them as new
+// component types on every keystroke, unmounting inputs and losing focus. ──
+function Field({
+  label, required, error, children,
+}: {
+  label: string; required?: boolean; error?: string; children: React.ReactNode;
+}) {
+  return (
+    <div>
+      <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
+        {label}{required && <span className="text-red-400 ml-0.5">*</span>}
+      </label>
+      {children}
+      {error && <p className="text-xs text-red-500 mt-1">{error}</p>}
+    </div>
+  );
+}
+
+function inputCls(err?: string) {
+  return `w-full bg-slate-50 border ${err ? 'border-red-300' : 'border-slate-200'} rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-100 focus:border-blue-500 outline-none transition-all`;
+}
+
 function AddProspectModal({
   onClose,
   onAdd,
@@ -163,19 +186,6 @@ function AddProspectModal({
     onAdd(newLead);
     onClose();
   };
-
-  const Field = ({ label, required, error, children }: { label: string; required?: boolean; error?: string; children: React.ReactNode }) => (
-    <div>
-      <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
-        {label}{required && <span className="text-red-400 ml-0.5">*</span>}
-      </label>
-      {children}
-      {error && <p className="text-xs text-red-500 mt-1">{error}</p>}
-    </div>
-  );
-
-  const inputCls = (err?: string) =>
-    `w-full bg-slate-50 border ${err ? 'border-red-300' : 'border-slate-200'} rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-100 focus:border-blue-500 outline-none transition-all`;
 
   return (
     <div className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">

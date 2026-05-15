@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom';
 import {
-  LayoutDashboard, Users, BookOpen, Search, Bell,
+  LayoutDashboard, Users, BookOpen, Search, Bell, Menu,
   ArrowLeftRight, UserCircle2, TrendingUp, Target,
   BarChart3, Network, Layers, UserCheck, ShieldCheck, X, AlertTriangle,
   PieChart, RefreshCw, FileBarChart2, MessageSquare, ClipboardList
@@ -41,6 +41,7 @@ export default function AppLayout({ userData, onSignOut }: { userData: any, onSi
   const location = useLocation();
   const [showInactivePopup, setShowInactivePopup] = useState(true);
   const [unreadNotifs, setUnreadNotifs] = useState(0);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
 
   useEffect(() => {
     if (userData && userData.id) {
@@ -91,6 +92,11 @@ export default function AppLayout({ userData, onSignOut }: { userData: any, onSi
     ? displayName.split(' ').map((n: string) => n[0]).join('').substring(0, 2).toUpperCase()
     : 'US';
 
+  // Close sidebar whenever the route changes (mobile nav UX)
+  useEffect(() => {
+    setSidebarOpen(false);
+  }, [location.pathname]);
+
   const switchMode = (next: 'admin' | 'distributor') => {
     if (next === 'admin') navigate('/admin/overview');
     if (next === 'distributor') navigate('/distributor/dashboard');
@@ -127,13 +133,26 @@ export default function AppLayout({ userData, onSignOut }: { userData: any, onSi
       )}
 
       <div className="flex h-screen w-full overflow-hidden bg-[#F1F5F9] text-slate-900 font-sans selection:bg-blue-100 selection:text-blue-900">
-        {/* Sidebar */}
-        <aside className="w-64 bg-white border-r border-slate-200 flex flex-col flex-shrink-0">
+        {/* Mobile overlay backdrop */}
+        {sidebarOpen && (
+          <div
+            className="fixed inset-0 z-40 bg-slate-900/40 md:hidden"
+            onClick={() => setSidebarOpen(false)}
+          />
+        )}
+
+        {/* Sidebar — fixed overlay on mobile, static in-flow on md+ */}
+        <aside className={`
+          w-64 bg-white border-r border-slate-200 flex flex-col flex-shrink-0
+          fixed inset-y-0 left-0 z-50 transition-transform duration-200
+          md:static md:inset-auto md:z-auto md:translate-x-0
+          ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}
+        `}>
           <div className="p-6 flex-1 overflow-y-auto">
             <div className="flex items-center gap-3 mb-8">
-              <div className={`w-8 h-8 rounded-xl flex items-center justify-center text-white font-bold shadow-sm ${mode === 'admin' ? 'bg-violet-700' : 'bg-[#0B1B3E]'}`}>A</div>
+              <div className={`w-8 h-8 rounded-xl flex items-center justify-center text-white font-bold shadow-sm ${mode === 'admin' ? 'bg-violet-700' : 'bg-[#0B1B3E]'}`}>P</div>
               <div>
-                <span className="font-bold text-xl tracking-tight text-[#0B1B3E] block leading-tight">Apex Wealth</span>
+                <span className="font-bold text-xl tracking-tight text-[#0B1B3E] block leading-tight">Platizio</span>
                 {mode === 'admin' && (
                   <span className="text-[10px] font-bold text-violet-600 bg-violet-50 px-1.5 py-0.5 rounded uppercase tracking-wider">
                     Admin Panel
@@ -185,8 +204,8 @@ export default function AppLayout({ userData, onSignOut }: { userData: any, onSi
                 <div className="flex items-center gap-3">
                   <div className="w-8 h-8 rounded-full bg-violet-200 flex items-center justify-center text-xs font-bold text-violet-700">MD</div>
                   <div>
-                    <p className="text-sm font-semibold text-slate-800">Apex Wealth Team</p>
-                    <p className="text-xs text-slate-500">admin@apexwealth.in</p>
+                    <p className="text-sm font-semibold text-slate-800">Platizio Team</p>
+                    <p className="text-xs text-slate-500">admin@platizio.in</p>
                   </div>
                 </div>
               </>
@@ -226,8 +245,18 @@ export default function AppLayout({ userData, onSignOut }: { userData: any, onSi
 
         {/* Main content */}
         <main className="flex-1 flex flex-col min-w-0">
-          <header className="h-16 bg-white/80 backdrop-blur-md border-b border-slate-200 flex items-center justify-between px-8 flex-shrink-0 sticky top-0 z-40">
-            <div className="relative w-72 max-w-full">
+          <header className="h-16 bg-white/80 backdrop-blur-md border-b border-slate-200 flex items-center gap-3 px-4 md:px-8 flex-shrink-0 sticky top-0 z-40">
+            {/* Hamburger — mobile only */}
+            <button
+              className="md:hidden p-2 rounded-lg text-slate-500 hover:bg-slate-100 transition-colors flex-shrink-0"
+              onClick={() => setSidebarOpen(prev => !prev)}
+              aria-label="Toggle sidebar"
+            >
+              <Menu className="w-5 h-5" />
+            </button>
+
+            {/* Search bar — desktop only */}
+            <div className="relative hidden md:block w-72">
               <Search className="w-4 h-4 absolute left-3 top-2.5 text-slate-400" />
               <input
                 type="text"
@@ -236,8 +265,12 @@ export default function AppLayout({ userData, onSignOut }: { userData: any, onSi
               />
             </div>
 
-            <div className="flex items-center gap-4">
-              <div className="flex items-center bg-slate-100 rounded-xl p-1 gap-0.5">
+            {/* Spacer pushes right-side actions to the end on mobile */}
+            <div className="flex-1" />
+
+            <div className="flex items-center gap-2 md:gap-4">
+              {/* Mode switcher — desktop only */}
+              <div className="hidden md:flex items-center bg-slate-100 rounded-xl p-1 gap-0.5">
                 <button
                   onClick={() => switchMode('distributor')}
                   className={`px-3.5 py-1.5 text-xs font-semibold rounded-lg transition-all ${mode === 'distributor'
@@ -273,16 +306,18 @@ export default function AppLayout({ userData, onSignOut }: { userData: any, onSi
               {mode === 'distributor' ? (
                 <button
                   onClick={() => navigate('/distributor/investor-onboarding')}
-                  className="px-4 py-2 text-sm font-medium bg-[#0B1B3E] text-white rounded-lg shadow-sm hover:bg-[#1A3066] transition-colors"
+                  className="flex items-center gap-1 px-3 md:px-4 py-2 text-sm font-medium bg-[#0B1B3E] text-white rounded-lg shadow-sm hover:bg-[#1A3066] transition-colors"
                 >
-                  + New Onboarding
+                  <span className="font-bold text-base leading-none">+</span>
+                  <span className="hidden md:inline"> New Onboarding</span>
                 </button>
               ) : (
                 <button
                   onClick={() => navigate('/admin/distributor-mgmt')}
-                  className="px-4 py-2 text-sm font-medium bg-violet-700 text-white rounded-lg shadow-sm hover:bg-violet-800 transition-colors"
+                  className="flex items-center gap-1 px-3 md:px-4 py-2 text-sm font-medium bg-violet-700 text-white rounded-lg shadow-sm hover:bg-violet-800 transition-colors"
                 >
-                  + Add Distributor
+                  <span className="font-bold text-base leading-none">+</span>
+                  <span className="hidden md:inline"> Add Distributor</span>
                 </button>
               )}
             </div>

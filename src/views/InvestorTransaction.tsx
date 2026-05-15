@@ -444,7 +444,7 @@ export default function InvestorTransaction({ investor, onComplete, onBack }: Pr
             <div className="bg-[#0B1B3E]/5 border border-[#0B1B3E]/10 rounded-xl px-4 py-3 flex items-start gap-3 mb-6">
               <ShieldCheck className="w-4 h-4 text-[#0B1B3E] flex-shrink-0 mt-0.5" />
               <p className="text-xs text-slate-600 leading-relaxed">
-                By confirming, you authorise Apex Wealth to place this {txType === 'sip' ? 'SIP mandate' : 'investment order'} on behalf of{' '}
+                By confirming, you authorise Platizio to place this {txType === 'sip' ? 'SIP mandate' : 'investment order'} on behalf of{' '}
                 <span className="font-semibold">{investor.name}</span> in accordance with SEBI regulations and the investor's signed consent.
               </p>
             </div>

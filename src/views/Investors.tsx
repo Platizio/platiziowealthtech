@@ -163,9 +163,9 @@ export default function Investors({
 
   // ─── List view ────────────────────────────────────────────────────────────
   return (
-    <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="p-8 h-full flex flex-col">
+    <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="p-4 md:p-8 h-full flex flex-col">
       {/* Header */}
-      <div className="flex justify-between items-center mb-6">
+      <div className="flex flex-wrap justify-between items-center gap-3 mb-6">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight text-slate-800">Investor Archive</h1>
           <p className="text-slate-500 text-sm mt-1">
@@ -176,8 +176,8 @@ export default function Investors({
 
       {/* Search + filters */}
       <div className="bg-white rounded-2xl shadow-sm border border-slate-200 mb-4">
-        <div className="p-4 flex flex-wrap gap-3 items-center border-b border-slate-100">
-          <div className="relative flex-1 min-w-[220px] max-w-md">
+        <div className="p-4 flex flex-wrap gap-3 items-center border-b border-slate-100 overflow-x-auto">
+          <div className="relative flex-1 min-w-[180px] max-w-md">
             <Search className="w-4 h-4 absolute left-3 top-3 text-slate-400" />
             <input
               type="text"
@@ -208,7 +208,7 @@ export default function Investors({
         </div>
 
         {/* Table */}
-        <div className="overflow-auto">
+        <div className="overflow-x-auto">
           {loading ? (
             <div className="p-16 text-center text-slate-500">
               <div className="animate-spin w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full mx-auto mb-4" />
@@ -362,13 +362,13 @@ function InvestorDetail({
   ];
 
   return (
-    <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} className="p-8 max-w-5xl mx-auto">
+    <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} className="p-4 md:p-8 max-w-5xl mx-auto">
       <button onClick={onBack} className="flex items-center gap-2 text-sm font-medium text-slate-500 hover:text-slate-800 mb-6 transition-colors">
         <ChevronLeft className="w-4 h-4" /> Back to Archive
       </button>
 
       {/* Header */}
-      <div className="flex justify-between items-start mb-8">
+      <div className="flex flex-wrap justify-between items-start gap-4 mb-8">
         <div className="flex items-center gap-4">
           <div className="w-14 h-14 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center text-xl font-bold flex-shrink-0">
             {initials}

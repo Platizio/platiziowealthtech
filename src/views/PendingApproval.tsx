@@ -18,9 +18,9 @@ export default function PendingApproval({ onGoToLogin }: { onGoToLogin: () => vo
       {/* Top logo */}
       <div className="relative z-10 flex items-center gap-3 mb-10">
         <div className="w-8 h-8 rounded-xl bg-[#0B1B3E] flex items-center justify-center text-white font-bold text-sm shadow">
-          A
+          P
         </div>
-        <span className="font-bold text-lg text-[#0B1B3E] tracking-tight">Apex Wealth</span>
+        <span className="font-bold text-lg text-[#0B1B3E] tracking-tight">Platizio</span>
       </div>
 
       {/* Card */}
@@ -113,7 +113,7 @@ export default function PendingApproval({ onGoToLogin }: { onGoToLogin: () => vo
 
       <p className="relative z-10 text-slate-400 text-xs mt-6">
         Need help?{' '}
-        <span className="text-blue-500 cursor-pointer hover:underline">Contact support@apexwealth.in</span>
+        <span className="text-blue-500 cursor-pointer hover:underline">Contact support@platizio.in</span>
       </p>
     </div>
   );

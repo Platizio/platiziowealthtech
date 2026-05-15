@@ -22,9 +22,9 @@ export default function LandingPage({
       <nav className="relative z-10 flex items-center justify-between px-8 py-6">
         <div className="flex items-center gap-3">
           <div className="w-9 h-9 rounded-xl bg-white/10 border border-white/20 flex items-center justify-center text-white font-bold text-lg shadow-lg">
-            A
+            P
           </div>
-          <span className="text-white font-bold text-xl tracking-tight">Apex Wealth</span>
+          <span className="text-white font-bold text-xl tracking-tight">Platizio</span>
         </div>
         <div className="flex items-center gap-2">
           <button
@@ -52,12 +52,12 @@ export default function LandingPage({
         >
           {/* Logo mark */}
           <div className="w-24 h-24 rounded-3xl bg-white/10 backdrop-blur-sm border border-white/20 flex items-center justify-center mb-8 shadow-2xl">
-            <span className="text-white font-bold text-5xl leading-none">A</span>
+            <span className="text-white font-bold text-5xl leading-none">P</span>
           </div>
 
           {/* Brand name */}
           <h1 className="text-6xl font-bold text-white mb-3 tracking-tight leading-none">
-            Apex Wealth
+            Platizio
           </h1>
           <p className="text-xl text-blue-200/70 mb-3 font-light">
             India's Premier MFD Distribution Platform
