@@ -15,9 +15,14 @@ import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.OffsetDateTime;
+import java.time.YearMonth;
+import java.time.ZoneOffset;
+import java.time.format.TextStyle;
 import java.time.temporal.ChronoUnit;
 import java.util.*;
 import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 
 @Service
 public class DashboardService {
@@ -71,12 +76,45 @@ public class DashboardService {
             );
         }).collect(Collectors.toList());
 
-        // Dummy trend data for now based on actual sip amounts (in a real app, you'd aggregate by month)
-        List<SipTrendDto> trend = new ArrayList<>();
-        String[] months = {"Nov", "Dec", "Jan", "Feb", "Mar", "Apr"};
-        for (int i = 0; i < 6; i++) {
-            trend.add(new SipTrendDto(months[i], BigDecimal.valueOf(Math.random() * 10 + 10), 200 + i));
-        }
+        // ── Real SIP trend: aggregate transaction_orders by createdAt month ──────
+        // Build a rolling 6-month window anchored to today (e.g. Jan–Jun when run in June)
+        YearMonth currentMonth = YearMonth.now();
+        List<YearMonth> window = IntStream.rangeClosed(0, 5)
+                .mapToObj(i -> currentMonth.minusMonths(5 - i))   // oldest → newest
+                .collect(Collectors.toList());
+
+        // Fetch only SIP orders created within the 6-month window (single DB query)
+        OffsetDateTime windowStart = window.get(0)
+                .atDay(1)
+                .atStartOfDay()
+                .atOffset(ZoneOffset.UTC);
+
+        List<TransactionOrder> recentSipOrders = orderRepository
+                .findByDistributorIdAndTransactionTypeAndCreatedAtAfter(
+                        distributorId, TransactionType.SIP, windowStart);
+
+        // Group by YearMonth → sum amounts (null-safe)
+        Map<YearMonth, BigDecimal> amountByMonth = recentSipOrders.stream()
+                .filter(o -> o.getAmount() != null)
+                .collect(Collectors.groupingBy(
+                        o -> YearMonth.from(o.getCreatedAt().toLocalDate()),
+                        Collectors.reducing(BigDecimal.ZERO,
+                                TransactionOrder::getAmount,
+                                BigDecimal::add)));
+
+        // Group by YearMonth → count orders
+        Map<YearMonth, Long> countByMonth = recentSipOrders.stream()
+                .collect(Collectors.groupingBy(
+                        o -> YearMonth.from(o.getCreatedAt().toLocalDate()),
+                        Collectors.counting()));
+
+        // Map each slot in the window to a SipTrendDto (zero-fill months with no data)
+        List<SipTrendDto> trend = window.stream()
+                .map(ym -> new SipTrendDto(
+                        ym.getMonth().getDisplayName(TextStyle.SHORT, Locale.ENGLISH), // "Jan", "Feb" …
+                        amountByMonth.getOrDefault(ym, BigDecimal.ZERO),
+                        countByMonth.getOrDefault(ym, 0L).intValue()))
+                .collect(Collectors.toList());
 
         return new SipDashboardDto(trend, sips);
     }
