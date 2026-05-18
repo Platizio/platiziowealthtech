@@ -147,7 +147,7 @@ public class InvestorService {
         investor.setInvestorStatus(InvestorStatus.ONBOARDING);
 
         Investor saved = investorRepository.save(investor);
-        auditService.log("INVESTOR", saved.getId(), "CREATED", request.distributorId(), "{\"pan\":\"" + request.pan() + "\"}");
+        auditService.log("INVESTOR", saved.getId(), "CREATED", request.distributorId(), "{\"pan_provided\":true}");
 
         String externalInvestorId = cybrillaClient.createInvestorProfile(saved);
         saved.setCybrillaInvestorId(externalInvestorId);

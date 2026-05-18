@@ -12,6 +12,7 @@ import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import java.util.UUID;
 
 @Service
 public class AuthService {
@@ -21,19 +22,25 @@ public class AuthService {
     private final JwtService jwtService;
     private final PasswordEncoder passwordEncoder;
     private final AuditService auditService;
+    private final RefreshTokenService refreshTokenService;
+    private final BlockedTokenService blockedTokenService;
 
     public AuthService(
             DistributorRepository distributorRepository,
             DistributorService distributorService,
             JwtService jwtService,
             PasswordEncoder passwordEncoder,
-            AuditService auditService
+            AuditService auditService,
+            RefreshTokenService refreshTokenService,
+            BlockedTokenService blockedTokenService
     ) {
         this.distributorRepository = distributorRepository;
         this.distributorService = distributorService;
         this.jwtService = jwtService;
         this.passwordEncoder = passwordEncoder;
         this.auditService = auditService;
+        this.refreshTokenService = refreshTokenService;
+        this.blockedTokenService = blockedTokenService;
     }
 
     @Transactional
@@ -97,6 +104,37 @@ public class AuthService {
         return new AuthResponse(
                 token, distributor.getId(), distributor.getEmail(),
                 distributor.getFullName(), distributor.getRole(), distributor.getStatus(), "Login successful");
+    }
+
+    public UUID createRefreshToken(UUID distributorId) {
+        return refreshTokenService.createToken(distributorId);
+    }
+
+    public AuthResponse refreshAccessToken(String refreshToken) {
+        Distributor distributor = refreshTokenService.validate(refreshToken);
+        if (distributor.getStatus() != DistributorStatus.APPROVED) {
+            throw new AccountNotApprovedException(distributor.getStatus());
+        }
+        String token = jwtService.generateToken(
+                distributor.getId(), distributor.getEmail(), distributor.getRole().name());
+        return new AuthResponse(
+                token, distributor.getId(), distributor.getEmail(),
+                distributor.getFullName(), distributor.getRole(), distributor.getStatus(), "Token refreshed");
+    }
+
+    public void revokeRefreshToken(String refreshToken) {
+        refreshTokenService.revoke(refreshToken);
+    }
+
+    public void blockAccessToken(String accessToken) {
+        if (accessToken == null || accessToken.isBlank() || !jwtService.isTokenValid(accessToken)) {
+            return;
+        }
+        blockedTokenService.block(jwtService.extractJti(accessToken), jwtService.extractExpiresAt(accessToken));
+    }
+
+    public long purgeExpiredBlockedTokens() {
+        return blockedTokenService.purgeExpired();
     }
 
     public AuthResponse currentUser(String email) {

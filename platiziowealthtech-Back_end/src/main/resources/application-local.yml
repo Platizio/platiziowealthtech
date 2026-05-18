@@ -1,0 +1,7 @@
+spring:
+  flyway:
+    clean-disabled: false
+
+app:
+  auth:
+    cookie-secure: false

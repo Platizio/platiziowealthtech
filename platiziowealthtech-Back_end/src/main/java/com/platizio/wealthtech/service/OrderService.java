@@ -11,6 +11,7 @@ import java.util.List;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -64,26 +65,28 @@ public class OrderService {
     }
 
     @Transactional
-    public List<TransactionOrder> createOrders(BulkOrderCreateRequest request) {
+    public List<TransactionOrder> createOrders(BulkOrderCreateRequest request, UUID distributorId) {
         return request.investorIds().stream()
                 .distinct()
                 .map(investorId -> createOrder(new OrderCreateRequest(
                         investorId,
-                        request.distributorId(),
                         request.productSchemeId(),
                         request.transactionType(),
                         request.amount(),
                         request.units(),
                         request.paymentMode(),
                         request.mandateMode()
-                )))
+                ), distributorId))
                 .toList();
     }
 
     @Transactional
-    public TransactionOrder createOrder(OrderCreateRequest request) {
+    public TransactionOrder createOrder(OrderCreateRequest request, UUID distributorId) {
         Investor investor = investorService.getInvestor(request.investorId());
 
+        if (!distributorId.equals(investor.getDistributorId())) {
+            throw new AccessDeniedException("Cannot create order for another distributor's investor");
+        }
         if (investor.getKycStatus() != KycStatus.COMPLETED) {
             throw new IllegalStateException("KYC must be completed before order creation");
         }
@@ -93,7 +96,7 @@ public class OrderService {
 
         TransactionOrder order = new TransactionOrder();
         order.setInvestorId(request.investorId());
-        order.setDistributorId(request.distributorId());
+        order.setDistributorId(distributorId);
         order.setProductSchemeId(request.productSchemeId());
         order.setTransactionType(request.transactionType());
         order.setAmount(request.amount());
@@ -109,8 +112,8 @@ public class OrderService {
         saved.setInvestorActionUrl(cybrillaClient.generateInvestorActionUrl(saved));
         saved = transactionOrderRepository.save(saved);
 
-        auditService.log("ORDER", saved.getId(), "ORDER_CREATED", request.distributorId(), "{\"externalOrderId\":\"" + externalOrderId + "\"}");
-        notificationService.createForDistributor(request.distributorId(), request.investorId(), NotificationType.PAYMENT_PENDING, "Investor action pending", "Order created and waiting for investor action.");
+        auditService.log("ORDER", saved.getId(), "ORDER_CREATED", distributorId, "{\"externalOrderId\":\"" + externalOrderId + "\"}");
+        notificationService.createForDistributor(distributorId, request.investorId(), NotificationType.PAYMENT_PENDING, "Investor action pending", "Order created and waiting for investor action.");
         return saved;
     }
 

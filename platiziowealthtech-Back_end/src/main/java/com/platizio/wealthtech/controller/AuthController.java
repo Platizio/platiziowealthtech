@@ -10,10 +10,14 @@ import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.Valid;
 import java.security.Principal;
 import java.util.Map;
+import java.util.UUID;
+import org.springframework.security.authentication.BadCredentialsException;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.web.bind.annotation.*;
 
 @RestController
@@ -49,6 +53,17 @@ public class AuthController {
     public AuthResponse login(@Valid @RequestBody AuthLoginRequest request, HttpServletResponse response) {
         AuthResponse authResponse = authService.login(request);
         authCookieService.writeAccessToken(response, authResponse.token());
+        UUID refreshToken = authService.createRefreshToken(authResponse.distributorId());
+        authCookieService.writeRefreshToken(response, refreshToken);
+        return authResponse;
+    }
+
+    @PostMapping("/refresh")
+    public AuthResponse refresh(HttpServletRequest request, HttpServletResponse response) {
+        String refreshToken = authCookieService.readRefreshToken(request)
+                .orElseThrow(() -> new BadCredentialsException("Refresh token is required"));
+        AuthResponse authResponse = authService.refreshAccessToken(refreshToken);
+        authCookieService.writeAccessToken(response, authResponse.token());
         return authResponse;
     }
 
@@ -61,8 +76,16 @@ public class AuthController {
     }
 
     @PostMapping("/logout")
-    public Map<String, String> logout(HttpServletResponse response) {
+    public Map<String, String> logout(HttpServletRequest request, HttpServletResponse response) {
+        authCookieService.readAccessToken(request).ifPresent(authService::blockAccessToken);
+        authCookieService.readRefreshToken(request).ifPresent(authService::revokeRefreshToken);
         authCookieService.clearAccessToken(response);
+        authCookieService.clearRefreshToken(response);
         return Map.of("status", "logged_out");
+    }
+
+    @Scheduled(fixedDelayString = "${app.auth.blocked-token-purge-interval-ms:3600000}")
+    public void purgeExpiredBlockedTokens() {
+        authService.purgeExpiredBlockedTokens();
     }
 }

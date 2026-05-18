@@ -7,7 +7,6 @@ import java.util.UUID;
 
 public record OrderCreateRequest(
         @NotNull UUID investorId,
-        @NotNull UUID distributorId,
         @NotNull UUID productSchemeId,
         @NotNull TransactionType transactionType,
         BigDecimal amount,

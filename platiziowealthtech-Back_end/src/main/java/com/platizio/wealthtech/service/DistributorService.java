@@ -1,6 +1,5 @@
 package com.platizio.wealthtech.service;
 
-import com.platizio.wealthtech.common.AccountNotApprovedException;
 import com.platizio.wealthtech.domain.Distributor;
 import com.platizio.wealthtech.domain.DistributorRole;
 import com.platizio.wealthtech.domain.DistributorStatus;
@@ -10,9 +9,7 @@ import com.platizio.wealthtech.repository.DistributorRepository;
 import jakarta.persistence.EntityNotFoundException;
 import java.util.List;
 import java.util.UUID;
-import com.platizio.wealthtech.dto.AuthLoginRequest;
 import org.springframework.data.domain.PageRequest;
-import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -55,21 +52,6 @@ public class DistributorService {
             );
         }
         throw new IllegalStateException("Only an admin or master distributor can search distributors");
-    }
-
-    public Distributor login(AuthLoginRequest request) {
-        Distributor distributor = distributorRepository.findByEmail(request.email())
-                .orElseThrow(() -> new BadCredentialsException("Invalid email or password"));
-
-        if (distributor.getPasswordHash() != null &&
-                passwordEncoder.matches(request.password(), distributor.getPasswordHash())) {
-            if (distributor.getStatus() != DistributorStatus.APPROVED) {
-                throw new AccountNotApprovedException(distributor.getStatus());
-            }
-            return distributor;
-        }
-
-        throw new BadCredentialsException("Invalid email or password");
     }
 
     public List<Distributor> findSubDistributors(UUID requesterId) {

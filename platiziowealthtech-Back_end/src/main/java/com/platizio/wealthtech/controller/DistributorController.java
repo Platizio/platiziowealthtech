@@ -2,13 +2,15 @@ package com.platizio.wealthtech.controller;
 
 import com.platizio.wealthtech.domain.Distributor;
 import com.platizio.wealthtech.domain.DistributorStatus;
-import com.platizio.wealthtech.dto.AuthLoginRequest;
 import com.platizio.wealthtech.dto.DistributorSignupRequest;
 import com.platizio.wealthtech.dto.DistributorUpdateRequest;
+import com.platizio.wealthtech.security.JwtAuthPrincipal;
 import com.platizio.wealthtech.service.DistributorService;
 import jakarta.validation.Valid;
 import java.util.List;
 import java.util.UUID;
+import org.springframework.security.access.AccessDeniedException;
+import org.springframework.security.core.Authentication;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
@@ -25,11 +27,6 @@ public class DistributorController {
     @PostMapping("/signup")
     public Distributor signup(@Valid @RequestBody DistributorSignupRequest request) {
         return distributorService.signup(request);
-    }
-
-    @PostMapping("/login")
-    public Distributor login(@Valid @RequestBody AuthLoginRequest request) {
-        return distributorService.login(request);
     }
 
     @PreAuthorize("hasRole('ADMIN')")
@@ -70,14 +67,21 @@ public class DistributorController {
     public Distributor updateStatus(
             @PathVariable UUID distributorId,
             @RequestParam DistributorStatus status,
-            @RequestParam UUID actorId
+            Authentication auth
     ) {
-        return distributorService.updateStatus(distributorId, status, actorId);
+        return distributorService.updateStatus(distributorId, status, actorId(auth));
     }
 
     @PreAuthorize("hasRole('ADMIN')")
     @DeleteMapping("/{distributorId}")
-    public void deleteDistributor(@PathVariable UUID distributorId, @RequestParam UUID actorId) {
-        distributorService.deleteDistributor(distributorId, actorId);
+    public void deleteDistributor(@PathVariable UUID distributorId, Authentication auth) {
+        distributorService.deleteDistributor(distributorId, actorId(auth));
+    }
+
+    private UUID actorId(Authentication auth) {
+        if (auth == null || !(auth.getPrincipal() instanceof JwtAuthPrincipal)) {
+            throw new AccessDeniedException("Authenticated distributor principal is required");
+        }
+        return ((JwtAuthPrincipal) auth.getPrincipal()).getDistributorId();
     }
 }

@@ -13,6 +13,5 @@ public record LeadCreateWithDistributorRequest(
         String stateName,
         @NotNull LeadSource source,
         String notes,
-        @NotNull UUID distributorId,
-        @NotNull UUID actorId
+        @NotNull UUID distributorId
 ) {}

@@ -9,7 +9,6 @@ import java.util.UUID;
 
 public record BulkOrderCreateRequest(
         @NotEmpty List<UUID> investorIds,
-        @NotNull UUID distributorId,
         @NotNull UUID productSchemeId,
         @NotNull TransactionType transactionType,
         BigDecimal amount,

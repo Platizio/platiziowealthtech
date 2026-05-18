@@ -5,10 +5,15 @@ import com.platizio.wealthtech.domain.RedemptionRecord;
 import com.platizio.wealthtech.domain.TransactionOrder;
 import com.platizio.wealthtech.dto.BulkOrderCreateRequest;
 import com.platizio.wealthtech.dto.OrderCreateRequest;
+import com.platizio.wealthtech.security.AuthenticatedDistributorPrincipal;
+import com.platizio.wealthtech.security.JwtAuthPrincipal;
 import com.platizio.wealthtech.service.OrderService;
 import jakarta.validation.Valid;
 import java.util.List;
 import java.util.UUID;
+import org.springframework.security.access.AccessDeniedException;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
@@ -23,13 +28,19 @@ public class OrderController {
     }
 
     @PostMapping
-    public TransactionOrder createOrder(@Valid @RequestBody OrderCreateRequest request) {
-        return orderService.createOrder(request);
+    public TransactionOrder createOrder(
+            @Valid @RequestBody OrderCreateRequest request,
+            @AuthenticationPrincipal AuthenticatedDistributorPrincipal principal
+    ) {
+        return orderService.createOrder(request, authenticatedDistributorId(principal));
     }
 
     @PostMapping("/bulk")
-    public List<TransactionOrder> createOrders(@Valid @RequestBody BulkOrderCreateRequest request) {
-        return orderService.createOrders(request);
+    public List<TransactionOrder> createOrders(
+            @Valid @RequestBody BulkOrderCreateRequest request,
+            @AuthenticationPrincipal AuthenticatedDistributorPrincipal principal
+    ) {
+        return orderService.createOrders(request, authenticatedDistributorId(principal));
     }
 
     @GetMapping("/{orderId}")
@@ -58,19 +69,33 @@ public class OrderController {
             @PathVariable UUID orderId,
             @RequestParam OrderStatus status,
             @RequestParam(required = false) String failureReason,
-            @RequestParam UUID actorId
+            Authentication auth
     ) {
-        return orderService.updateOrderStatus(orderId, status, failureReason, actorId);
+        return orderService.updateOrderStatus(orderId, status, failureReason, actorId(auth));
     }
 
     @PostMapping("/{orderId}/redemption")
-    public RedemptionRecord createRedemption(@PathVariable UUID orderId, @RequestParam UUID actorId) {
-        return orderService.createRedemption(orderId, actorId);
+    public RedemptionRecord createRedemption(@PathVariable UUID orderId, Authentication auth) {
+        return orderService.createRedemption(orderId, actorId(auth));
     }
 
     @PreAuthorize("hasRole('ADMIN')")
     @DeleteMapping("/{orderId}")
-    public void deleteOrder(@PathVariable UUID orderId, @RequestParam UUID actorId) {
-        orderService.deleteOrder(orderId, actorId);
+    public void deleteOrder(@PathVariable UUID orderId, Authentication auth) {
+        orderService.deleteOrder(orderId, actorId(auth));
+    }
+
+    private UUID authenticatedDistributorId(AuthenticatedDistributorPrincipal principal) {
+        if (principal == null) {
+            throw new AccessDeniedException("Authenticated distributor principal is required");
+        }
+        return principal.distributorId();
+    }
+
+    private UUID actorId(Authentication auth) {
+        if (auth == null || !(auth.getPrincipal() instanceof JwtAuthPrincipal)) {
+            throw new AccessDeniedException("Authenticated distributor principal is required");
+        }
+        return ((JwtAuthPrincipal) auth.getPrincipal()).getDistributorId();
     }
 }

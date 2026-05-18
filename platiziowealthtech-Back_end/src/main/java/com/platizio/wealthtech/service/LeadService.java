@@ -11,6 +11,7 @@ import com.platizio.wealthtech.repository.LeadInteractionRepository;
 import jakarta.persistence.EntityNotFoundException;
 import java.util.List;
 import java.util.UUID;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -45,12 +46,13 @@ public class LeadService {
     }
 
     @Transactional
-    public InvestorLead updateStatus(UUID leadId, LeadStatusUpdateRequest request) {
+    public InvestorLead updateStatus(UUID leadId, LeadStatusUpdateRequest request, UUID actorId) {
         InvestorLead lead = getById(leadId);
+        verifyAssignedToCaller(lead, actorId);
         lead.setStatus(request.status());
         if (request.notes() != null) lead.setNotes(request.notes());
         InvestorLead saved = investorLeadRepository.save(lead);
-        auditService.log("LEAD", saved.getId(), "STATUS_UPDATED", request.actorId(),
+        auditService.log("LEAD", saved.getId(), "STATUS_UPDATED", actorId,
                 "{\"status\":\"" + request.status() + "\"}");
         return saved;
     }
@@ -69,7 +71,7 @@ public class LeadService {
     }
 
     @Transactional
-    public InvestorLead createLeadWithDistributor(LeadCreateWithDistributorRequest request) {
+    public InvestorLead createLeadWithDistributor(LeadCreateWithDistributorRequest request, UUID actorId) {
         InvestorLead lead = new InvestorLead();
         lead.setProspectName(request.prospectName());
         lead.setMobileNumber(request.mobileNumber());
@@ -81,34 +83,35 @@ public class LeadService {
         lead.setAssignedDistributorId(request.distributorId());
         lead.setStatus(LeadStatus.ASSIGNED);
         InvestorLead saved = investorLeadRepository.save(lead);
-        auditService.log("LEAD", saved.getId(), "LEAD_ASSIGNED", request.actorId(),
+        auditService.log("LEAD", saved.getId(), "LEAD_ASSIGNED", actorId,
                 "{\"assignedDistributorId\":\"" + request.distributorId() + "\"}");
         return saved;
     }
 
     @Transactional
-    public InvestorLead assignLead(UUID leadId, LeadAssignRequest request) {
+    public InvestorLead assignLead(UUID leadId, LeadAssignRequest request, UUID actorId) {
         InvestorLead lead = investorLeadRepository.findById(leadId)
                 .orElseThrow(() -> new EntityNotFoundException("Lead not found"));
         lead.setAssignedDistributorId(request.distributorId());
         lead.setStatus(LeadStatus.ASSIGNED);
         InvestorLead saved = investorLeadRepository.save(lead);
-        auditService.log("LEAD", saved.getId(), "LEAD_ASSIGNED", request.actorId(),
+        auditService.log("LEAD", saved.getId(), "LEAD_ASSIGNED", actorId,
                 "{\"assignedDistributorId\":\"" + request.distributorId() + "\"}");
         return saved;
     }
 
     @Transactional
-    public LeadInteraction addInteraction(UUID leadId, LeadInteractionRequest request) {
+    public LeadInteraction addInteraction(UUID leadId, LeadInteractionRequest request, UUID actorId) {
         InvestorLead lead = investorLeadRepository.findById(leadId)
                 .orElseThrow(() -> new EntityNotFoundException("Lead not found"));
         if (lead.getAssignedDistributorId() == null) {
             throw new IllegalStateException("Lead must be assigned before interactions are recorded");
         }
+        verifyAssignedToCaller(lead, actorId);
 
         LeadInteraction interaction = new LeadInteraction();
         interaction.setLeadId(leadId);
-        interaction.setDistributorId(request.distributorId());
+        interaction.setDistributorId(actorId);
         interaction.setCommentText(request.commentText());
         interaction.setInteractionType(request.interactionType());
         return leadInteractionRepository.save(interaction);
@@ -120,5 +123,11 @@ public class LeadService {
                 .orElseThrow(() -> new EntityNotFoundException("Lead not found"));
         investorLeadRepository.delete(lead);
         auditService.log("LEAD", leadId, "DELETED", actorId, "{\"reason\":\"User requested deletion\"}");
+    }
+
+    private void verifyAssignedToCaller(InvestorLead lead, UUID callerDistributorId) {
+        if (!callerDistributorId.equals(lead.getAssignedDistributorId())) {
+            throw new AccessDeniedException("Cannot modify another distributor's lead");
+        }
     }
 }

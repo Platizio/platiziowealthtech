@@ -3,13 +3,12 @@ package com.platizio.wealthtech.config;
 import com.platizio.wealthtech.service.CustomUserDetailsService;
 import com.platizio.wealthtech.service.JwtService;
 import com.platizio.wealthtech.service.AuthCookieService;
-import jakarta.servlet.http.Cookie;
+import com.platizio.wealthtech.service.BlockedTokenService;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
-import java.util.Arrays;
 import java.util.Optional;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -27,15 +26,18 @@ public class JwtAuthFilter extends OncePerRequestFilter {
     private final JwtService jwtService;
     private final CustomUserDetailsService userDetailsService;
     private final AuthCookieService authCookieService;
+    private final BlockedTokenService blockedTokenService;
 
     public JwtAuthFilter(
             JwtService jwtService,
             CustomUserDetailsService userDetailsService,
-            AuthCookieService authCookieService
+            AuthCookieService authCookieService,
+            BlockedTokenService blockedTokenService
     ) {
         this.jwtService = jwtService;
         this.userDetailsService = userDetailsService;
         this.authCookieService = authCookieService;
+        this.blockedTokenService = blockedTokenService;
     }
 
     @Override
@@ -63,6 +65,11 @@ public class JwtAuthFilter extends OncePerRequestFilter {
             filterChain.doFilter(request, response);
             return;
         }
+        if (blockedTokenService.isBlocked(jwtService.extractJti(token))) {
+            logger.warn("Blocked token received for request to {}", path);
+            filterChain.doFilter(request, response);
+            return;
+        }
 
         String email = jwtService.extractEmail(token);
 
@@ -79,20 +86,6 @@ public class JwtAuthFilter extends OncePerRequestFilter {
     }
 
     private Optional<String> extractToken(HttpServletRequest request) {
-        String authHeader = request.getHeader("Authorization");
-        if (authHeader != null && authHeader.startsWith("Bearer ")) {
-            return Optional.of(authHeader.substring(7));
-        }
-
-        Cookie[] cookies = request.getCookies();
-        if (cookies == null) {
-            return Optional.empty();
-        }
-
-        return Arrays.stream(cookies)
-                .filter(cookie -> authCookieService.cookieName().equals(cookie.getName()))
-                .map(Cookie::getValue)
-                .filter(value -> value != null && !value.isBlank())
-                .findFirst();
+        return authCookieService.readAccessToken(request);
     }
 }

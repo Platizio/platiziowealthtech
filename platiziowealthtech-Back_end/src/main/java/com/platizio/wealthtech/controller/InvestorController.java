@@ -6,6 +6,7 @@ import com.platizio.wealthtech.domain.KycStatus;
 import com.platizio.wealthtech.dto.InvestorBankRequest;
 import com.platizio.wealthtech.dto.InvestorCreateRequest;
 import com.platizio.wealthtech.dto.InvestorUpdateRequest;
+import com.platizio.wealthtech.security.JwtAuthPrincipal;
 import com.platizio.wealthtech.service.InvestorService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.media.ArraySchema;
@@ -16,6 +17,8 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import java.util.List;
 import java.util.UUID;
+import org.springframework.security.access.AccessDeniedException;
+import org.springframework.security.core.Authentication;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
@@ -98,24 +101,24 @@ public class InvestorController {
     public Investor updateKycStatus(
             @PathVariable UUID investorId,
             @RequestParam KycStatus status,
-            @RequestParam UUID actorId
+            Authentication auth
     ) {
-        return investorService.updateKycStatus(investorId, status, actorId);
+        return investorService.updateKycStatus(investorId, status, actorId(auth));
     }
 
     @PostMapping("/{investorId}/bank-accounts")
     public InvestorBankAccount addBank(
             @PathVariable UUID investorId,
             @Valid @RequestBody InvestorBankRequest request,
-            @RequestParam UUID actorId
+            Authentication auth
     ) {
-        return investorService.addBankAccount(investorId, request, actorId);
+        return investorService.addBankAccount(investorId, request, actorId(auth));
     }
 
     @PreAuthorize("hasRole('ADMIN')")
     @PatchMapping("/{investorId}/bank-verify")
-    public Investor verifyBank(@PathVariable UUID investorId, @RequestParam UUID actorId) {
-        return investorService.verifyBank(investorId, actorId);
+    public Investor verifyBank(@PathVariable UUID investorId, Authentication auth) {
+        return investorService.verifyBank(investorId, actorId(auth));
     }
 
     @GetMapping("/{investorId}")
@@ -138,7 +141,14 @@ public class InvestorController {
 
     @PreAuthorize("hasRole('ADMIN')")
     @DeleteMapping("/{investorId}")
-    public void deleteInvestor(@PathVariable UUID investorId, @RequestParam UUID actorId) {
-        investorService.deleteInvestor(investorId, actorId);
+    public void deleteInvestor(@PathVariable UUID investorId, Authentication auth) {
+        investorService.deleteInvestor(investorId, actorId(auth));
+    }
+
+    private UUID actorId(Authentication auth) {
+        if (auth == null || !(auth.getPrincipal() instanceof JwtAuthPrincipal)) {
+            throw new AccessDeniedException("Authenticated distributor principal is required");
+        }
+        return ((JwtAuthPrincipal) auth.getPrincipal()).getDistributorId();
     }
 }

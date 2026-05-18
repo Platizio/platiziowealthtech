@@ -7,7 +7,7 @@ import java.util.UUID;
 import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.core.userdetails.UserDetails;
 
-public final class AuthenticatedDistributorPrincipal implements UserDetails {
+public final class AuthenticatedDistributorPrincipal implements JwtAuthPrincipal, UserDetails {
 
     private final UUID distributorId;
     private final String email;

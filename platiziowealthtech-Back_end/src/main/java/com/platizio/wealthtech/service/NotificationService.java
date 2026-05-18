@@ -3,6 +3,7 @@ package com.platizio.wealthtech.service;
 import com.platizio.wealthtech.domain.Notification;
 import com.platizio.wealthtech.domain.NotificationType;
 import com.platizio.wealthtech.repository.NotificationRepository;
+import jakarta.persistence.EntityNotFoundException;
 import java.util.List;
 import java.util.UUID;
 import org.springframework.stereotype.Service;
@@ -21,6 +22,11 @@ public class NotificationService {
         return notificationRepository.findByDistributorIdOrderByCreatedAtDesc(distributorId);
     }
 
+    public Notification getNotification(UUID notificationId) {
+        return notificationRepository.findById(notificationId)
+                .orElseThrow(() -> new EntityNotFoundException("Notification not found"));
+    }
+
     @Transactional
     public Notification createForDistributor(UUID distributorId, UUID investorId, NotificationType type, String title, String message) {
         Notification notification = new Notification();
@@ -33,8 +39,7 @@ public class NotificationService {
     }
 
     @Transactional
-    public Notification markRead(UUID notificationId) {
-        Notification notification = notificationRepository.findById(notificationId).orElseThrow();
+    public Notification markRead(Notification notification) {
         notification.setReadFlag(Boolean.TRUE);
         return notificationRepository.save(notification);
     }
