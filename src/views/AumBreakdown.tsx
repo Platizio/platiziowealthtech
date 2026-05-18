@@ -268,7 +268,7 @@ export default function AumBreakdown({ onBack, userData }: AumBreakdownProps) {
                 ))}
               </div>
             </div>
-            {aumTrend.every(t => t.MF === 0 && t.SIF === 0 && t.Others === 0) ? (
+            {aumTrend.every(t => t.MF === 0 && t.SIF === 0) ? (
               <div className="h-48 flex items-center justify-center text-slate-400 text-sm">
                 No completed orders available to plot.
               </div>
@@ -277,7 +277,16 @@ export default function AumBreakdown({ onBack, userData }: AumBreakdownProps) {
                 <ComposedChart data={aumTrend} barSize={18} margin={{ top: 10, right: 16, left: 0, bottom: 0 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" vertical={false} />
                   <XAxis dataKey="month" tick={{ fontSize: 12 }} axisLine={false} tickLine={false} />
-                  <YAxis tick={{ fontSize: 12 }} tickFormatter={v => `₹${v}`} axisLine={false} tickLine={false} />
+                  {/* domain + padding prevent the cumulative-total Line from
+                      sitting on the clip-rect bottom edge when all values are 0 */}
+                  <YAxis
+                    tick={{ fontSize: 12 }}
+                    tickFormatter={v => `₹${v}`}
+                    axisLine={false}
+                    tickLine={false}
+                    domain={[0, (max: number) => Math.max(max, 1)]}
+                    padding={{ top: 16, bottom: 0 }}
+                  />
                   <Tooltip
                     formatter={(v: number, name: string) => [`₹${v} Cr`, name]}
                     contentStyle={{ borderRadius: 10, border: '1px solid #e2e8f0', fontSize: 12 }}

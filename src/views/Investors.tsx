@@ -317,7 +317,13 @@ function InvestorDetail({
   onInvest?: (investor: any) => void;
 }) {
   const [activeTab, setActiveTab] = useState('overview');
-  const [performanceData, setPerformanceData] = useState<any[]>([]);
+  // Pre-fill so the chart renders a flat baseline immediately rather than being empty.
+  const ZERO_MONTHS = [
+    { month: 'Jan', value: 0 }, { month: 'Feb', value: 0 },
+    { month: 'Mar', value: 0 }, { month: 'Apr', value: 0 },
+    { month: 'May', value: 0 }, { month: 'Jun', value: 0 },
+  ];
+  const [performanceData, setPerformanceData] = useState<any[]>(ZERO_MONTHS);
 
   useEffect(() => {
     apiFetch(`/orders/by-investor/${investor.id}`)
@@ -455,9 +461,23 @@ function InvestorDetail({
                     </defs>
                     <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
                     <XAxis dataKey="month" axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: '#94a3b8' }} />
-                    <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: '#94a3b8' }} />
+                    {/* domain + padding keep the line visible when all values are 0 */}
+                    <YAxis
+                      axisLine={false} tickLine={false}
+                      tick={{ fontSize: 12, fill: '#94a3b8' }}
+                      domain={[0, (max: number) => Math.max(max, 1)]}
+                      padding={{ top: 16, bottom: 0 }}
+                    />
                     <Tooltip contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }} />
-                    <Area type="monotone" dataKey="value" stroke="#3b82f6" strokeWidth={3} fillOpacity={1} fill="url(#colorVal)" />
+                    <Area
+                      type="monotone"
+                      dataKey="value"
+                      stroke="#3b82f6"
+                      strokeWidth={3}
+                      fillOpacity={1}
+                      fill="url(#colorVal)"
+                      connectNulls
+                    />
                   </RechartsArea>
                 </ResponsiveContainer>
               </div>

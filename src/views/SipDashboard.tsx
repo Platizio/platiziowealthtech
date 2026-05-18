@@ -14,7 +14,7 @@ interface Sip {
 }
 
 interface SipTrend {
-  month: string; amount: number; count: number;
+  month: string; value: number; count: number;
 }
 
 type StatusFilter = 'All' | 'Active' | 'Failed' | 'Paused';
@@ -26,22 +26,130 @@ const statusCfg: Record<string, { icon: React.ReactNode; cls: string }> = {
   Paused: { icon: <Clock        className="w-3.5 h-3.5" />, cls: 'bg-amber-100 text-amber-700' },
 };
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Loading skeleton — shown while the first fetch is in-flight.
+// Defined at module scope so its identity is stable across re-renders.
+// ─────────────────────────────────────────────────────────────────────────────
+function SipDashboardSkeleton() {
+  const pulse = 'bg-slate-100 animate-pulse rounded-xl';
+  return (
+    <div className="p-8 space-y-6">
+      {/* back button */}
+      <div className={`${pulse} h-5 w-32`} />
+
+      {/* header row */}
+      <div className="flex justify-between items-end">
+        <div className="space-y-2">
+          <div className={`${pulse} h-7 w-48`} />
+          <div className={`${pulse} h-4 w-64`} />
+        </div>
+        <div className={`${pulse} h-9 w-48 rounded-lg`} />
+      </div>
+
+      {/* KPI cards */}
+      <div className="grid grid-cols-4 gap-5">
+        {[...Array(4)].map((_, i) => (
+          <div key={i} className="bg-white rounded-2xl border border-slate-100 p-5 space-y-3">
+            <div className={`${pulse} h-3 w-28`} />
+            <div className={`${pulse} h-8 w-20`} />
+            <div className={`${pulse} h-3 w-32`} />
+          </div>
+        ))}
+      </div>
+
+      {/* trend chart */}
+      <div className="bg-white rounded-2xl border border-slate-200 p-6 space-y-4">
+        <div className={`${pulse} h-5 w-56`} />
+        <div className={`${pulse} h-[220px] w-full rounded-xl`} />
+      </div>
+
+      {/* SIP table */}
+      <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden">
+        <div className="px-5 py-4 border-b border-slate-100">
+          <div className={`${pulse} h-5 w-32`} />
+        </div>
+        {[...Array(5)].map((_, i) => (
+          <div key={i} className="px-5 py-3.5 border-b border-slate-50 flex gap-4">
+            <div className={`${pulse} h-4 flex-1`} />
+            <div className={`${pulse} h-4 flex-1`} />
+            <div className={`${pulse} h-4 w-16`} />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// Session-cache TTL: 5 minutes
+const CACHE_TTL_MS = 5 * 60 * 1_000;
+
 export default function SipDashboard({ onBack, userData }: { onBack: () => void; userData?: any }) {
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('All');
   const [catFilter, setCatFilter] = useState<CatFilter>('ALL');
   const [sips, setSips] = useState<Sip[]>([]);
-  const [sipTrend, setSipTrend] = useState<SipTrend[]>([]);
+  // Pre-fill 6 zero months so the chart skeleton renders immediately on first paint.
+  const [sipTrend, setSipTrend] = useState<SipTrend[]>([
+    { month: 'Jan', value: 0, count: 0 },
+    { month: 'Feb', value: 0, count: 0 },
+    { month: 'Mar', value: 0, count: 0 },
+    { month: 'Apr', value: 0, count: 0 },
+    { month: 'May', value: 0, count: 0 },
+    { month: 'Jun', value: 0, count: 0 },
+  ]);
   const [loading, setLoading] = useState(true);
 
   React.useEffect(() => {
     if (!userData?.id) return;
+
+    const cacheKey = `sip_dash_${userData.id}`;
+
+    // ── Try the session cache first ──────────────────────────────────────────
+    // This prevents the chart from flickering to different values on every
+    // navigation back to this page within the same browser session.
+    try {
+      const raw = sessionStorage.getItem(cacheKey);
+      if (raw) {
+        const { ts, payload } = JSON.parse(raw) as { ts: number; payload: any };
+        if (Date.now() - ts < CACHE_TTL_MS) {
+          setSips(payload.sips || []);
+          setSipTrend(
+            (payload.trend || []).map((t: any) => ({
+              month: t.month,
+              value: Number(t.amount) || 0,
+              count: t.count ?? 0,
+            }))
+          );
+          setLoading(false);
+          return; // skip network fetch — cache is still fresh
+        }
+      }
+    } catch {
+      // Malformed cache entry — fall through to a fresh fetch
+    }
+
+    // ── Cache miss: fetch from backend ──────────────────────────────────────
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
 
     apiFetch(`/dashboard/distributor/${userData.id}/sips`, { headers })
       .then(res => res.json())
       .then(data => {
+        // Persist to session cache for subsequent navigations
+        try {
+          sessionStorage.setItem(cacheKey, JSON.stringify({ ts: Date.now(), payload: data }));
+        } catch {
+          // Quota exceeded or private-browsing restriction — silently skip
+        }
+
         setSips(data.sips || []);
-        setSipTrend(data.trend || []);
+        // Normalise backend {month, amount, count} → {month, value, count}.
+        // Coerce amount to Number to handle BigDecimal serialised as string.
+        setSipTrend(
+          (data.trend || []).map((t: any) => ({
+            month: t.month,
+            value: Number(t.amount) || 0,
+            count: t.count ?? 0,
+          }))
+        );
         setLoading(false);
       })
       .catch(err => {
@@ -63,6 +171,11 @@ export default function SipDashboard({ onBack, userData }: { onBack: () => void;
   const activeSips = sips.filter(s => s.status === 'Active').length;
   const failedSips = sips.filter(s => s.status === 'Failed').length;
   const pausedSips = sips.filter(s => s.status === 'Paused').length;
+
+  // Show the skeleton on the very first load (before any data arrives).
+  // Once the cache or network fetch resolves, loading flips to false and
+  // the real dashboard fades in via the motion wrapper below.
+  if (loading) return <SipDashboardSkeleton />;
 
   return (
     <motion.div
@@ -116,7 +229,10 @@ export default function SipDashboard({ onBack, userData }: { onBack: () => void;
       <div className="bg-white rounded-2xl border border-slate-200 p-6">
         <h2 className="font-semibold text-slate-800 mb-5">SIP Amount Trend — Last 6 Months (₹ L)</h2>
         <ResponsiveContainer width="100%" height={220}>
-          <AreaChart data={sipTrend}>
+          <AreaChart
+            data={sipTrend}
+            margin={{ top: 10, right: 10, left: 0, bottom: 0 }}
+          >
             <defs>
               <linearGradient id="sipGrad" x1="0" y1="0" x2="0" y2="1">
                 <stop offset="5%"  stopColor="#3b82f6" stopOpacity={0.15} />
@@ -124,12 +240,26 @@ export default function SipDashboard({ onBack, userData }: { onBack: () => void;
               </linearGradient>
             </defs>
             <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
-            <XAxis dataKey="month" tick={{ fontSize: 12 }} />
-            <YAxis tick={{ fontSize: 12 }} tickFormatter={v => `₹${v}L`} />
-            <Tooltip formatter={(v: number) => `₹${v} L`} />
+            <XAxis dataKey="month" tick={{ fontSize: 12 }} axisLine={false} tickLine={false} />
+            {/* domain ensures a non-zero max so the line is never clipped to the
+                bottom edge of the chart when all values are 0 */}
+            <YAxis
+              tick={{ fontSize: 12 }}
+              tickFormatter={v => `₹${v}L`}
+              axisLine={false}
+              tickLine={false}
+              domain={[0, (max: number) => Math.max(max, 1)]}
+              padding={{ top: 16, bottom: 0 }}
+            />
+            <Tooltip formatter={(v: number) => [`₹${v} L`, 'SIP Amount']} />
             <Area
-              type="monotone" dataKey="amount" name="SIP Amount (₹L)"
-              stroke="#3b82f6" strokeWidth={2} fill="url(#sipGrad)"
+              type="monotone"
+              dataKey="value"
+              name="SIP Amount (₹L)"
+              stroke="#3b82f6"
+              strokeWidth={2}
+              fill="url(#sipGrad)"
+              connectNulls
             />
           </AreaChart>
         </ResponsiveContainer>

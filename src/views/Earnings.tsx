@@ -78,7 +78,16 @@ export default function Earnings() {
               <BarChart data={earningsData} barGap={4} margin={{ top: 0, right: 0, left: -20, bottom: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
                 <XAxis dataKey="month" axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: '#94a3b8' }} />
-                <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: '#94a3b8' }} />
+                {/* domain={[0,'auto']} anchors the axis floor at 0 so bars always
+                    grow upward from the baseline — without this, Recharts may float
+                    the min to the lowest data value, causing the tallest bar to
+                    appear compressed near the bottom of the chart area. */}
+                <YAxis
+                  axisLine={false}
+                  tickLine={false}
+                  tick={{ fontSize: 12, fill: '#94a3b8' }}
+                  domain={[0, 'auto']}
+                />
                 <Tooltip
                   contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
                   formatter={(val: number) => [`₹${val.toLocaleString('en-IN')}`, '']}
