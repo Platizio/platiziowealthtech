@@ -44,21 +44,38 @@ export default function AppLayout({ userData, onSignOut }: { userData: any, onSi
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
   useEffect(() => {
-    if (userData && userData.id) {
-      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-
-      apiFetch(`/notifications/distributor/${userData.id}`, { headers })
-        .then(res => {
-          if (res.ok) return res.json();
-          throw new Error('Failed to fetch notifs');
-        })
-        .then(data => {
-          const unread = data.filter((n: any) => n.readFlag === false).length;
-          setUnreadNotifs(unread);
-        })
-        .catch(err => console.error('Failed to fetch notifications', err));
+    if (!userData?.id) {
+      setUnreadNotifs(0);
+      return;
     }
-  }, [userData]);
+
+    let cancelled = false;
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+
+    const fetchUnreadNotifications = async () => {
+      try {
+        const res = await apiFetch(`/notifications/distributor/${userData.id}`, { headers });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        const unread = Array.isArray(data)
+          ? data.filter((n: any) => n.readFlag === false).length
+          : 0;
+
+        if (!cancelled) setUnreadNotifs(unread);
+      } catch (err) {
+        console.error('Failed to fetch notifications', err);
+        if (!cancelled) setUnreadNotifs(0);
+      }
+    };
+
+    fetchUnreadNotifications();
+    const intervalId = window.setInterval(fetchUnreadNotifications, 60000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [userData?.id]);
 
   const mode = location.pathname.startsWith('/admin') ? 'admin' : 'distributor';
 
@@ -299,7 +316,9 @@ export default function AppLayout({ userData, onSignOut }: { userData: any, onSi
               >
                 <Bell className="w-5 h-5" />
                 {unreadNotifs > 0 && (
-                  <span className="absolute top-0 right-0 w-2 h-2 bg-red-500 border border-white rounded-full"></span>
+                  <span className="absolute -top-2 -right-2 min-w-5 h-5 px-1 bg-red-500 border border-white rounded-full text-[10px] font-bold text-white flex items-center justify-center leading-none">
+                    {unreadNotifs > 99 ? '99+' : unreadNotifs}
+                  </span>
                 )}
               </button>
 

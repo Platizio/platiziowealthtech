@@ -152,7 +152,7 @@ export default function App() {
             <>
               <Route path="/admin/overview" element={<AdminOverview />} />
               <Route path="/admin/distributor-mgmt" element={<DistributorMgmt userData={userData} />} />
-              <Route path="/admin/product-mgmt" element={<ProductMgmtWrapper />} />
+              <Route path="/admin/product-mgmt" element={<ProductMgmtWrapper userData={userData} />} />
               <Route path="/admin/investor-mgmt" element={<InvestorMgmt userData={userData} />} />
             </>
           ) : (
@@ -186,10 +186,10 @@ function InvestorTransactionWrapper() {
   return <InvestorTransaction investor={investor} onComplete={() => navigate('/distributor/investors')} onBack={() => navigate('/distributor/investors')} />;
 }
 
-function ProductMgmtWrapper() {
+function ProductMgmtWrapper({ userData }: { userData?: any }) {
   // ProductMgmt used to get products state from App.tsx. 
   // We can either initialize it here or refactor ProductMgmt to fetch its own data.
   // For now, initializing empty state to not break the component signature.
   const [products, setProducts] = useState<any[]>([]);
-  return <ProductMgmt products={products} setProducts={setProducts} />;
+  return <ProductMgmt products={products} setProducts={setProducts} userData={userData} />;
 }

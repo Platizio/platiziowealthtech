@@ -30,6 +30,7 @@ const riskColor: Record<string, string> = {
 
 const ASSET_CLASSES = ['All', 'MF', 'SIF'];
 const CATEGORIES    = ['All', 'Equity', 'Debt', 'ELSS', 'Hybrid', 'Strategic'];
+const normalizeRole = (role?: string) => role?.trim().toUpperCase() || '';
 
 interface BackendProductScheme {
   id?: string;
@@ -111,9 +112,11 @@ const mapBackendSchemeToProduct = (scheme: BackendProductScheme, index: number):
 export default function ProductMgmt({
   products,
   setProducts,
+  userData,
 }: {
   products:    Product[];
   setProducts: React.Dispatch<React.SetStateAction<Product[]>>;
+  userData?: any;
 }) {
   const [search,         setSearch]         = useState('');
   const [assetFilter,    setAssetFilter]    = useState('All');
@@ -123,6 +126,7 @@ export default function ProductMgmt({
   const [loadingProducts, setLoadingProducts] = useState(false);
   const [syncError, setSyncError] = useState('');
   const refreshInFlightRef = useRef(false);
+  const canRefreshLiveSchemes = normalizeRole(userData?.role) === 'ADMIN';
 
   const readJsonSafely = async (response: Response) => {
     const text = await response.text();
@@ -155,6 +159,11 @@ export default function ProductMgmt({
   }, []);
 
   const fetchProductsFromCybrilla = async () => {
+    if (!canRefreshLiveSchemes) {
+      setSyncError('Only admin users can sync products from Cybrilla.');
+      return;
+    }
+
     if (refreshInFlightRef.current) return;
     refreshInFlightRef.current = true;
     setLoadingProducts(true);
@@ -231,14 +240,16 @@ export default function ProductMgmt({
           <p className="text-slate-500 text-sm mt-1">Manage fund listings, visibility and tier access</p>
         </div>
         <div className="flex items-center gap-3">
-          <button
-            onClick={fetchProductsFromCybrilla}
-            disabled={loadingProducts}
-            className="flex items-center gap-2 px-4 py-2 text-sm font-medium bg-white border border-slate-200 text-slate-700 rounded-lg shadow-sm hover:bg-slate-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            <RefreshCw className={`w-4 h-4 ${loadingProducts ? 'animate-spin' : ''}`} />
-            {loadingProducts ? 'Fetching...' : 'Fetch from Cybrilla'}
-          </button>
+          {canRefreshLiveSchemes && (
+            <button
+              onClick={fetchProductsFromCybrilla}
+              disabled={loadingProducts}
+              className="flex items-center gap-2 px-4 py-2 text-sm font-medium bg-white border border-slate-200 text-slate-700 rounded-lg shadow-sm hover:bg-slate-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <RefreshCw className={`w-4 h-4 ${loadingProducts ? 'animate-spin' : ''}`} />
+              {loadingProducts ? 'Fetching...' : 'Fetch from Cybrilla'}
+            </button>
+          )}
           <button
             onClick={() => setShowAddModal(true)}
             className="flex items-center gap-2 px-4 py-2 text-sm font-medium bg-[#0B1B3E] text-white rounded-lg shadow-sm hover:bg-[#1A3066] transition-colors"

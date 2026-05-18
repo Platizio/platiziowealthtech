@@ -30,6 +30,7 @@ const LIVE_SCHEME_SYNC_KEY = 'platizio:fundSchemes:lastLiveSync:v2';
 const PAGE_SIZE = 12;
 const ASSET_FILTERS = ['All', 'MF', 'SIF'] as const;
 type AssetFilter = typeof ASSET_FILTERS[number];
+const normalizeRole = (role?: string) => role?.trim().toUpperCase() || '';
 
 const getAssetClass = (scheme: any): Exclude<AssetFilter, 'All'> => {
   const productType = String(scheme.productType || '').toUpperCase();
@@ -52,6 +53,7 @@ export default function Ledger({ userData }: { userData?: any }) {
   const [investModal, setInvestModal]   = useState<any | null>(null);
   const [detailModal, setDetailModal]   = useState<any | null>(null);
   const refreshInFlightRef = useRef(false);
+  const canRefreshLiveSchemes = normalizeRole(userData?.role) === 'ADMIN';
 
   const readJsonSafely = async (response: Response) => {
     const text = await response.text();
@@ -64,11 +66,16 @@ export default function Ledger({ userData }: { userData?: any }) {
   };
 
   const shouldSyncLiveOnLoad = () => {
+    if (!canRefreshLiveSchemes) return false;
     const lastSync = Number(window.localStorage.getItem(LIVE_SCHEME_SYNC_KEY) || 0);
     return !lastSync || Date.now() - lastSync >= LIVE_SCHEME_SYNC_INTERVAL_MS;
   };
 
   const fetchSchemes = async (isRefresh = false) => {
+    if (isRefresh && !canRefreshLiveSchemes) {
+      return fetchSchemes(false);
+    }
+
     if (isRefresh && refreshInFlightRef.current) return;
     if (isRefresh) refreshInFlightRef.current = true;
     if (isRefresh) setRefreshing(true);
@@ -133,7 +140,7 @@ export default function Ledger({ userData }: { userData?: any }) {
 
   useEffect(() => {
     fetchSchemes(shouldSyncLiveOnLoad());
-  }, []);
+  }, [canRefreshLiveSchemes]);
 
   useEffect(() => {
     setPage(1);
@@ -194,14 +201,25 @@ export default function Ledger({ userData }: { userData?: any }) {
           <p className="text-xs text-slate-500">
             <span className="font-semibold text-slate-700">{filtered.length}</span> products available
           </p>
-          <button
-            onClick={() => fetchSchemes(true)}
-            disabled={refreshing}
-            className="flex items-center gap-2 px-3 py-2 text-xs font-semibold bg-white border border-slate-200 text-slate-600 rounded-lg hover:bg-slate-50 transition-colors disabled:opacity-50"
-          >
-            <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? 'animate-spin' : ''}`} />
-            {refreshing ? 'Syncing...' : 'Sync from Cybrilla'}
-          </button>
+          {canRefreshLiveSchemes ? (
+            <button
+              onClick={() => fetchSchemes(true)}
+              disabled={refreshing}
+              className="flex items-center gap-2 px-3 py-2 text-xs font-semibold bg-white border border-slate-200 text-slate-600 rounded-lg hover:bg-slate-50 transition-colors disabled:opacity-50"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? 'animate-spin' : ''}`} />
+              {refreshing ? 'Syncing...' : 'Sync from Cybrilla'}
+            </button>
+          ) : (
+            <button
+              onClick={() => fetchSchemes(false)}
+              disabled={loading}
+              className="flex items-center gap-2 px-3 py-2 text-xs font-semibold bg-white border border-slate-200 text-slate-600 rounded-lg hover:bg-slate-50 transition-colors disabled:opacity-50"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
+              {loading ? 'Refreshing...' : 'Refresh'}
+            </button>
+          )}
         </div>
       </div>
 
@@ -288,19 +306,28 @@ export default function Ledger({ userData }: { userData?: any }) {
           <p className="text-sm mt-1">
             {filtersActive
               ? 'Try a different MF/SIF, category, type, or search filter.'
-              : 'No cached products found. Sync once from Cybrilla to populate the catalog.'}
+              : canRefreshLiveSchemes
+                ? 'No cached products found. Sync once from Cybrilla to populate the catalog.'
+                : 'No cached products found yet. Please ask an admin to sync products from Cybrilla.'}
           </p>
           <button
-            onClick={() => (filtersActive ? clearFilters() : fetchSchemes(true))}
-            disabled={!filtersActive && refreshing}
+            onClick={() => {
+              if (filtersActive) clearFilters();
+              else fetchSchemes(canRefreshLiveSchemes);
+            }}
+            disabled={!filtersActive && (canRefreshLiveSchemes ? refreshing : loading)}
             className="mt-5 flex items-center gap-2 px-4 py-2 text-sm font-semibold bg-[#0B1B3E] text-white rounded-lg hover:bg-[#1A3066] transition-colors disabled:opacity-50"
           >
             {filtersActive ? (
               <X className="w-4 h-4" />
             ) : (
-              <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />
+              <RefreshCw className={`w-4 h-4 ${(canRefreshLiveSchemes ? refreshing : loading) ? 'animate-spin' : ''}`} />
             )}
-            {filtersActive ? 'Clear filters' : refreshing ? 'Syncing...' : 'Sync from Cybrilla'}
+            {filtersActive
+              ? 'Clear filters'
+              : canRefreshLiveSchemes
+                ? refreshing ? 'Syncing...' : 'Sync from Cybrilla'
+                : loading ? 'Refreshing...' : 'Refresh'}
           </button>
         </div>
       ) : (
