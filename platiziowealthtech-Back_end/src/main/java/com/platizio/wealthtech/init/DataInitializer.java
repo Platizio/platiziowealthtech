@@ -16,10 +16,7 @@ public class DataInitializer implements CommandLineRunner {
     @Override
     public void run(String... args) throws Exception {
         if (productService.listSchemes().size() < 3) {
-            System.out.println("Fewer than 3 product schemes found. Syncing from mock Cybrilla...");
             productService.refreshFromCybrilla();
-        } else {
-            System.out.println("Product schemes already present. Skipping initialization.");
         }
     }
 }

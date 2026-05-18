@@ -2,8 +2,8 @@ package com.platizio.wealthtech.service;
 
 import com.platizio.wealthtech.domain.Distributor;
 import com.platizio.wealthtech.repository.DistributorRepository;
+import com.platizio.wealthtech.security.AuthenticatedDistributorPrincipal;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
-import org.springframework.security.core.userdetails.User;
 import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.security.core.userdetails.UserDetailsService;
 import org.springframework.security.core.userdetails.UsernameNotFoundException;
@@ -25,9 +25,11 @@ public class CustomUserDetailsService implements UserDetailsService {
         Distributor distributor = distributorRepository.findByEmail(email)
                 .orElseThrow(() -> new UsernameNotFoundException("Distributor not found: " + email));
 
-        return new User(
+        return new AuthenticatedDistributorPrincipal(
+                distributor.getId(),
                 distributor.getEmail(),
                 distributor.getPasswordHash() != null ? distributor.getPasswordHash() : "",
+                distributor.getRole(),
                 List.of(new SimpleGrantedAuthority("ROLE_" + distributor.getRole().name()))
         );
     }

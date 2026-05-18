@@ -100,7 +100,7 @@ public class RealCybrillaClient implements CybrillaClient {
                 pageCount++;
             }
 
-            logger.info("cybrilla_workflow operation='fetch_fund_schemes' status='page_loaded' page='{}' count='{}'", page, pageCount);
+            logger.debug("cybrilla_workflow operation='fetch_fund_schemes' status='page_loaded' page='{}' count='{}'", page, pageCount);
 
             if (pageCount < size || isLastPage(response) || page >= FUND_SCHEME_MAX_PAGES - 1) {
                 break;
@@ -108,7 +108,7 @@ public class RealCybrillaClient implements CybrillaClient {
             page++;
         }
 
-        logger.info("cybrilla_workflow operation='fetch_fund_schemes' status='completed' total_count='{}'", schemes.size());
+        logger.debug("cybrilla_workflow operation='fetch_fund_schemes' status='completed' total_count='{}'", schemes.size());
         return schemes;
     }
 
@@ -175,7 +175,7 @@ public class RealCybrillaClient implements CybrillaClient {
     }
 
     private JsonNode getFundSchemesPage(int page, int size) {
-        logger.info("cybrilla_api direction='backend_to_finprim' method='GET' path='/v2/mf_scheme_plans/cybrillapoa' page='{}' size='{}'", page, size);
+        logger.debug("cybrilla_api direction='backend_to_finprim' method='GET' path='/v2/mf_scheme_plans/cybrillapoa' page='{}' size='{}'", page, size);
         return restClient.get()
                 .uri(uriBuilder -> uriBuilder
                         .path("/v2/mf_scheme_plans/cybrillapoa")
