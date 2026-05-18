@@ -5,6 +5,7 @@ import {
   Mail, KeyRound, ChevronLeft,
   CheckCircle2, Smartphone, RefreshCw, MessageSquare, Check,
 } from 'lucide-react';
+import { useSearchParams } from 'react-router-dom';
 import { apiFetch } from '../config/api';
 
 // ── Password strength (shown while typing on login too) ───────────────────────
@@ -97,6 +98,8 @@ export default function LoginPage({
   const [otpLoading, setOtpLoading] = useState(false);
   const [countdown, setCountdown] = useState(0);
   const otpRefs = useRef<(HTMLInputElement | null)[]>([]);
+  const [searchParams] = useSearchParams();
+  const sessionExpired = searchParams.get('reason') === 'session_expired';
 
   /* ── Effects ────────────────────────────────────────────────────────── */
   // Auto-focus first OTP box after OTP is sent
@@ -451,6 +454,13 @@ export default function LoginPage({
 
         <div className="flex-1 flex items-center justify-center p-8">
           <div className="w-full max-w-md">
+
+            {sessionExpired && (
+              <div className="mb-6 flex items-start gap-2.5 bg-amber-50 border border-amber-100 rounded-xl px-4 py-3">
+                <AlertCircle className="w-4 h-4 text-amber-600 flex-shrink-0 mt-0.5" />
+                <p className="text-sm text-amber-800">Your session expired, please log in again.</p>
+              </div>
+            )}
 
             {/* Heading */}
             <div className="mb-7">

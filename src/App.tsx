@@ -32,7 +32,7 @@ import ProductMgmt from './views/ProductMgmt';
 import InvestorMgmt from './views/InvestorMgmt';
 
 import AppLayout from './layout/AppLayout';
-import { apiFetch } from './config/api';
+import { apiFetch, SESSION_EXPIRED_EVENT } from './config/api';
 
 const ADMIN_ROLES = new Set(['ADMIN', 'MASTER_DISTRIBUTOR']);
 
@@ -52,9 +52,14 @@ export default function App() {
   const navigate = useNavigate();
 
   useEffect(() => {
-    apiFetch('/auth/me')
+    apiFetch('/auth/me', { skipAuthRedirect: true })
       .then(res => {
-        if (res.status === 401 || res.status === 403) return null;
+        if (res.status === 401 || res.status === 403) {
+          if (window.location.pathname.startsWith('/admin') || window.location.pathname.startsWith('/distributor')) {
+            navigate('/login?reason=session_expired', { replace: true });
+          }
+          return null;
+        }
         if (res.ok) return res.json();
         throw new Error('Failed to restore session');
       })
@@ -64,7 +69,17 @@ export default function App() {
         setUserSession(null);
       })
       .finally(() => setLoadingSession(false));
-  }, []);
+  }, [navigate]);
+
+  useEffect(() => {
+    const handleSessionExpired = () => {
+      setUserSession(null);
+      navigate('/login?reason=session_expired', { replace: true });
+    };
+
+    window.addEventListener(SESSION_EXPIRED_EVENT, handleSessionExpired);
+    return () => window.removeEventListener(SESSION_EXPIRED_EVENT, handleSessionExpired);
+  }, [navigate]);
 
   const getUserData = () => {
     if (!userSession) return null;

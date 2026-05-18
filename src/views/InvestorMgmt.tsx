@@ -39,6 +39,12 @@ const kycConfig: Record<string, { color: string; bg: string; icon: React.ReactNo
 const DISTRIBUTORS = ['All', 'Direct (Master)', 'Rahul Distributors', 'WealthEdge Advisory', 'ProFunds India', 'Apex Partners', 'FinTree Wealth', 'MoneyGrow'];
 const KYC_STATUSES = ['All', 'Verified', 'Pending', 'In Progress', 'Failed'];
 const normalizeRole = (role?: string) => role?.trim().toUpperCase() || '';
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+const isUuid = (value?: string) => Boolean(value && UUID_PATTERN.test(value));
+
+const getDistributorDisplayName = (distributor: any) =>
+  distributor?.fullName || distributor?.name || distributor?.companyName || distributor?.email || distributor?.id;
 
 const getKycLabel = (status?: string): Investor['kyc'] => {
   const normalized = status?.trim().toUpperCase() || '';
@@ -57,24 +63,36 @@ export default function InvestorMgmt({ userData }: { userData?: any }) {
   const [distFilter,     setDistFilter]     = useState('All');
   const [showFilters,    setShowFilters]    = useState(false);
   const [addModal,       setAddModal]       = useState<'manual' | 'csv' | null>(null);
+  const [fetchedDistributorNames, setFetchedDistributorNames] = useState<Record<string, string>>({});
   const hasLoadedRef = React.useRef(false);
   const userId = userData?.id;
   const userRole = userData?.role;
 
   const distributorNameById = React.useMemo(() => {
-    return new Map(distributors.map((d: any) => [d.id, d.fullName || d.name || d.email || d.id]));
-  }, [distributors]);
+    return new Map([
+      ...distributors.map((d: any) => [d.id, getDistributorDisplayName(d)] as [string, string]),
+      ...Object.entries(fetchedDistributorNames),
+    ]);
+  }, [distributors, fetchedDistributorNames]);
 
   const mapInvestor = React.useCallback((inv: any): Investor => ({
     id: inv.id,
     name: inv.fullName || inv.name || 'Unnamed Investor',
     distributorId: inv.distributorId,
-    distributor: distributorNameById.get(inv.distributorId) || inv.distributor || inv.distributorId || 'Direct (Master)',
+    distributor: distributorNameById.get(inv.distributorId) || inv.distributorName || inv.distributor || inv.distributorId || 'Direct (Master)',
     productClasses: inv.productClasses || ['MF'],
     invested: inv.invested || '—',
     kyc: getKycLabel(inv.kycStatus || inv.kyc),
     pan: inv.pan || '—',
   }), [distributorNameById]);
+
+  const resolveDistributorName = React.useCallback((inv: Investor) => {
+    const id = inv.distributorId || (isUuid(inv.distributor) ? inv.distributor : undefined);
+    const resolved = id ? distributorNameById.get(id) : undefined;
+    if (resolved && !isUuid(resolved)) return resolved;
+    if (inv.distributor && !isUuid(inv.distributor)) return inv.distributor;
+    return 'Direct (Master)';
+  }, [distributorNameById]);
 
   React.useEffect(() => {
     let cancelled = false;
@@ -145,13 +163,50 @@ export default function InvestorMgmt({ userData }: { userData?: any }) {
     };
   }, [search, userId, mapInvestor]);
 
+  React.useEffect(() => {
+    let cancelled = false;
+    const missingIds = Array.from(new Set(
+      investors
+        .map(inv => inv.distributorId || (isUuid(inv.distributor) ? inv.distributor : undefined))
+        .filter((id): id is string => Boolean(id && !distributorNameById.has(id)))
+    ));
+
+    if (missingIds.length === 0) return () => { cancelled = true; };
+
+    const fetchMissingDistributors = async () => {
+      const entries = await Promise.all(
+        missingIds.map(async id => {
+          try {
+            const res = await apiFetch(`/distributors/${id}`);
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const data = await res.json();
+            return [id, getDistributorDisplayName(data) || id] as const;
+          } catch (err) {
+            console.error(`Failed to fetch distributor ${id}:`, err);
+            return [id, id] as const;
+          }
+        })
+      );
+
+      if (!cancelled) {
+        setFetchedDistributorNames(prev => ({
+          ...prev,
+          ...Object.fromEntries(entries),
+        }));
+      }
+    };
+
+    fetchMissingDistributors();
+    return () => { cancelled = true; };
+  }, [investors, distributorNameById]);
+
   const filtered = investors.filter(inv => {
     const matchKyc  = kycFilter  === 'All' || inv.kyc         === kycFilter;
-    const matchDist = distFilter === 'All' || inv.distributor  === distFilter;
+    const matchDist = distFilter === 'All' || resolveDistributorName(inv) === distFilter;
     return matchKyc && matchDist;
   });
 
-  const distributorOptions = ['All', ...Array.from(new Set(investors.map(i => i.distributor).filter(Boolean)))];
+  const distributorOptions = ['All', ...Array.from(new Set(investors.map(resolveDistributorName).filter(Boolean)))];
 
   // KYC stats
   const total       = investors.length;
@@ -313,7 +368,7 @@ export default function InvestorMgmt({ userData }: { userData?: any }) {
                       <div className="font-semibold text-slate-800 group-hover:text-blue-600 transition-colors">{inv.name}</div>
                       <div className="text-xs text-slate-400 font-mono mt-0.5">{inv.pan}</div>
                     </td>
-                    <td className="px-6 py-4 text-sm text-slate-600">{inv.distributor}</td>
+                    <td className="px-6 py-4 text-sm text-slate-600">{resolveDistributorName(inv)}</td>
                     <td className="px-6 py-4">
                       <div className="flex gap-1.5 flex-wrap">
                         {inv.productClasses.map(pc => (
