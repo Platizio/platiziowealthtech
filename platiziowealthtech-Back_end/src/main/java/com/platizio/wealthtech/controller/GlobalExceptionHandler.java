@@ -5,10 +5,12 @@ import com.platizio.wealthtech.dto.ApiErrorResponse;
 import jakarta.persistence.EntityNotFoundException;
 import jakarta.servlet.http.HttpServletRequest;
 import java.time.OffsetDateTime;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.authentication.BadCredentialsException;
@@ -19,6 +21,26 @@ import org.springframework.web.bind.annotation.*;
 public class GlobalExceptionHandler {
 
     private static final Logger logger = LoggerFactory.getLogger(GlobalExceptionHandler.class);
+
+    /**
+     * Maps PostgreSQL unique-constraint names to human-readable messages.
+     * Constraint names follow Postgres' default pattern: {table}_{column}_key.
+     * Add a new entry here whenever a new unique column is introduced.
+     */
+    private static final Map<String, String> CONSTRAINT_MESSAGES;
+    static {
+        Map<String, String> m = new LinkedHashMap<>();
+        // investors
+        m.put("investors_pan_key",                        "An investor with this PAN already exists");
+        // distributors
+        m.put("distributors_email_key",                   "A distributor with this email address already exists");
+        m.put("distributors_mobile_number_key",           "A distributor with this mobile number already exists");
+        m.put("distributors_arn_number_key",              "A distributor with this ARN number already exists");
+        m.put("distributors_e_uin_number_key",            "A distributor with this EUIN number already exists");
+        // product_schemes
+        m.put("product_schemes_external_scheme_code_key", "A product scheme with this scheme code already exists");
+        CONSTRAINT_MESSAGES = Collections.unmodifiableMap(m);
+    }
 
     @ExceptionHandler(EntityNotFoundException.class)
     @ResponseStatus(HttpStatus.NOT_FOUND)
@@ -86,10 +108,46 @@ public class GlobalExceptionHandler {
         return new ApiErrorResponse(OffsetDateTime.now(), 403, "FORBIDDEN", "Access denied", request.getRequestURI());
     }
 
+    /**
+     * Handles unique-constraint and not-null violations from the DB layer.
+     * Walks the full cause chain to find the constraint name, then maps it to a
+     * friendly message. Never leaks raw SQL or internal exception text to the client.
+     */
+    @ExceptionHandler(DataIntegrityViolationException.class)
+    @ResponseStatus(HttpStatus.CONFLICT)
+    public ApiErrorResponse handleDataIntegrity(DataIntegrityViolationException ex, HttpServletRequest request) {
+        String causeChain = buildCauseChainMessage(ex);
+        String friendly = CONSTRAINT_MESSAGES.entrySet().stream()
+                .filter(entry -> causeChain.contains(entry.getKey()))
+                .map(Map.Entry::getValue)
+                .findFirst()
+                .orElse("A duplicate or invalid record was detected");
+        logger.warn("Data integrity violation at {}: {}", request.getRequestURI(), causeChain);
+        return new ApiErrorResponse(OffsetDateTime.now(), 409, "CONFLICT", friendly, request.getRequestURI());
+    }
+
     @ExceptionHandler(Exception.class)
     @ResponseStatus(HttpStatus.INTERNAL_SERVER_ERROR)
     public ApiErrorResponse handleGeneric(Exception ex, HttpServletRequest request) {
-        logger.error("Internal server error at {}: {}", request.getRequestURI(), ex.getMessage(), ex);
-        return new ApiErrorResponse(OffsetDateTime.now(), 500, "INTERNAL_SERVER_ERROR", ex.getMessage(), request.getRequestURI());
+        // Log the full stack trace internally but never expose raw exception messages to the client.
+        logger.error("Unhandled exception at {}: {}", request.getRequestURI(), ex.getMessage(), ex);
+        return new ApiErrorResponse(OffsetDateTime.now(), 500, "INTERNAL_SERVER_ERROR",
+                "An unexpected error occurred", request.getRequestURI());
+    }
+
+    /**
+     * Concatenates messages from the entire cause chain into a single string.
+     * Required because JDBC drivers wrap DB exceptions several levels deep,
+     * so the constraint name only appears in an inner cause, not in ex.getMessage().
+     */
+    private String buildCauseChainMessage(Throwable t) {
+        StringBuilder sb = new StringBuilder();
+        while (t != null) {
+            if (t.getMessage() != null) {
+                sb.append(t.getMessage()).append(' ');
+            }
+            t = t.getCause();
+        }
+        return sb.toString();
     }
 }
