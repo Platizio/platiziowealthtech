@@ -21,6 +21,7 @@ import java.time.ZoneOffset;
 import java.time.format.TextStyle;
 import java.time.temporal.ChronoUnit;
 import java.util.*;
+import java.util.Objects;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
@@ -45,14 +46,37 @@ public class DashboardService {
 
         Map<UUID, Investor> investorMap = investorRepository.findByDistributorId(distributorId).stream()
                 .collect(Collectors.toMap(Investor::getId, i -> i));
-        Map<UUID, ProductScheme> schemeMap = schemeRepository.findAll().stream()
+
+        // Collect only the scheme IDs actually referenced by this distributor's SIP orders,
+        // then fetch just those rows — avoids a full table scan of all 482+ schemes.
+        Set<UUID> neededSchemeIds = sipOrders.stream()
+                .map(TransactionOrder::getProductSchemeId)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toSet());
+        Map<UUID, ProductScheme> schemeMap = schemeRepository.findAllById(neededSchemeIds).stream()
                 .collect(Collectors.toMap(ProductScheme::getId, s -> s));
 
         List<SipItemDto> sips = sipOrders.stream().map(o -> {
             Investor inv = investorMap.get(o.getInvestorId());
             ProductScheme scheme = schemeMap.get(o.getProductSchemeId());
-            String status = o.getOrderStatus() == OrderStatus.COMPLETED ? "Active" : 
-                            (o.getOrderStatus() == OrderStatus.FAILED ? "Failed" : "Paused");
+            String status;
+            switch (o.getOrderStatus()) {
+                case COMPLETED:
+                case SUCCESSFUL:
+                case PENDING_INVESTOR_ACTION:
+                case CREATED:
+                    status = "Active";
+                    break;
+                case FAILED:
+                    status = "Failed";
+                    break;
+                case DRAFT:
+                    status = "Paused";
+                    break;
+                default: // PAYMENT_PENDING, SUBMITTED, PROCESSING, RETRY_AVAILABLE
+                    status = "Processing";
+                    break;
+            }
             
             // Apply robust bucketing logic
             String rawCat = "OTHER";
