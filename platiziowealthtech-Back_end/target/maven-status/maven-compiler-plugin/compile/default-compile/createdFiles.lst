@@ -1,6 +1,7 @@
 com\platizio\wealthtech\controller\OrderController.class
 com\platizio\wealthtech\domain\RedemptionStatus.class
 com\platizio\wealthtech\config\JwtAuthFilter.class
+com\platizio\wealthtech\service\BlockedTokenService.class
 com\platizio\wealthtech\domain\LeadStatus.class
 com\platizio\wealthtech\dto\InvestorCreateRequest.class
 com\platizio\wealthtech\integration\auth\ExternalBearerTokenService.class
@@ -8,6 +9,7 @@ com\platizio\wealthtech\integration\auth\OAuthClientCredentials.class
 com\platizio\wealthtech\config\OpenApiConfig.class
 com\platizio\wealthtech\dto\SipTrendDto.class
 com\platizio\wealthtech\domain\TransactionOrder.class
+com\platizio\wealthtech\repository\AuthRefreshTokenRepository.class
 com\platizio\wealthtech\dto\LeadCreateWithDistributorRequest.class
 com\platizio\wealthtech\dto\InvestorUpdateRequest.class
 com\platizio\wealthtech\domain\InvestorStatus.class
@@ -44,6 +46,7 @@ com\platizio\wealthtech\dto\OnboardingCardDto.class
 com\platizio\wealthtech\domain\InvestorBankAccount.class
 com\platizio\wealthtech\service\ProductService.class
 com\platizio\wealthtech\controller\ProductController.class
+com\platizio\wealthtech\domain\AuthRefreshToken.class
 com\platizio\wealthtech\integration\RealCybrillaClient.class
 com\platizio\wealthtech\domain\TransactionType.class
 com\platizio\wealthtech\domain\LeadInteraction.class
@@ -55,6 +58,7 @@ com\platizio\wealthtech\repository\DistributorRepository.class
 com\platizio\wealthtech\dto\LeadInteractionRequest.class
 com\platizio\wealthtech\repository\LeadInteractionRepository.class
 com\platizio\wealthtech\integration\CybrillaApiException.class
+com\platizio\wealthtech\repository\BlockedTokenRepository.class
 com\platizio\wealthtech\repository\RedemptionRecordRepository.class
 com\platizio\wealthtech\dto\LeadAssignRequest.class
 com\platizio\wealthtech\integration\auth\ExternalAuthTokenCacheStore.class
@@ -68,6 +72,8 @@ com\platizio\wealthtech\common\BaseEntity.class
 com\platizio\wealthtech\integration\auth\ExternalBearerTokenService$OAuthTokenResponse.class
 com\platizio\wealthtech\repository\AuditEventRepository.class
 com\platizio\wealthtech\dto\LeadCreateRequest.class
+com\platizio\wealthtech\security\AuthenticatedDistributorPrincipal.class
+com\platizio\wealthtech\security\JwtAuthPrincipal.class
 com\platizio\wealthtech\integration\auth\ExternalBearerTokenService$CachedBearerToken.class
 com\platizio\wealthtech\integration\auth\ExternalAuthTokenCacheStore$TokenCacheFileEntry.class
 com\platizio\wealthtech\integration\auth\ExternalAuthTokenCacheStore$1.class
@@ -104,6 +110,9 @@ com\platizio\wealthtech\service\AuthService.class
 com\platizio\wealthtech\integration\auth\ExternalApiAuthenticationException.class
 com\platizio\wealthtech\repository\TransactionOrderRepository.class
 com\platizio\wealthtech\service\InvestorService.class
+com\platizio\wealthtech\service\RefreshTokenService.class
 com\platizio\wealthtech\domain\DistributorRole.class
+com\platizio\wealthtech\service\DashboardService$1.class
+com\platizio\wealthtech\domain\BlockedToken.class
 com\platizio\wealthtech\dto\AuthSignupRequest.class
 com\platizio\wealthtech\init\DbChecker.class

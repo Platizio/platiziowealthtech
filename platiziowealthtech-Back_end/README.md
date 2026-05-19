@@ -45,19 +45,21 @@ create user wealthtech with encrypted password 'wealthtech';
 grant all privileges on database wealthtech to wealthtech;
 ```
 
-Then run:
+For normal local startup, run:
 
 ```bash
-mvn spring-boot:run
+.\mvnw.cmd spring-boot:run
 ```
 
 For local HTTP-only development, run with the `local` Spring profile:
 
 ```bash
-mvn spring-boot:run -Dspring-boot.run.profiles=local
+.\mvnw.cmd spring-boot:run "-Dspring-boot.run.profiles=local"
 ```
 
-JWT cookies are `Secure` by default via `AUTH_COOKIE_SECURE=true`, so browsers only send them over HTTPS unless explicitly overridden. The `local` profile is the only checked-in profile that sets `app.auth.cookie-secure: false`; do not use that profile for shared, staging, or production environments.
+The default config currently includes a local-only JWT secret fallback so the backend starts without extra environment setup. Set `JWT_SECRET` to a strong random value before using any shared, staging, or production environment. The `local` profile also sets `app.auth.cookie-secure: false` for HTTP development; do not use that profile outside local development.
+
+JWT cookies are `Secure` by default via `AUTH_COOKIE_SECURE=true`, so browsers only send them over HTTPS unless explicitly overridden.
 
 Default database variables:
 

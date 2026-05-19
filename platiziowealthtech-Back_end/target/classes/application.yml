@@ -65,7 +65,7 @@ external-auth:
     log-raw-tokens: ${EXTERNAL_AUTH_LOG_RAW_TOKENS:false}
 
 jwt:
-  secret: ${JWT_SECRET}
+  secret: ${JWT_SECRET:local-dev-jwt-secret-32-bytes-minimum-not-for-prod}
   expiration-ms: 1800000  # 30 minutes
 
 app:
