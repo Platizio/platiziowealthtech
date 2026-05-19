@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
+import axios from 'axios';
 import {
   Search, Filter, ChevronLeft, Download, ShieldCheck,
   TrendingUp, AreaChart as AreaChartIcon, Activity,
-  CheckCircle2, Clock, XCircle, AlertCircle,
+  CheckCircle2, Clock, XCircle, AlertCircle, Upload,
 } from 'lucide-react';
 import {
   AreaChart as RechartsArea, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
@@ -53,6 +54,125 @@ const matchesInvestorSearch = (inv: any, query: string) => {
 
   return searchableFields.some(value => String(value || '').toLowerCase().includes(normalized));
 };
+
+const MAX_KYC_DOCUMENT_SIZE = 5 * 1024 * 1024;
+const ALLOWED_KYC_DOCUMENT_TYPES = new Set(['application/pdf', 'image/jpeg', 'image/png']);
+const ALLOWED_KYC_DOCUMENT_EXTENSIONS = new Set(['pdf', 'jpg', 'jpeg', 'png']);
+
+const validateKycDocument = (file: File) => {
+  const extension = file.name.split('.').pop()?.toLowerCase() || '';
+  if (!ALLOWED_KYC_DOCUMENT_TYPES.has(file.type) && !ALLOWED_KYC_DOCUMENT_EXTENSIONS.has(extension)) {
+    return 'Only PDF, JPG, and PNG files are allowed.';
+  }
+  if (file.size > MAX_KYC_DOCUMENT_SIZE) {
+    return 'File size must be 5 MB or less.';
+  }
+  return '';
+};
+
+function KycDocumentUpload({
+  investorId,
+  onUploaded,
+}: {
+  investorId?: string;
+  onUploaded?: (updatedInvestor: any) => void;
+}) {
+  const [progress, setProgress] = useState(0);
+  const [uploading, setUploading] = useState(false);
+  const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
+
+  const handleFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    setError('');
+    setSuccess('');
+    setProgress(0);
+
+    if (!file) return;
+    if (!investorId) {
+      setError('Investor ID is missing. Please save the investor before uploading documents.');
+      return;
+    }
+
+    const validationError = validateKycDocument(file);
+    if (validationError) {
+      setError(validationError);
+      return;
+    }
+
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('documentType', 'KYC');
+
+    try {
+      setUploading(true);
+      const response = await axios.put(apiUrl(`/investors/${investorId}/documents`), formData, {
+        withCredentials: true,
+        onUploadProgress: event => {
+          const total = event.total || file.size;
+          setProgress(Math.round((event.loaded * 100) / total));
+        },
+      });
+
+      setProgress(100);
+      setSuccess('KYC document uploaded successfully.');
+      onUploaded?.(response.data?.data || response.data?.investor || response.data);
+    } catch (err: any) {
+      console.error('KYC document upload failed:', err);
+      setError(err?.response?.data?.message || err?.message || 'KYC document upload failed.');
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  return (
+    <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 p-4">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <p className="text-sm font-semibold text-slate-800">KYC Document Upload</p>
+          <p className="mt-0.5 text-xs text-slate-500">PDF, JPG, or PNG up to 5 MB.</p>
+        </div>
+        <label className={`flex cursor-pointer items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold transition-colors ${
+          uploading ? 'bg-slate-200 text-slate-400' : 'bg-[#0B1B3E] text-white hover:bg-[#1A3066]'
+        }`}>
+          <Upload className="h-4 w-4" />
+          {uploading ? 'Uploading...' : 'Upload file'}
+          <input
+            type="file"
+            accept=".pdf,.jpg,.png"
+            disabled={uploading}
+            onChange={handleFileChange}
+            className="hidden"
+          />
+        </label>
+      </div>
+
+      {uploading && (
+        <div className="mt-4">
+          <div className="mb-1 flex justify-between text-xs font-semibold text-slate-500">
+            <span>Uploading</span>
+            <span>{progress}%</span>
+          </div>
+          <div className="h-2 overflow-hidden rounded-full bg-slate-200">
+            <div className="h-full rounded-full bg-blue-500 transition-all" style={{ width: `${progress}%` }} />
+          </div>
+        </div>
+      )}
+
+      {error && (
+        <p className="mt-3 flex items-center gap-1.5 text-xs font-medium text-red-600">
+          <AlertCircle className="h-3.5 w-3.5" /> {error}
+        </p>
+      )}
+      {success && (
+        <p className="mt-3 flex items-center gap-1.5 text-xs font-medium text-green-600">
+          <CheckCircle2 className="h-3.5 w-3.5" /> {success}
+        </p>
+      )}
+    </div>
+  );
+}
 
 
 // ─── Component ────────────────────────────────────────────────────────────────
@@ -317,6 +437,7 @@ function InvestorDetail({
   onInvest?: (investor: any) => void;
 }) {
   const [activeTab, setActiveTab] = useState('overview');
+  const [currentInvestor, setCurrentInvestor] = useState(investor);
   // Pre-fill so the chart renders a flat baseline immediately rather than being empty.
   const ZERO_MONTHS = [
     { month: 'Jan', value: 0 }, { month: 'Feb', value: 0 },
@@ -326,7 +447,7 @@ function InvestorDetail({
   const [performanceData, setPerformanceData] = useState<any[]>(ZERO_MONTHS);
 
   useEffect(() => {
-    apiFetch(`/orders/by-investor/${investor.id}`)
+    apiFetch(`/orders/by-investor/${currentInvestor.id}`)
       .then(res => res.ok ? res.json() : [])
       .then(orders => {
         let total = 0;
@@ -355,12 +476,12 @@ function InvestorDetail({
             { month: 'May', value: 0 }, { month: 'Jun', value: 0 },
          ]);
       });
-  }, [investor.id]);
+  }, [currentInvestor.id]);
 
-  const kyc = kycConfig[investor.kycStatus] || kycConfig['NOT_STARTED'];
-  const stCls = statusConfig[investor.investorStatus] || 'bg-slate-100 text-slate-500';
-  const isKycDone = investor.kycStatus === 'COMPLETED';
-  const initials = (investor.fullName || 'IN').split(' ').map((n: string) => n[0]).join('').substring(0, 2).toUpperCase();
+  const kyc = kycConfig[currentInvestor.kycStatus] || kycConfig['NOT_STARTED'];
+  const stCls = statusConfig[currentInvestor.investorStatus] || 'bg-slate-100 text-slate-500';
+  const isKycDone = currentInvestor.kycStatus === 'COMPLETED';
+  const initials = (currentInvestor.fullName || 'IN').split(' ').map((n: string) => n[0]).join('').substring(0, 2).toUpperCase();
 
   const tabs = [
     { id: 'overview',   label: 'Overview'   },
@@ -380,16 +501,16 @@ function InvestorDetail({
             {initials}
           </div>
           <div>
-            <h1 className="text-2xl font-semibold tracking-tight text-slate-800">{investor.fullName}</h1>
+            <h1 className="text-2xl font-semibold tracking-tight text-slate-800">{currentInvestor.fullName}</h1>
             <div className="flex flex-wrap items-center gap-2 mt-2">
               <span className={`px-2.5 py-1 text-xs font-semibold rounded-md ${stCls}`}>
-                {(investor.investorStatus || 'DRAFT').replace(/_/g, ' ')}
+                {(currentInvestor.investorStatus || 'DRAFT').replace(/_/g, ' ')}
               </span>
               <span className={`flex items-center gap-1.5 text-xs font-medium ${kyc.color}`}>
                 {kyc.icon} {kyc.label}
               </span>
-              {investor.pan && (
-                <span className="text-slate-400 font-mono text-xs">PAN: {investor.pan}</span>
+              {currentInvestor.pan && (
+                <span className="text-slate-400 font-mono text-xs">PAN: {currentInvestor.pan}</span>
               )}
             </div>
           </div>
@@ -400,7 +521,7 @@ function InvestorDetail({
           </button>
           {isKycDone && onInvest && (
             <button
-              onClick={() => onInvest(investor)}
+              onClick={() => onInvest(currentInvestor)}
               className="flex items-center gap-2 px-4 py-2 text-sm font-medium bg-blue-600 text-white rounded-lg shadow-sm hover:bg-blue-700 transition-colors"
             >
               <TrendingUp className="w-4 h-4" /> Invest Now
@@ -431,12 +552,12 @@ function InvestorDetail({
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
               {/* Info cards */}
               {[
-                { label: 'Email',        value: investor.email },
-                { label: 'Mobile',       value: investor.mobileNumber },
-                { label: 'Date of Birth',value: investor.dateOfBirth || '—' },
-                { label: 'City',         value: investor.city || '—' },
-                { label: 'State',        value: investor.state || '—' },
-                { label: 'Risk Profile', value: (investor.riskProfile || 'UNASSESSED').replace(/_/g, ' ') },
+                { label: 'Email',        value: currentInvestor.email },
+                { label: 'Mobile',       value: currentInvestor.mobileNumber },
+                { label: 'Date of Birth',value: currentInvestor.dateOfBirth || '—' },
+                { label: 'City',         value: currentInvestor.city || '—' },
+                { label: 'State',        value: currentInvestor.state || '—' },
+                { label: 'Risk Profile', value: (currentInvestor.riskProfile || 'UNASSESSED').replace(/_/g, ' ') },
               ].map(({ label, value }) => (
                 <div key={label} className="bg-white rounded-xl p-4 border border-slate-200 shadow-sm">
                   <p className="text-[10px] uppercase font-bold text-slate-400 tracking-wider mb-1">{label}</p>
@@ -488,17 +609,25 @@ function InvestorDetail({
         {activeTab === 'compliance' && (
           <motion.div key="compliance" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="space-y-4">
             {[
-              { label: 'KYC Status',          value: (kycConfig[investor.kycStatus]?.label || investor.kycStatus || 'Not Started') },
-              { label: 'Bank Verification',   value: (investor.bankVerificationStatus || 'NOT_CAPTURED').replace(/_/g, ' ') },
-              { label: 'Investor Status',     value: (investor.investorStatus || 'DRAFT').replace(/_/g, ' ') },
-              { label: 'Risk Profile',        value: (investor.riskProfile || 'UNASSESSED').replace(/_/g, ' ') },
-              { label: 'Onboarding Notes',    value: investor.onboardingNotes || 'None' },
+              { label: 'KYC Status',          value: (kycConfig[currentInvestor.kycStatus]?.label || currentInvestor.kycStatus || 'Not Started') },
+              { label: 'Bank Verification',   value: (currentInvestor.bankVerificationStatus || 'NOT_CAPTURED').replace(/_/g, ' ') },
+              { label: 'Investor Status',     value: (currentInvestor.investorStatus || 'DRAFT').replace(/_/g, ' ') },
+              { label: 'Risk Profile',        value: (currentInvestor.riskProfile || 'UNASSESSED').replace(/_/g, ' ') },
+              { label: 'Onboarding Notes',    value: currentInvestor.onboardingNotes || 'None' },
             ].map(({ label, value }) => (
               <div key={label} className="bg-white rounded-xl p-4 border border-slate-200 shadow-sm flex justify-between items-center">
                 <p className="text-sm text-slate-500 font-medium">{label}</p>
                 <p className="text-sm font-semibold text-slate-800">{value}</p>
               </div>
             ))}
+            <KycDocumentUpload
+              investorId={currentInvestor.id}
+              onUploaded={updatedInvestor => {
+                if (updatedInvestor && typeof updatedInvestor === 'object') {
+                  setCurrentInvestor((prev: any) => ({ ...prev, ...updatedInvestor }));
+                }
+              }}
+            />
           </motion.div>
         )}
       </AnimatePresence>

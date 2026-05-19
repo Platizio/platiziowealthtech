@@ -1,10 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
+import axios from 'axios';
 import {
   ArrowLeft, ArrowRight, CheckCircle2, Loader2, Check,
   ShieldCheck, Upload, Building2, User,
 } from 'lucide-react';
-import { apiFetch } from '../config/api';
+import { apiFetch, apiUrl } from '../config/api';
 
 // ── Step metadata ────────────────────────────────────────────────────────────
 const STEPS = [
@@ -69,6 +70,20 @@ function Field({
 
 const inp = 'w-full px-3.5 py-2.5 text-sm bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-100 focus:border-blue-500 outline-none transition-all';
 const sel = inp + ' cursor-pointer';
+const MAX_DOCUMENT_SIZE = 5 * 1024 * 1024;
+const ALLOWED_DOCUMENT_TYPES = new Set(['application/pdf', 'image/jpeg', 'image/png']);
+const ALLOWED_DOCUMENT_EXTENSIONS = new Set(['pdf', 'jpg', 'jpeg', 'png']);
+
+const validateDocumentFile = (file: File) => {
+  const extension = file.name.split('.').pop()?.toLowerCase() || '';
+  if (!ALLOWED_DOCUMENT_TYPES.has(file.type) && !ALLOWED_DOCUMENT_EXTENSIONS.has(extension)) {
+    return 'Only PDF, JPG, and PNG files are allowed.';
+  }
+  if (file.size > MAX_DOCUMENT_SIZE) {
+    return 'File size must be 5 MB or less.';
+  }
+  return '';
+};
 
 // ═══════════════════════════════════════════════════════════════════════════════
 export default function InvestorOnboarding({ prospect, userData, onComplete, onBack }: Props) {
@@ -116,7 +131,13 @@ export default function InvestorOnboarding({ prospect, userData, onComplete, onB
   });
 
   // ── Step 7 — Documents ───────────────────────────────────────────────────────
-  const [docs, setDocs] = useState({ pan: false, address: false, signature: false });
+  const [docs, setDocs] = useState<{ pan: File | null; address: File | null; signature: File | null }>({
+    pan: null,
+    address: null,
+    signature: null,
+  });
+  const [docErrors, setDocErrors] = useState<Record<string, string>>({});
+  const [docProgress, setDocProgress] = useState<Record<string, number>>({});
 
   // ── Effects ─────────────────────────────────────────────────────────────────
 
@@ -175,7 +196,7 @@ export default function InvestorOnboarding({ prospect, userData, onComplete, onB
       case 4: return !!(s4.gender && s4.occupation && s4.income);
       case 5: return s5.accNumber.length >= 9 && s5.ifsc.length >= 11;
       case 6: return !!(s6.incomeSlab && s6.declared);
-      case 7: return docs.pan && docs.address && docs.signature;
+      case 7: return !!(docs.pan && docs.address && docs.signature);
       default: return true;
     }
   })();
@@ -193,6 +214,41 @@ export default function InvestorOnboarding({ prospect, userData, onComplete, onB
   const maskAccountNumber = (value: string) => {
     if (!value) return '';
     return value.length <= 4 ? '****' : `${'*'.repeat(Math.max(value.length - 4, 4))}${value.slice(-4)}`;
+  };
+
+  const handleDocumentSelect = (key: keyof typeof docs, file?: File) => {
+    if (!file) return;
+
+    const validationError = validateDocumentFile(file);
+    setDocErrors(prev => ({ ...prev, [key]: validationError }));
+    setDocProgress(prev => ({ ...prev, [key]: 0 }));
+
+    if (validationError) {
+      setDocs(prev => ({ ...prev, [key]: null }));
+      return;
+    }
+
+    setDocs(prev => ({ ...prev, [key]: file }));
+  };
+
+  const uploadKycDocument = async (investorId: string, key: keyof typeof docs, file: File) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('documentType', key.toUpperCase());
+
+    const response = await axios.put(apiUrl(`/investors/${investorId}/documents`), formData, {
+      withCredentials: true,
+      onUploadProgress: event => {
+        const total = event.total || file.size;
+        setDocProgress(prev => ({
+          ...prev,
+          [key]: Math.round((event.loaded * 100) / total),
+        }));
+      },
+    });
+
+    setDocProgress(prev => ({ ...prev, [key]: 100 }));
+    return response.data;
   };
 
   const submitInvestorToBackend = async () => {
@@ -265,6 +321,21 @@ export default function InvestorOnboarding({ prospect, userData, onComplete, onB
 
       if (!investorResponse.ok) {
         throw new Error(typeof investorResult === 'string' ? investorResult : investorResult?.message || 'Investor creation failed');
+      }
+
+      console.log('step_1b_upload_documents_request=', {
+        endpoint: `PUT /api/v1/investors/${investorResult.id}/documents`,
+        documents: Object.entries(docs).map(([key, file]) => ({
+          documentType: key.toUpperCase(),
+          fileName: file?.name,
+          fileSize: file?.size,
+        })),
+      });
+
+      for (const [key, file] of Object.entries(docs) as [keyof typeof docs, File | null][]) {
+        if (file) {
+          await uploadKycDocument(investorResult.id, key, file);
+        }
       }
 
       console.log('step_2_add_bank_request=', {
@@ -820,43 +891,69 @@ export default function InvestorOnboarding({ prospect, userData, onComplete, onB
                   { key: 'pan' as const, label: 'PAN Card', sub: 'Front side, self-attested' },
                   { key: 'address' as const, label: 'Address Proof', sub: 'Aadhaar / Passport / Utility bill' },
                   { key: 'signature' as const, label: 'Signature Specimen', sub: 'On white paper — scan or photo' },
-                ].map(doc => (
-                  <div
-                    key={doc.key}
-                    onClick={() => setDocs({ ...docs, [doc.key]: !docs[doc.key] })}
-                    className={`flex items-center justify-between p-4 border-2 rounded-xl cursor-pointer transition-all ${docs[doc.key]
-                        ? 'border-green-400 bg-green-50'
-                        : 'border-dashed border-slate-300 bg-white hover:border-slate-400 hover:bg-slate-50'
-                      }`}
-                  >
-                    <div className="flex items-center gap-3">
-                      {docs[doc.key]
-                        ? <CheckCircle2 className="w-8 h-8 text-green-600 flex-shrink-0" />
-                        : <div className="w-8 h-8 rounded-lg bg-slate-100 flex items-center justify-center flex-shrink-0">
-                          <Upload className="w-4 h-4 text-slate-400" />
+                ].map(doc => {
+                  const file = docs[doc.key];
+                  const progress = docProgress[doc.key] || 0;
+                  const error = docErrors[doc.key];
+
+                  return (
+                    <div
+                      key={doc.key}
+                      className={`p-4 border-2 rounded-xl transition-all ${file
+                          ? 'border-green-400 bg-green-50'
+                          : 'border-dashed border-slate-300 bg-white hover:border-slate-400 hover:bg-slate-50'
+                        }`}
+                    >
+                      <div className="flex items-center justify-between gap-4">
+                        <div className="flex items-center gap-3 min-w-0">
+                          {file
+                            ? <CheckCircle2 className="w-8 h-8 text-green-600 flex-shrink-0" />
+                            : <div className="w-8 h-8 rounded-lg bg-slate-100 flex items-center justify-center flex-shrink-0">
+                              <Upload className="w-4 h-4 text-slate-400" />
+                            </div>
+                          }
+                          <div className="min-w-0">
+                            <p className="text-sm font-semibold text-slate-800">
+                              {doc.label} <span className="text-red-400">*</span>
+                            </p>
+                            <p className="text-xs text-slate-500 truncate">
+                              {file ? file.name : doc.sub}
+                            </p>
+                            {error && <p className="text-xs text-red-600 mt-1">{error}</p>}
+                          </div>
                         </div>
-                      }
-                      <div>
-                        <p className="text-sm font-semibold text-slate-800">
-                          {doc.label} <span className="text-red-400">*</span>
-                        </p>
-                        <p className="text-xs text-slate-500">
-                          {docs[doc.key] ? 'Uploaded successfully' : doc.sub}
-                        </p>
+
+                        <label className="text-xs font-semibold text-blue-600 border border-blue-200 bg-blue-50 px-3 py-1.5 rounded-lg cursor-pointer hover:bg-blue-100 transition-colors flex-shrink-0">
+                          {file ? 'Replace' : 'Upload'}
+                          <input
+                            type="file"
+                            accept=".pdf,.jpg,.png"
+                            className="hidden"
+                            onChange={e => handleDocumentSelect(doc.key, e.target.files?.[0])}
+                          />
+                        </label>
                       </div>
+
+                      {submitting && file && (
+                        <div className="mt-3">
+                          <div className="h-2 rounded-full bg-green-100 overflow-hidden">
+                            <div
+                              className="h-full bg-green-500 transition-all"
+                              style={{ width: `${progress}%` }}
+                            />
+                          </div>
+                          <p className="text-[11px] text-green-700 font-semibold mt-1">
+                            Uploading {progress}%
+                          </p>
+                        </div>
+                      )}
                     </div>
-                    {!docs[doc.key] && (
-                      <span className="text-xs font-semibold text-blue-600 border border-blue-200 bg-blue-50 px-3 py-1.5 rounded-lg">
-                        Upload
-                      </span>
-                    )}
-                  </div>
-                ))}
+                  );
+                })}
               </div>
 
               <p className="text-xs text-slate-400 mt-5">
-                💡 In this demo, clicking a document row simulates a successful upload.
-                Supported: PDF, JPG, PNG (max 5 MB each).
+                Supported: PDF, JPG, PNG (max 5 MB each). Files upload after the investor profile is created.
               </p>
             </div>
           )}
