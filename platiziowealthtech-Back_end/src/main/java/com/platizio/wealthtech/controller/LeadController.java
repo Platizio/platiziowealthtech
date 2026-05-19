@@ -6,7 +6,9 @@ import com.platizio.wealthtech.dto.LeadAssignRequest;
 import com.platizio.wealthtech.dto.LeadCreateRequest;
 import com.platizio.wealthtech.dto.LeadCreateWithDistributorRequest;
 import com.platizio.wealthtech.dto.LeadInteractionRequest;
+import com.platizio.wealthtech.dto.LeadResponse;
 import com.platizio.wealthtech.dto.LeadStatusUpdateRequest;
+import com.platizio.wealthtech.dto.UpdateLeadRequest;
 import com.platizio.wealthtech.security.JwtAuthPrincipal;
 import com.platizio.wealthtech.service.LeadService;
 import jakarta.validation.Valid;
@@ -58,6 +60,16 @@ public class LeadController {
     @GetMapping("/distributor/{distributorId}")
     public List<InvestorLead> listByDistributor(@PathVariable UUID distributorId) {
         return leadService.listByDistributor(distributorId);
+    }
+
+    @PreAuthorize("hasRole('DISTRIBUTOR')")
+    @PutMapping("/{leadId}")
+    public LeadResponse updateLead(
+            @PathVariable UUID leadId,
+            @Valid @RequestBody UpdateLeadRequest request,
+            Authentication auth
+    ) {
+        return leadService.updateLead(leadId, request, actorId(auth));
     }
 
     @PreAuthorize("hasAnyRole('ADMIN','MASTER_DISTRIBUTOR','SUB_DISTRIBUTOR')")

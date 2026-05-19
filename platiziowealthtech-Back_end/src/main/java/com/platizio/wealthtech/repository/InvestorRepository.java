@@ -18,44 +18,52 @@ public interface InvestorRepository extends JpaRepository<Investor, UUID> {
     List<Investor> findByKycStatus(KycStatus kycStatus);
     List<Investor> findByDistributorIdAndKycStatus(UUID distributorId, KycStatus kycStatus);
 
-    @Query("""
-            select i from Investor i
-            where lower(i.fullName) like lower(concat('%', :query, '%'))
-               or lower(i.email) like lower(concat('%', :query, '%'))
-               or lower(i.mobileNumber) like lower(concat('%', :query, '%'))
-               or lower(i.pan) like lower(concat('%', :query, '%'))
-            order by i.fullName
-            """)
+    @Query(value = """
+            select *
+            from investors
+            where is_deleted = false
+              and (
+                    full_name ilike concat('%', :query, '%')
+                 or email ilike concat('%', :query, '%')
+                 or mobile_number ilike concat('%', :query, '%')
+                 or pan ilike concat('%', :query, '%')
+              )
+            order by full_name
+            """, nativeQuery = true)
     List<Investor> search(@Param("query") String query, Pageable pageable);
 
-    @Query("""
-            select i from Investor i
-            where i.distributorId = :distributorId
+    @Query(value = """
+            select *
+            from investors
+            where is_deleted = false
+              and distributor_id = :distributorId
               and (
-                    lower(i.fullName) like lower(concat('%', :query, '%'))
-                 or lower(i.email) like lower(concat('%', :query, '%'))
-                 or lower(i.mobileNumber) like lower(concat('%', :query, '%'))
-                 or lower(i.pan) like lower(concat('%', :query, '%'))
+                    full_name ilike concat('%', :query, '%')
+                 or email ilike concat('%', :query, '%')
+                 or mobile_number ilike concat('%', :query, '%')
+                 or pan ilike concat('%', :query, '%')
               )
-            order by i.fullName
-            """)
+            order by full_name
+            """, nativeQuery = true)
     List<Investor> searchByDistributor(
             @Param("distributorId") UUID distributorId,
             @Param("query") String query,
             Pageable pageable
     );
 
-    @Query("""
-            select i from Investor i
-            where i.distributorId in :distributorIds
+    @Query(value = """
+            select *
+            from investors
+            where is_deleted = false
+              and distributor_id in (:distributorIds)
               and (
-                    lower(i.fullName) like lower(concat('%', :query, '%'))
-                 or lower(i.email) like lower(concat('%', :query, '%'))
-                 or lower(i.mobileNumber) like lower(concat('%', :query, '%'))
-                 or lower(i.pan) like lower(concat('%', :query, '%'))
+                    full_name ilike concat('%', :query, '%')
+                 or email ilike concat('%', :query, '%')
+                 or mobile_number ilike concat('%', :query, '%')
+                 or pan ilike concat('%', :query, '%')
               )
-            order by i.fullName
-            """)
+            order by full_name
+            """, nativeQuery = true)
     List<Investor> searchByDistributorIds(
             @Param("distributorIds") List<UUID> distributorIds,
             @Param("query") String query,

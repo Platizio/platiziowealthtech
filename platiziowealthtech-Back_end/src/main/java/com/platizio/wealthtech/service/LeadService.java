@@ -5,10 +5,13 @@ import com.platizio.wealthtech.dto.LeadAssignRequest;
 import com.platizio.wealthtech.dto.LeadCreateRequest;
 import com.platizio.wealthtech.dto.LeadCreateWithDistributorRequest;
 import com.platizio.wealthtech.dto.LeadInteractionRequest;
+import com.platizio.wealthtech.dto.LeadResponse;
 import com.platizio.wealthtech.dto.LeadStatusUpdateRequest;
+import com.platizio.wealthtech.dto.UpdateLeadRequest;
 import com.platizio.wealthtech.repository.InvestorLeadRepository;
 import com.platizio.wealthtech.repository.LeadInteractionRepository;
 import jakarta.persistence.EntityNotFoundException;
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.UUID;
 import org.springframework.security.access.AccessDeniedException;
@@ -101,6 +104,24 @@ public class LeadService {
     }
 
     @Transactional
+    public LeadResponse updateLead(UUID leadId, UpdateLeadRequest request, UUID principalId) {
+        InvestorLead lead = getById(leadId);
+        verifyAssignedToCaller(lead, principalId);
+        lead.setProspectName(request.name());
+        lead.setEmail(request.email());
+        if (request.phone() != null) {
+            lead.setMobileNumber(request.phone());
+        }
+        lead.setNotes(request.notes());
+        if (request.status() != null) {
+            lead.setStatus(request.status());
+        }
+        InvestorLead saved = investorLeadRepository.save(lead);
+        auditService.log("LEAD", saved.getId(), "LEAD_UPDATED", principalId, "{\"detailsUpdated\":true}");
+        return LeadResponse.from(saved);
+    }
+
+    @Transactional
     public LeadInteraction addInteraction(UUID leadId, LeadInteractionRequest request, UUID actorId) {
         InvestorLead lead = investorLeadRepository.findById(leadId)
                 .orElseThrow(() -> new EntityNotFoundException("Lead not found"));
@@ -121,8 +142,10 @@ public class LeadService {
     public void deleteLead(UUID leadId, UUID actorId) {
         InvestorLead lead = investorLeadRepository.findById(leadId)
                 .orElseThrow(() -> new EntityNotFoundException("Lead not found"));
-        investorLeadRepository.delete(lead);
-        auditService.log("LEAD", leadId, "DELETED", actorId, "{\"reason\":\"User requested deletion\"}");
+        lead.setIsDeleted(true);
+        lead.setDeletedAt(LocalDateTime.now());
+        investorLeadRepository.save(lead);
+        auditService.log("LEAD", leadId, "DELETED", actorId, "{\"softDeleted\":true,\"reason\":\"User requested deletion\"}");
     }
 
     private void verifyAssignedToCaller(InvestorLead lead, UUID callerDistributorId) {

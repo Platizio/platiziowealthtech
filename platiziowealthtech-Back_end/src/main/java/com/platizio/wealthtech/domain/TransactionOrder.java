@@ -3,10 +3,13 @@ package com.platizio.wealthtech.domain;
 import com.platizio.wealthtech.common.BaseEntity;
 import jakarta.persistence.*;
 import java.math.BigDecimal;
+import java.time.LocalDateTime;
 import java.util.UUID;
+import org.hibernate.annotations.SQLRestriction;
 
 @Entity
 @Table(name = "transaction_orders")
+@SQLRestriction("is_deleted = false")
 public class TransactionOrder extends BaseEntity {
 
     @Column(nullable = false)
@@ -36,6 +39,9 @@ public class TransactionOrder extends BaseEntity {
     private String externalOrderId;
     private String failureReason;
     private String investorActionUrl;
+    @Column(nullable = false)
+    private Boolean isDeleted = Boolean.FALSE;
+    private LocalDateTime deletedAt;
 
     public UUID getInvestorId() { return investorId; }
     public void setInvestorId(UUID investorId) { this.investorId = investorId; }
@@ -64,4 +70,8 @@ public class TransactionOrder extends BaseEntity {
 
     public ProductCategory getProductCategory() { return productCategory; }
     public void setProductCategory(ProductCategory productCategory) { this.productCategory = productCategory; }
+    public Boolean getIsDeleted() { return isDeleted; }
+    public void setIsDeleted(Boolean isDeleted) { this.isDeleted = isDeleted; }
+    public LocalDateTime getDeletedAt() { return deletedAt; }
+    public void setDeletedAt(LocalDateTime deletedAt) { this.deletedAt = deletedAt; }
 }

@@ -3,10 +3,13 @@ package com.platizio.wealthtech.domain;
 import com.platizio.wealthtech.common.BaseEntity;
 import jakarta.persistence.*;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.UUID;
+import org.hibernate.annotations.SQLRestriction;
 
 @Entity
 @Table(name = "investors")
+@SQLRestriction("is_deleted = false")
 public class Investor extends BaseEntity {
 
     @Column(nullable = false)
@@ -49,6 +52,9 @@ public class Investor extends BaseEntity {
 
     private String cybrillaInvestorId;
     private String onboardingNotes;
+    @Column(nullable = false)
+    private Boolean isDeleted = Boolean.FALSE;
+    private LocalDateTime deletedAt;
 
     public UUID getDistributorId() { return distributorId; }
     public void setDistributorId(UUID distributorId) { this.distributorId = distributorId; }
@@ -84,4 +90,8 @@ public class Investor extends BaseEntity {
     public void setCybrillaInvestorId(String cybrillaInvestorId) { this.cybrillaInvestorId = cybrillaInvestorId; }
     public String getOnboardingNotes() { return onboardingNotes; }
     public void setOnboardingNotes(String onboardingNotes) { this.onboardingNotes = onboardingNotes; }
+    public Boolean getIsDeleted() { return isDeleted; }
+    public void setIsDeleted(Boolean isDeleted) { this.isDeleted = isDeleted; }
+    public LocalDateTime getDeletedAt() { return deletedAt; }
+    public void setDeletedAt(LocalDateTime deletedAt) { this.deletedAt = deletedAt; }
 }

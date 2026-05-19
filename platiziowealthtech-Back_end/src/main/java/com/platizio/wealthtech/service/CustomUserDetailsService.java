@@ -9,6 +9,7 @@ import org.springframework.security.core.userdetails.UserDetailsService;
 import org.springframework.security.core.userdetails.UsernameNotFoundException;
 import org.springframework.stereotype.Service;
 
+import java.util.ArrayList;
 import java.util.List;
 
 @Service
@@ -24,13 +25,18 @@ public class CustomUserDetailsService implements UserDetailsService {
     public UserDetails loadUserByUsername(String email) throws UsernameNotFoundException {
         Distributor distributor = distributorRepository.findByEmail(email)
                 .orElseThrow(() -> new UsernameNotFoundException("Distributor not found: " + email));
+        List<SimpleGrantedAuthority> authorities = new ArrayList<>();
+        authorities.add(new SimpleGrantedAuthority("ROLE_" + distributor.getRole().name()));
+        if (distributor.getRole() != com.platizio.wealthtech.domain.DistributorRole.ADMIN) {
+            authorities.add(new SimpleGrantedAuthority("ROLE_DISTRIBUTOR"));
+        }
 
         return new AuthenticatedDistributorPrincipal(
                 distributor.getId(),
                 distributor.getEmail(),
                 distributor.getPasswordHash() != null ? distributor.getPasswordHash() : "",
                 distributor.getRole(),
-                List.of(new SimpleGrantedAuthority("ROLE_" + distributor.getRole().name()))
+                authorities
         );
     }
 }

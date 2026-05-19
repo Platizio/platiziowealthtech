@@ -8,6 +8,7 @@ import com.platizio.wealthtech.integration.CybrillaClient;
 import com.platizio.wealthtech.repository.InvestorBankAccountRepository;
 import com.platizio.wealthtech.repository.InvestorRepository;
 import jakarta.persistence.EntityNotFoundException;
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.UUID;
 import org.springframework.data.domain.PageRequest;
@@ -256,7 +257,9 @@ public class InvestorService {
     @Transactional
     public void deleteInvestor(UUID investorId, UUID actorId) {
         Investor investor = getInvestor(investorId);
-        investorRepository.delete(investor);
-        auditService.log("INVESTOR", investorId, "DELETED", actorId, "{}");
+        investor.setIsDeleted(true);
+        investor.setDeletedAt(LocalDateTime.now());
+        investorRepository.save(investor);
+        auditService.log("INVESTOR", investorId, "DELETED", actorId, "{\"softDeleted\":true}");
     }
 }

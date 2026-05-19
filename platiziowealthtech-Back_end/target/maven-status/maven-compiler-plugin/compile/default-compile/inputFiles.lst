@@ -3,6 +3,7 @@ C:\Users\HP\Downloads\platiziowealthtech-Back_end\platiziowealthtech-Back_end\sr
 C:\Users\HP\Downloads\platiziowealthtech-Back_end\platiziowealthtech-Back_end\src\main\java\com\platizio\wealthtech\config\JwtAuthFilter.java
 C:\Users\HP\Downloads\platiziowealthtech-Back_end\platiziowealthtech-Back_end\src\main\java\com\platizio\wealthtech\config\OpenApiConfig.java
 C:\Users\HP\Downloads\platiziowealthtech-Back_end\platiziowealthtech-Back_end\src\main\java\com\platizio\wealthtech\config\SecurityConfig.java
+C:\Users\HP\Downloads\platiziowealthtech-Back_end\platiziowealthtech-Back_end\src\main\java\com\platizio\wealthtech\controller\AuditController.java
 C:\Users\HP\Downloads\platiziowealthtech-Back_end\platiziowealthtech-Back_end\src\main\java\com\platizio\wealthtech\controller\AuthController.java
 C:\Users\HP\Downloads\platiziowealthtech-Back_end\platiziowealthtech-Back_end\src\main\java\com\platizio\wealthtech\controller\DashboardController.java
 C:\Users\HP\Downloads\platiziowealthtech-Back_end\platiziowealthtech-Back_end\src\main\java\com\platizio\wealthtech\controller\DistributorController.java
@@ -41,6 +42,7 @@ C:\Users\HP\Downloads\platiziowealthtech-Back_end\platiziowealthtech-Back_end\sr
 C:\Users\HP\Downloads\platiziowealthtech-Back_end\platiziowealthtech-Back_end\src\main\java\com\platizio\wealthtech\domain\TransactionType.java
 C:\Users\HP\Downloads\platiziowealthtech-Back_end\platiziowealthtech-Back_end\src\main\java\com\platizio\wealthtech\dto\ActionItemDto.java
 C:\Users\HP\Downloads\platiziowealthtech-Back_end\platiziowealthtech-Back_end\src\main\java\com\platizio\wealthtech\dto\ApiErrorResponse.java
+C:\Users\HP\Downloads\platiziowealthtech-Back_end\platiziowealthtech-Back_end\src\main\java\com\platizio\wealthtech\dto\AuditLogResponse.java
 C:\Users\HP\Downloads\platiziowealthtech-Back_end\platiziowealthtech-Back_end\src\main\java\com\platizio\wealthtech\dto\AuthLoginRequest.java
 C:\Users\HP\Downloads\platiziowealthtech-Back_end\platiziowealthtech-Back_end\src\main\java\com\platizio\wealthtech\dto\AuthResponse.java
 C:\Users\HP\Downloads\platiziowealthtech-Back_end\platiziowealthtech-Back_end\src\main\java\com\platizio\wealthtech\dto\AuthSignupRequest.java
@@ -54,6 +56,7 @@ C:\Users\HP\Downloads\platiziowealthtech-Back_end\platiziowealthtech-Back_end\sr
 C:\Users\HP\Downloads\platiziowealthtech-Back_end\platiziowealthtech-Back_end\src\main\java\com\platizio\wealthtech\dto\LeadCreateRequest.java
 C:\Users\HP\Downloads\platiziowealthtech-Back_end\platiziowealthtech-Back_end\src\main\java\com\platizio\wealthtech\dto\LeadCreateWithDistributorRequest.java
 C:\Users\HP\Downloads\platiziowealthtech-Back_end\platiziowealthtech-Back_end\src\main\java\com\platizio\wealthtech\dto\LeadInteractionRequest.java
+C:\Users\HP\Downloads\platiziowealthtech-Back_end\platiziowealthtech-Back_end\src\main\java\com\platizio\wealthtech\dto\LeadResponse.java
 C:\Users\HP\Downloads\platiziowealthtech-Back_end\platiziowealthtech-Back_end\src\main\java\com\platizio\wealthtech\dto\LeadStatusUpdateRequest.java
 C:\Users\HP\Downloads\platiziowealthtech-Back_end\platiziowealthtech-Back_end\src\main\java\com\platizio\wealthtech\dto\OnboardingCardDto.java
 C:\Users\HP\Downloads\platiziowealthtech-Back_end\platiziowealthtech-Back_end\src\main\java\com\platizio\wealthtech\dto\OnboardingPipelineDto.java
@@ -62,6 +65,7 @@ C:\Users\HP\Downloads\platiziowealthtech-Back_end\platiziowealthtech-Back_end\sr
 C:\Users\HP\Downloads\platiziowealthtech-Back_end\platiziowealthtech-Back_end\src\main\java\com\platizio\wealthtech\dto\SipItemDto.java
 C:\Users\HP\Downloads\platiziowealthtech-Back_end\platiziowealthtech-Back_end\src\main\java\com\platizio\wealthtech\dto\SipTrendDto.java
 C:\Users\HP\Downloads\platiziowealthtech-Back_end\platiziowealthtech-Back_end\src\main\java\com\platizio\wealthtech\dto\StatusUpdateRequest.java
+C:\Users\HP\Downloads\platiziowealthtech-Back_end\platiziowealthtech-Back_end\src\main\java\com\platizio\wealthtech\dto\UpdateLeadRequest.java
 C:\Users\HP\Downloads\platiziowealthtech-Back_end\platiziowealthtech-Back_end\src\main\java\com\platizio\wealthtech\init\DataInitializer.java
 C:\Users\HP\Downloads\platiziowealthtech-Back_end\platiziowealthtech-Back_end\src\main\java\com\platizio\wealthtech\init\DbChecker.java
 C:\Users\HP\Downloads\platiziowealthtech-Back_end\platiziowealthtech-Back_end\src\main\java\com\platizio\wealthtech\integration\auth\CybrillaPreVerificationProperties.java

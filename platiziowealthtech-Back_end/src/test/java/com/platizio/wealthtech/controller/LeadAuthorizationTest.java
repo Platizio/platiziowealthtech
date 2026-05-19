@@ -12,6 +12,7 @@ import com.platizio.wealthtech.dto.LeadCreateRequest;
 import com.platizio.wealthtech.dto.LeadCreateWithDistributorRequest;
 import com.platizio.wealthtech.dto.LeadInteractionRequest;
 import com.platizio.wealthtech.dto.LeadStatusUpdateRequest;
+import com.platizio.wealthtech.dto.UpdateLeadRequest;
 import com.platizio.wealthtech.repository.InvestorLeadRepository;
 import com.platizio.wealthtech.repository.LeadInteractionRepository;
 import com.platizio.wealthtech.service.LeadService;
@@ -30,6 +31,7 @@ class LeadAuthorizationTest {
 
     private static final String LEAD_MUTATION_AUTH =
             "hasAnyRole('ADMIN','MASTER_DISTRIBUTOR','SUB_DISTRIBUTOR')";
+    private static final String DISTRIBUTOR_EDIT_AUTH = "hasRole('DISTRIBUTOR')";
 
     @Test
     void leadManagementEndpointsRequireDistributorRoles() throws NoSuchMethodException {
@@ -38,6 +40,9 @@ class LeadAuthorizationTest {
         assertPreAuthorize(LeadController.class.getMethod(
                 "createLeadWithDistributor", LeadCreateWithDistributorRequest.class, Authentication.class));
         assertPreAuthorize(LeadController.class.getMethod("listByDistributor", UUID.class));
+        assertThat(LeadController.class.getMethod(
+                        "updateLead", UUID.class, UpdateLeadRequest.class, Authentication.class)
+                .getAnnotation(PreAuthorize.class).value()).isEqualTo(DISTRIBUTOR_EDIT_AUTH);
         assertPreAuthorize(LeadController.class.getMethod(
                 "assignLead", UUID.class, LeadAssignRequest.class, Authentication.class));
         assertPreAuthorize(LeadController.class.getMethod(

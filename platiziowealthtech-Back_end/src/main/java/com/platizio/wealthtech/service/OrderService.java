@@ -7,6 +7,7 @@ import com.platizio.wealthtech.integration.CybrillaClient;
 import com.platizio.wealthtech.repository.RedemptionRecordRepository;
 import com.platizio.wealthtech.repository.TransactionOrderRepository;
 import jakarta.persistence.EntityNotFoundException;
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.UUID;
 import org.slf4j.Logger;
@@ -157,7 +158,9 @@ public class OrderService {
     public void deleteOrder(UUID orderId, UUID actorId) {
         TransactionOrder order = transactionOrderRepository.findById(orderId)
                 .orElseThrow(() -> new EntityNotFoundException("Order not found"));
-        transactionOrderRepository.delete(order);
-        auditService.log("ORDER", orderId, "DELETED", actorId, "{\"reason\":\"User requested deletion\"}");
+        order.setIsDeleted(true);
+        order.setDeletedAt(LocalDateTime.now());
+        transactionOrderRepository.save(order);
+        auditService.log("ORDER", orderId, "DELETED", actorId, "{\"softDeleted\":true,\"reason\":\"User requested deletion\"}");
     }
 }
