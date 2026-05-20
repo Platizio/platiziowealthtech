@@ -202,7 +202,7 @@ export default function AumBreakdown({ onBack, userData }: AumBreakdownProps) {
     <motion.div
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
-      className="p-8 space-y-6"
+      className="p-4 md:p-8 space-y-6"
     >
       {/* ── Breadcrumb ──────────────────────────────────────────────────── */}
       <button
@@ -229,7 +229,7 @@ export default function AumBreakdown({ onBack, userData }: AumBreakdownProps) {
       ) : (
         <>
           {/* ── Summary cards ───────────────────────────────────────────── */}
-          <div className="grid grid-cols-3 gap-5">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-5">
             {[
               { label: 'Total AUM', value: fmtInr(summary.totalAum), up: true, accent: 'border-blue-200   bg-blue-50   text-blue-700' },
               { label: 'Mutual Funds', value: fmtInr(summary.mfAum), up: true, accent: 'border-green-200  bg-green-50  text-green-700' },
@@ -313,6 +313,10 @@ export default function AumBreakdown({ onBack, userData }: AumBreakdownProps) {
             <div className="px-5 py-4 border-b border-slate-100">
               <h2 className="font-semibold text-slate-800">Investor-wise AUM</h2>
             </div>
+            {/* F-14: horizontal scroll on narrow viewports — the parent card's
+                overflow-hidden controls rounded-corner clipping but would
+                otherwise truncate the 5-column table on mobile. */}
+            <div className="overflow-x-auto">
             <table className="w-full">
               <thead>
                 <tr className="bg-slate-50 border-b border-slate-100">
@@ -361,6 +365,7 @@ export default function AumBreakdown({ onBack, userData }: AumBreakdownProps) {
                 </tfoot>
               )}
             </table>
+            </div>
           </div>
         </>
       )}

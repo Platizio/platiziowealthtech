@@ -1,38 +1,62 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, Suspense, lazy } from 'react';
 import { Routes, Route, Navigate, useNavigate } from 'react-router-dom';
 
-// Auth / pre-app screens
+// ── Eager imports ────────────────────────────────────────────────────────
+// AppLayout wraps every authenticated route; lazy-loading it would defeat
+// the bundle-split goal (it'd be requested on every nav anyway). LandingPage
+// and LoginPage are the first paint for unauthenticated users — lazy-loading
+// them would replace the initial UI with a spinner.
+import AppLayout from './layout/AppLayout';
 import LandingPage from './views/LandingPage';
 import LoginPage from './views/LoginPage';
-import PendingApproval from './views/PendingApproval';
-import Onboarding from './views/Onboarding';
+import { apiFetch, SESSION_EXPIRED_EVENT } from './config/api';
+
+// ── Lazy-loaded routes (F-33) ────────────────────────────────────────────
+// Each `lazy(() => import('./views/X'))` becomes its own bundle chunk under
+// Vite/Rollup — chunks are auto-named from the import path, so we do NOT
+// need /* webpackChunkName */ magic comments here (this project uses Vite,
+// not Webpack; those comments would be dead code).
+const PendingApproval     = lazy(() => import('./views/PendingApproval'));
+const Onboarding          = lazy(() => import('./views/Onboarding'));
+const Unauthorized        = lazy(() => import('./views/Unauthorized'));
 
 // Distributor views
-import Dashboard from './views/Dashboard';
-import Investors from './views/Investors';
-import Ledger from './views/Ledger';
-import Transactions from './views/Transactions';
-import Profile from './views/Profile';
-import Earnings from './views/Earnings';
-import Notifications from './views/Notifications';
-import Leads from './views/Leads';
-import AumBreakdown from './views/AumBreakdown';
-import SipDashboard from './views/SipDashboard';
-import ActionCenter from './views/ActionCenter';
-import InvestorOnboarding from './views/InvestorOnboarding';
-import InvestorTransaction from './views/InvestorTransaction';
-import Portfolio from './views/Portfolio';
-import Reports from './views/Reports';
-import Communications from './views/Communications';
+const Dashboard           = lazy(() => import('./views/Dashboard'));
+const Investors           = lazy(() => import('./views/Investors'));
+const Ledger              = lazy(() => import('./views/Ledger'));
+const Transactions        = lazy(() => import('./views/Transactions'));
+const Profile             = lazy(() => import('./views/Profile'));
+const Earnings            = lazy(() => import('./views/Earnings'));
+const Notifications       = lazy(() => import('./views/Notifications'));
+const Leads               = lazy(() => import('./views/Leads'));
+const AumBreakdown        = lazy(() => import('./views/AumBreakdown'));
+const SipDashboard        = lazy(() => import('./views/SipDashboard'));
+const ActionCenter        = lazy(() => import('./views/ActionCenter'));
+const InvestorOnboarding  = lazy(() => import('./views/InvestorOnboarding'));
+const InvestorTransaction = lazy(() => import('./views/InvestorTransaction'));
+const Portfolio           = lazy(() => import('./views/Portfolio'));
+const Reports             = lazy(() => import('./views/Reports'));
+const Communications      = lazy(() => import('./views/Communications'));
 
 // Admin views
-import AdminOverview from './views/AdminOverview';
-import DistributorMgmt from './views/DistributorMgmt';
-import ProductMgmt from './views/ProductMgmt';
-import InvestorMgmt from './views/InvestorMgmt';
+const AdminOverview       = lazy(() => import('./views/AdminOverview'));
+const DistributorMgmt     = lazy(() => import('./views/DistributorMgmt'));
+const ProductMgmt         = lazy(() => import('./views/ProductMgmt'));
+const InvestorMgmt        = lazy(() => import('./views/InvestorMgmt'));
 
-import AppLayout from './layout/AppLayout';
-import { apiFetch, SESSION_EXPIRED_EVENT } from './config/api';
+/**
+ * F-33: fallback shown while a lazy chunk is being fetched. Visually matches
+ * the existing session-restore spinner so chunk loads don't introduce a new
+ * loading style. Kept inline (not a separate file) — it's small and only
+ * used here.
+ */
+function PageSkeleton() {
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-slate-50">
+      <div className="w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin" />
+    </div>
+  );
+}
 
 const ADMIN_ROLES = new Set(['ADMIN', 'MASTER_DISTRIBUTOR']);
 
@@ -116,12 +140,20 @@ export default function App() {
   }
 
   return (
+    // F-33: Suspense catches the loading state for any lazy route below.
+    // PageSkeleton renders briefly on first navigation to a not-yet-fetched
+    // chunk; subsequent navigations to the same route reuse the cached chunk.
+    <Suspense fallback={<PageSkeleton />}>
     <Routes>
       {/* ── Pre-app screens ─────────────────────────────────────────────────────── */}
       <Route path="/" element={<LandingPage onLogin={() => navigate('/login')} onSignUp={() => navigate('/onboarding')} />} />
       <Route path="/login" element={<LoginPage onLogin={handleLoginSuccess} onSignUp={() => navigate('/onboarding')} onBack={() => navigate('/')} />} />
       <Route path="/onboarding" element={<Onboarding onComplete={() => navigate('/pending')} onBack={() => navigate('/')} />} />
       <Route path="/pending" element={<PendingApproval onGoToLogin={() => navigate('/login')} />} />
+      {/* F-30: shown to authenticated users whose role lacks access (e.g. a
+          non-admin hitting an /admin/* path). Top-level so it works regardless
+          of session state (e.g. user follows a stale admin link from chat). */}
+      <Route path="/unauthorized" element={<Unauthorized />} />
 
       {/* ── App Layout ────────────────────────────────────────────────────────── */}
       {userSession && (
@@ -156,7 +188,10 @@ export default function App() {
               <Route path="/admin/investor-mgmt" element={<InvestorMgmt userData={userData} />} />
             </>
           ) : (
-            <Route path="/admin/*" element={<Navigate to="/distributor/dashboard" replace />} />
+            // F-30: explicit /unauthorized feedback instead of a silent bounce
+            // to /distributor/dashboard, so the user understands why their
+            // navigation was blocked.
+            <Route path="/admin/*" element={<Navigate to="/unauthorized" replace />} />
           )}
 
         </Route>
@@ -165,6 +200,7 @@ export default function App() {
       {/* Fallback route */}
       <Route path="*" element={<Navigate to={userSession ? "/distributor/dashboard" : "/"} replace />} />
     </Routes>
+    </Suspense>
   );
 }
 

@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import axios from 'axios';
 import {
-  Search, Filter, ChevronLeft, Download, ShieldCheck,
+  Search, Filter, ChevronLeft, Download, ShieldCheck, Users,
   TrendingUp, AreaChart as AreaChartIcon, Activity,
   CheckCircle2, Clock, XCircle, AlertCircle, Upload,
 } from 'lucide-react';
@@ -10,6 +10,7 @@ import {
   AreaChart as RechartsArea, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
 } from 'recharts';
 import { apiFetch, apiUrl } from '../config/api';
+import EmptyState from '../components/EmptyState';
 
 // ─── KYC status config ─────────────────────────────────────────────────────────
 const kycConfig: Record<string, { label: string; color: string; icon: React.ReactNode }> = {
@@ -340,11 +341,11 @@ export default function Investors({
               <p className="text-sm font-semibold text-slate-700">{error}</p>
             </div>
           ) : filtered.length === 0 ? (
-            <div className="p-16 text-center text-slate-400">
-              <ShieldCheck className="w-12 h-12 mx-auto mb-4 text-slate-200" />
-              <p className="font-semibold text-slate-500">No investors found</p>
-              <p className="text-sm mt-1">Try adjusting your filters</p>
-            </div>
+            <EmptyState
+              icon={Users}
+              title="No investors found"
+              subtitle="Try adjusting your filters"
+            />
           ) : (
             <table className="w-full text-left">
               <thead className="bg-slate-50 text-[10px] uppercase tracking-wider text-slate-500 sticky top-0 z-10 font-semibold">

@@ -5,6 +5,7 @@ import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer
 } from 'recharts';
 import { apiFetch, apiUrl } from '../config/api';
+import { useFocusTrap } from '../hooks/useFocusTrap';
 
 interface Distributor {
   id: number;
@@ -60,9 +61,24 @@ const TIERS   = ['All', 'Platinum', 'Gold', 'Silver', 'Bronze'];
 const STATUSES = ['All', 'Active', 'Pending', 'Inactive'];
 const normalizeRole = (role?: string) => role?.trim().toUpperCase() || '';
 
-const isPendingStatus = (status?: string) => {
-  const normalized = status?.trim().toUpperCase() || '';
-  return normalized === 'PENDING' || normalized === 'PENDING_APPROVAL' || normalized === 'SUBMITTED' || normalized === 'DRAFT';
+// F-19: backend DistributorStatus enum is
+//   { DRAFT, SUBMITTED, PENDING_APPROVAL, APPROVED, REJECTED, INACTIVE }
+// The UI filter labels are ('Active' | 'Pending' | 'Inactive'). Previously the
+// filter compared d.status to the literal label (uppercased), so clicking
+// "Active" matched zero rows because the backend never returns 'ACTIVE' — an
+// approved distributor is 'APPROVED'. This map fixes that and also folds
+// REJECTED under the Inactive bucket (it was silently dropped before).
+const UI_STATUS_TO_BACKEND: Record<string, string[]> = {
+  Active:   ['APPROVED', 'ACTIVE'],
+  Pending:  ['PENDING_APPROVAL', 'SUBMITTED', 'DRAFT', 'PENDING'],
+  Inactive: ['INACTIVE', 'REJECTED'],
+};
+
+const matchesUiStatus = (uiLabel: string, backendStatus?: string) => {
+  if (uiLabel === 'All') return true;
+  const allowed = UI_STATUS_TO_BACKEND[uiLabel];
+  if (!allowed) return false;
+  return allowed.includes((backendStatus ?? '').trim().toUpperCase());
 };
 
 export default function DistributorMgmt({ userData }: { userData: any }) {
@@ -122,11 +138,8 @@ export default function DistributorMgmt({ userData }: { userData: any }) {
   }, [search, userId, userRole]);
 
   const filtered = distributors.filter(d => {
-    const matchTier   = tierFilter   === 'All' || d.tier   === tierFilter;
-    const matchStatus = statusFilter === 'All'
-      || d.status === statusFilter
-      || d.status?.toUpperCase() === statusFilter?.toUpperCase()
-      || (statusFilter === 'Pending' && isPendingStatus(d.status));
+    const matchTier   = tierFilter   === 'All' || d.tier === tierFilter;
+    const matchStatus = matchesUiStatus(statusFilter, d.status);
     return matchTier && matchStatus;
   });
 
@@ -329,6 +342,7 @@ export default function DistributorMgmt({ userData }: { userData: any }) {
 }
 
 function AddDistributorModal({ onClose }: { onClose: () => void }) {
+  const dialogRef = useFocusTrap<HTMLDivElement>(true);
   const [step, setStep] = useState(1);
 
   const fields1 = [
@@ -345,16 +359,22 @@ function AddDistributorModal({ onClose }: { onClose: () => void }) {
   ];
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+    <div
+      ref={dialogRef}
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="add-distributor-title"
+      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+    >
       <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
         onClick={onClose} className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm" />
       <motion.div initial={{ opacity: 0, scale: 0.95, y: 20 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.95, y: 20 }}
         className="bg-white w-full max-w-md rounded-3xl shadow-xl relative z-10 overflow-hidden">
-        <button onClick={onClose} className="absolute top-4 right-4 p-2 text-slate-400 hover:text-slate-600 bg-slate-100 rounded-full transition-colors">
-          <X className="w-5 h-5" />
+        <button onClick={onClose} aria-label="Close dialog" className="absolute top-4 right-4 p-2 text-slate-400 hover:text-slate-600 bg-slate-100 rounded-full transition-colors">
+          <X className="w-5 h-5" aria-hidden="true" />
         </button>
         <div className="p-8">
-          <h2 className="text-xl font-semibold text-slate-800 mb-1">Add Distributor</h2>
+          <h2 id="add-distributor-title" className="text-xl font-semibold text-slate-800 mb-1">Add Distributor</h2>
           <p className="text-sm text-slate-500 mb-6">Manually enrol a new distributor into the network</p>
 
           {/* Progress */}

@@ -234,7 +234,7 @@ export default function SipDashboard({ onBack, userData }: { onBack: () => void;
     <motion.div
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
-      className="p-8 space-y-6"
+      className="p-4 md:p-8 space-y-6"
     >
       {/* ── Breadcrumb ──────────────────────────────────────────────────── */}
       <button
@@ -244,7 +244,7 @@ export default function SipDashboard({ onBack, userData }: { onBack: () => void;
         <ArrowLeft className="w-4 h-4" /> Back to Dashboard
       </button>
 
-      <div className="flex justify-between items-end">
+      <div className="flex flex-wrap justify-between items-end gap-3">
         <div>
           <h1 className="text-2xl font-semibold text-slate-800">SIP Dashboard</h1>
           <p className="text-slate-500 text-sm mt-1">Track active, failed and upcoming systematic investment plans</p>
@@ -263,7 +263,7 @@ export default function SipDashboard({ onBack, userData }: { onBack: () => void;
       </div>
 
       {/* ── KPI row ─────────────────────────────────────────────────────── */}
-      <div className="grid grid-cols-4 gap-5">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 md:gap-5">
         {[
           { label: 'Monthly SIP Amount', value: `₹${(totalAmount / 100000).toFixed(2)} L`, sub: 'Calculated from active SIPs', accent: 'bg-blue-50   border-blue-200   text-blue-700'   },
           { label: 'Active SIPs',        value: activeSips.toString(),     sub: 'Currently running',   accent: 'bg-green-50  border-green-200  text-green-700'  },
@@ -342,6 +342,10 @@ export default function SipDashboard({ onBack, userData }: { onBack: () => void;
             ))}
           </div>
         </div>
+        {/* F-14: overflow-x-auto so the table can scroll horizontally on
+            screens narrower than the table's natural width, instead of being
+            clipped by the card's overflow-hidden corner mask. */}
+        <div className="overflow-x-auto">
         <table className="w-full">
           <thead>
             <tr className="bg-slate-50 border-b border-slate-100">
@@ -390,6 +394,7 @@ export default function SipDashboard({ onBack, userData }: { onBack: () => void;
             })}
           </tbody>
         </table>
+        </div>
 
         {visible.length === 0 && (
           <div className="py-12 text-center text-sm text-slate-400">

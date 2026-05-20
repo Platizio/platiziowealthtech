@@ -33,8 +33,8 @@ const schemeBreakdown = [
 
 export default function Earnings() {
   return (
-    <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="p-8 space-y-6">
-      <div className="flex justify-between items-end">
+    <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="p-4 md:p-8 space-y-6">
+      <div className="flex flex-wrap justify-between items-end gap-3">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight text-slate-800">Earnings Summary</h1>
           <p className="text-slate-500 text-sm mt-1">Trail commissions and upfront brokerage overview</p>
@@ -45,7 +45,7 @@ export default function Earnings() {
       </div>
 
       {/* KPI Cards */}
-      <div className="grid grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
         <div className="bg-[#0B1B3E] rounded-2xl p-6 text-white relative overflow-hidden">
           <div className="absolute top-0 right-0 w-32 h-32 bg-blue-500 opacity-10 rounded-full blur-2xl" />
           <p className="text-[10px] font-bold text-blue-300 uppercase tracking-wider mb-2">Current Period (Apr)</p>
@@ -142,26 +142,28 @@ export default function Earnings() {
           <h2 className="font-semibold text-slate-800">Client-wise Breakdown</h2>
           <span className="text-xs text-slate-500 bg-slate-100 px-3 py-1 rounded-full font-medium">April 2025</span>
         </div>
-        <table className="w-full text-left">
-          <thead className="bg-slate-50 text-[10px] uppercase tracking-wider text-slate-500 font-semibold">
-            <tr>
-              <th className="px-6 py-4">Client</th>
-              <th className="px-6 py-4">AUM</th>
-              <th className="px-6 py-4">Trail Commission</th>
-              <th className="px-6 py-4">Upfront Commission</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-100">
-            {clientBreakdown.map(c => (
-              <tr key={c.name} className="hover:bg-slate-50 transition-colors">
-                <td className="px-6 py-4 text-sm font-semibold text-slate-800">{c.name}</td>
-                <td className="px-6 py-4 text-sm font-mono text-slate-600">{c.aum}</td>
-                <td className="px-6 py-4 text-sm font-mono font-medium text-slate-800">{c.trail}</td>
-                <td className="px-6 py-4 text-sm font-mono font-medium text-slate-800">{c.upfront}</td>
+        <div className="overflow-x-auto">
+          <table className="w-full text-left">
+            <thead className="bg-slate-50 text-[10px] uppercase tracking-wider text-slate-500 font-semibold">
+              <tr>
+                <th className="px-6 py-4">Client</th>
+                <th className="px-6 py-4">AUM</th>
+                <th className="px-6 py-4">Trail Commission</th>
+                <th className="px-6 py-4">Upfront Commission</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {clientBreakdown.map(c => (
+                <tr key={c.name} className="hover:bg-slate-50 transition-colors">
+                  <td className="px-6 py-4 text-sm font-semibold text-slate-800">{c.name}</td>
+                  <td className="px-6 py-4 text-sm font-mono text-slate-600">{c.aum}</td>
+                  <td className="px-6 py-4 text-sm font-mono font-medium text-slate-800">{c.trail}</td>
+                  <td className="px-6 py-4 text-sm font-mono font-medium text-slate-800">{c.upfront}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </div>
 
       {/* Scheme-wise breakdown */}
@@ -170,30 +172,32 @@ export default function Earnings() {
           <h2 className="font-semibold text-slate-800">Scheme-wise Breakdown</h2>
           <span className="text-xs text-slate-500 bg-slate-100 px-3 py-1 rounded-full font-medium">April 2025</span>
         </div>
-        <table className="w-full text-left">
-          <thead className="bg-slate-50 text-[10px] uppercase tracking-wider text-slate-500 font-semibold">
-            <tr>
-              <th className="px-6 py-4">Scheme</th>
-              <th className="px-6 py-4">Category</th>
-              <th className="px-6 py-4">Total Earnings</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-100">
-            {schemeBreakdown.map(s => (
-              <tr key={s.name} className="hover:bg-slate-50 transition-colors">
-                <td className="px-6 py-4 text-sm font-semibold text-slate-800">{s.name}</td>
-                <td className="px-6 py-4">
-                  <span className={`px-2.5 py-1 text-xs font-semibold rounded-md ${
-                    s.category === 'Equity' ? 'bg-blue-50 text-blue-700' : 'bg-emerald-50 text-emerald-700'
-                  }`}>
-                    {s.category}
-                  </span>
-                </td>
-                <td className="px-6 py-4 text-sm font-mono font-semibold text-slate-800">{s.earnings}</td>
+        <div className="overflow-x-auto">
+          <table className="w-full text-left">
+            <thead className="bg-slate-50 text-[10px] uppercase tracking-wider text-slate-500 font-semibold">
+              <tr>
+                <th className="px-6 py-4">Scheme</th>
+                <th className="px-6 py-4">Category</th>
+                <th className="px-6 py-4">Total Earnings</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {schemeBreakdown.map(s => (
+                <tr key={s.name} className="hover:bg-slate-50 transition-colors">
+                  <td className="px-6 py-4 text-sm font-semibold text-slate-800">{s.name}</td>
+                  <td className="px-6 py-4">
+                    <span className={`px-2.5 py-1 text-xs font-semibold rounded-md ${
+                      s.category === 'Equity' ? 'bg-blue-50 text-blue-700' : 'bg-emerald-50 text-emerald-700'
+                    }`}>
+                      {s.category}
+                    </span>
+                  </td>
+                  <td className="px-6 py-4 text-sm font-mono font-semibold text-slate-800">{s.earnings}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </div>
     </motion.div>
   );

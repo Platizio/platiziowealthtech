@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Search, Filter, Upload, UserPlus, X, CheckCircle2, Clock, XCircle, AlertCircle, ChevronDown, Download } from 'lucide-react';
 import { apiFetch, apiUrl } from '../config/api';
+import { useFocusTrap } from '../hooks/useFocusTrap';
 
 interface Investor {
   id: number | string;
@@ -413,17 +414,24 @@ export default function InvestorMgmt({ userData }: { userData?: any }) {
 }
 
 function ManualOnboardModal({ onClose }: { onClose: () => void }) {
+  const dialogRef = useFocusTrap<HTMLDivElement>(true);
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+    <div
+      ref={dialogRef}
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="manual-onboard-title"
+      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+    >
       <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
         onClick={onClose} className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm" />
       <motion.div initial={{ opacity: 0, scale: 0.95, y: 20 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.95, y: 20 }}
         className="bg-white w-full max-w-md rounded-3xl shadow-xl relative z-10 overflow-hidden max-h-[90vh] overflow-y-auto">
-        <button onClick={onClose} className="absolute top-4 right-4 p-2 text-slate-400 hover:text-slate-600 bg-slate-100 rounded-full transition-colors z-10">
-          <X className="w-5 h-5" />
+        <button onClick={onClose} aria-label="Close dialog" className="absolute top-4 right-4 p-2 text-slate-400 hover:text-slate-600 bg-slate-100 rounded-full transition-colors z-10">
+          <X className="w-5 h-5" aria-hidden="true" />
         </button>
         <div className="p-8">
-          <h2 className="text-xl font-semibold text-slate-800 mb-1">Onboard Investor</h2>
+          <h2 id="manual-onboard-title" className="text-xl font-semibold text-slate-800 mb-1">Onboard Investor</h2>
           <p className="text-sm text-slate-500 mb-6">Manually register a new investor</p>
           <div className="space-y-4">
             {[
@@ -465,20 +473,27 @@ function ManualOnboardModal({ onClose }: { onClose: () => void }) {
 }
 
 function CsvUploadModal({ onClose }: { onClose: () => void }) {
+  const dialogRef = useFocusTrap<HTMLDivElement>(true);
   const [dragging, setDragging] = useState(false);
   const [uploaded, setUploaded] = useState(false);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+    <div
+      ref={dialogRef}
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="csv-upload-title"
+      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+    >
       <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
         onClick={onClose} className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm" />
       <motion.div initial={{ opacity: 0, scale: 0.95, y: 20 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.95, y: 20 }}
         className="bg-white w-full max-w-md rounded-3xl shadow-xl relative z-10 overflow-hidden">
-        <button onClick={onClose} className="absolute top-4 right-4 p-2 text-slate-400 hover:text-slate-600 bg-slate-100 rounded-full transition-colors">
-          <X className="w-5 h-5" />
+        <button onClick={onClose} aria-label="Close dialog" className="absolute top-4 right-4 p-2 text-slate-400 hover:text-slate-600 bg-slate-100 rounded-full transition-colors">
+          <X className="w-5 h-5" aria-hidden="true" />
         </button>
         <div className="p-8">
-          <h2 className="text-xl font-semibold text-slate-800 mb-1">Bulk Upload via CSV</h2>
+          <h2 id="csv-upload-title" className="text-xl font-semibold text-slate-800 mb-1">Bulk Upload via CSV</h2>
           <p className="text-sm text-slate-500 mb-6">Import multiple investors at once using a CSV file</p>
 
           {!uploaded ? (

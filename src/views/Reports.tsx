@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { FileText, Download, Search, Filter } from 'lucide-react';
 import { apiFetch } from '../config/api';
+import EmptyState from '../components/EmptyState';
 
 const REPORT_TYPES = [
   { id: 'investors',    label: 'Investor Report',         desc: 'All investors with KYC and status details' },
@@ -197,10 +198,7 @@ export default function Reports({ userData }: { userData?: any }) {
               <div className="w-7 h-7 border-4 border-blue-500 border-t-transparent rounded-full animate-spin" />
             </div>
           ) : filteredData.length === 0 ? (
-            <div className="flex flex-col items-center justify-center h-52 text-slate-300 gap-2">
-              <FileText className="w-8 h-8" />
-              <p className="text-sm text-slate-400">No data available</p>
-            </div>
+            <EmptyState icon={FileText} title="No data available" />
           ) : (
             <>
               <div className="overflow-x-auto">
