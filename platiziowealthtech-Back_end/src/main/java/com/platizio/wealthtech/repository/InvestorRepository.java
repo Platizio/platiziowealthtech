@@ -12,6 +12,7 @@ import org.springframework.data.repository.query.Param;
 
 public interface InvestorRepository extends JpaRepository<Investor, UUID> {
     Optional<Investor> findByPan(String pan);
+    Optional<Investor> findByEmail(String email);
     List<Investor> findByDistributorId(UUID distributorId);
     List<Investor> findByDistributorIdIn(List<UUID> distributorIds);
     List<Investor> findByPostalCode(String postalCode);

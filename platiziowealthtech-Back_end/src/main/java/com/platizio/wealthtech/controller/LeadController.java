@@ -21,6 +21,14 @@ import org.springframework.web.bind.annotation.*;
 
 @RestController
 @RequestMapping("/api/v1/leads")
+// Class-level baseline: no lead endpoint is reachable without one of the
+// distributor/admin roles. NOTE: the role is the codebase's actual model
+// (ADMIN / MASTER_DISTRIBUTOR / SUB_DISTRIBUTOR) ΓÇö there is no "DISTRIBUTOR"
+// role in DistributorRole, so hasRole('DISTRIBUTOR') would deny everyone.
+// Method-level @PreAuthorize is more specific and takes precedence, so the
+// stricter admin-only checks on listAll()/deleteLead() are unaffected; this
+// only backstops any future endpoint added without its own annotation.
+@PreAuthorize("hasAnyRole('ADMIN','MASTER_DISTRIBUTOR','SUB_DISTRIBUTOR')")
 public class LeadController {
 
     private final LeadService leadService;

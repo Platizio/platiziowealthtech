@@ -58,7 +58,7 @@ class InvestorServiceAuditTest {
                 InvestorRepository.class.getClassLoader(),
                 new Class<?>[]{InvestorRepository.class},
                 (proxy, method, args) -> switch (method.getName()) {
-                    case "findByPan" -> Optional.empty();
+                    case "findByPan", "findByEmail" -> Optional.empty();
                     case "save" -> args[0];
                     case "findAll", "findByDistributorId" -> List.of();
                     default -> defaultValue(method.getReturnType());

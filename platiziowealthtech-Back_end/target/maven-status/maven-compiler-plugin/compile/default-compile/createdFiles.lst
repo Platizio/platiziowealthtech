@@ -2,6 +2,7 @@ com\platizio\wealthtech\controller\OrderController.class
 com\platizio\wealthtech\domain\RedemptionStatus.class
 com\platizio\wealthtech\config\JwtAuthFilter.class
 com\platizio\wealthtech\service\BlockedTokenService.class
+com\platizio\wealthtech\common\DuplicateResourceException.class
 com\platizio\wealthtech\domain\LeadStatus.class
 com\platizio\wealthtech\dto\InvestorCreateRequest.class
 com\platizio\wealthtech\integration\auth\ExternalBearerTokenService.class
@@ -12,6 +13,7 @@ com\platizio\wealthtech\domain\TransactionOrder.class
 com\platizio\wealthtech\repository\AuthRefreshTokenRepository.class
 com\platizio\wealthtech\dto\LeadCreateWithDistributorRequest.class
 com\platizio\wealthtech\dto\InvestorUpdateRequest.class
+com\platizio\wealthtech\dto\UpdateLeadRequest.class
 com\platizio\wealthtech\domain\InvestorStatus.class
 com\platizio\wealthtech\integration\CybrillaClient.class
 com\platizio\wealthtech\repository\InvestorLeadRepository.class
@@ -30,6 +32,7 @@ com\platizio\wealthtech\dto\SipItemDto.class
 com\platizio\wealthtech\dto\OnboardingPipelineDto.class
 com\platizio\wealthtech\integration\auth\FinprimTenantProperties$Tenant.class
 com\platizio\wealthtech\integration\auth\ExternalAuthTokenAutoRefreshScheduler.class
+com\platizio\wealthtech\dto\AuditLogResponse.class
 com\platizio\wealthtech\domain\DistributorStatus.class
 com\platizio\wealthtech\dto\LeadStatusUpdateRequest.class
 com\platizio\wealthtech\controller\NotificationController.class
@@ -41,6 +44,7 @@ com\platizio\wealthtech\dto\BulkOrderCreateRequest.class
 com\platizio\wealthtech\dto\ActionItemDto.class
 com\platizio\wealthtech\dto\InvestorBankRequest.class
 com\platizio\wealthtech\dto\OrderCreateRequest.class
+com\platizio\wealthtech\dto\LeadResponse.class
 com\platizio\wealthtech\dto\DistributorUpdateRequest.class
 com\platizio\wealthtech\dto\OnboardingCardDto.class
 com\platizio\wealthtech\domain\InvestorBankAccount.class
@@ -49,6 +53,7 @@ com\platizio\wealthtech\controller\ProductController.class
 com\platizio\wealthtech\domain\AuthRefreshToken.class
 com\platizio\wealthtech\integration\RealCybrillaClient.class
 com\platizio\wealthtech\domain\TransactionType.class
+com\platizio\wealthtech\config\LoginRateLimitFilter.class
 com\platizio\wealthtech\domain\LeadInteraction.class
 com\platizio\wealthtech\domain\NotificationType.class
 com\platizio\wealthtech\service\NotificationService.class
@@ -74,6 +79,7 @@ com\platizio\wealthtech\repository\AuditEventRepository.class
 com\platizio\wealthtech\dto\LeadCreateRequest.class
 com\platizio\wealthtech\security\AuthenticatedDistributorPrincipal.class
 com\platizio\wealthtech\security\JwtAuthPrincipal.class
+com\platizio\wealthtech\controller\AuditController.class
 com\platizio\wealthtech\integration\auth\ExternalBearerTokenService$CachedBearerToken.class
 com\platizio\wealthtech\integration\auth\ExternalAuthTokenCacheStore$TokenCacheFileEntry.class
 com\platizio\wealthtech\integration\auth\ExternalAuthTokenCacheStore$1.class

@@ -12,6 +12,12 @@ import org.springframework.web.bind.annotation.*;
 
 @RestController
 @RequestMapping("/api/v1/notifications")
+// Class-level baseline: every endpoint requires an authenticated principal.
+// Method-level @PreAuthorize annotations are more specific and take
+// precedence (Spring uses the most specific one), so existing per-method
+// ownership checks are unchanged. This only backstops any future endpoint
+// added without its own @PreAuthorize so it can never default to open.
+@PreAuthorize("isAuthenticated()")
 public class NotificationController {
 
     private final NotificationService notificationService;
@@ -22,8 +28,16 @@ public class NotificationController {
 
     @PreAuthorize("#distributorId == principal.distributorId")
     @GetMapping("/distributor/{distributorId}")
-    public List<Notification> list(@PathVariable UUID distributorId) {
-        return notificationService.listByDistributor(distributorId);
+    public List<Notification> list(@PathVariable UUID distributorId, Authentication auth) {
+        // B-53: the data scope is derived from the authenticated JWT principal,
+        // NOT from the client-supplied {distributorId} path segment. The path
+        // segment is retained only for backward compatibility with existing
+        // clients and is deliberately ignored for the lookup, so a caller can
+        // only ever see their own notifications even if the @PreAuthorize guard
+        // above were removed or weakened. (The annotation is kept as an extra,
+        // independent defence-in-depth layer.)
+        UUID callerDistributorId = callerDistributorId(auth);
+        return notificationService.listByDistributor(callerDistributorId);
     }
 
     @PreAuthorize("isAuthenticated()")

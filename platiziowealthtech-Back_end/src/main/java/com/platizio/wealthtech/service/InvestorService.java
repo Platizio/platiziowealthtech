@@ -1,5 +1,6 @@
 package com.platizio.wealthtech.service;
 
+import com.platizio.wealthtech.common.DuplicateResourceException;
 import com.platizio.wealthtech.domain.*;
 import com.platizio.wealthtech.dto.InvestorBankRequest;
 import com.platizio.wealthtech.dto.InvestorCreateRequest;
@@ -11,6 +12,7 @@ import jakarta.persistence.EntityNotFoundException;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.UUID;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -127,9 +129,19 @@ public class InvestorService {
 
     @Transactional
     public Investor createInvestor(InvestorCreateRequest request) {
+        // ΓöÇΓöÇ Explicit uniqueness guards (fast, friendly 409 before touching the DB) ΓöÇΓöÇ
         investorRepository.findByPan(request.pan()).ifPresent(existing -> {
             throw new IllegalArgumentException("Investor with same PAN already exists");
         });
+
+        // B-18: investors.email had no UNIQUE constraint; check here so the caller
+        // receives a clear 409 rather than a raw DataIntegrityViolationException.
+        if (request.email() != null) {
+            investorRepository.findByEmail(request.email()).ifPresent(existing -> {
+                throw new DuplicateResourceException("An investor with this email address already exists");
+            });
+        }
+
         distributorService.getDistributor(request.distributorId());
 
         Investor investor = new Investor();
@@ -147,7 +159,16 @@ public class InvestorService {
         investor.setOnboardingNotes(request.onboardingNotes());
         investor.setInvestorStatus(InvestorStatus.ONBOARDING);
 
-        Investor saved = investorRepository.save(investor);
+        // Safety net: if a concurrent request slips through the guard above and
+        // the DB constraint fires, convert the low-level exception into the same
+        // friendly 409 the explicit check would have thrown.
+        Investor saved;
+        try {
+            saved = investorRepository.save(investor);
+        } catch (DataIntegrityViolationException ex) {
+            throw new DuplicateResourceException("An investor with this email address already exists");
+        }
+
         auditService.log("INVESTOR", saved.getId(), "CREATED", request.distributorId(), "{\"pan_provided\":true}");
 
         String externalInvestorId = cybrillaClient.createInvestorProfile(saved);
