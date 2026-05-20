@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { FileText, Download, Search, Filter } from 'lucide-react';
 import { apiFetch } from '../config/api';
+import { formatDate } from '../utils/formatDate';
 
 const REPORT_TYPES = [
   { id: 'investors',    label: 'Investor Report',         desc: 'All investors with KYC and status details' },
@@ -63,7 +64,11 @@ const COLUMNS: Record<string, { key: string; label: string }[]> = {
 function downloadCsv(rows: any[], filename: string, columns: { key: string; label: string }[]) {
   const header = columns.map(c => c.label).join(',');
   const body   = rows.map(row =>
-    columns.map(c => `"${String(row[c.key] ?? '').replace(/"/g, '""')}"`).join(',')
+    columns.map(c => {
+      let val = row[c.key];
+      if (c.key === 'createdAt' || c.key === 'updatedAt') val = formatDate(val);
+      return `"${String(val ?? '').replace(/"/g, '""')}"`;
+    }).join(',')
   );
   const blob = new Blob([[header, ...body].join('\n')], { type: 'text/csv' });
   const url  = URL.createObjectURL(blob);
@@ -222,7 +227,7 @@ export default function Reports({ userData }: { userData?: any }) {
                       <tr key={i} className="hover:bg-slate-50/80">
                         {columns.map(col => (
                           <td key={col.key} className="px-4 py-3 text-slate-700 whitespace-nowrap">
-                            {String(row[col.key] ?? '—')}
+                            {col.key === 'createdAt' || col.key === 'updatedAt' ? formatDate(row[col.key]) : String(row[col.key] ?? '—')}
                           </td>
                         ))}
                       </tr>

@@ -1,11 +1,15 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
+import { getPageContent, getPageMeta } from '../utils/pagination';
+import { formatDate } from '../utils/formatDate';
+import { useDebounce } from '../hooks/useDebounce';
 import {
   Search, Filter, ChevronLeft, MessageSquare, Phone,
   Plus, Youtube, Instagram, Globe, UserCheck, X,
   CheckCircle2,
 } from 'lucide-react';
 import { apiFetch } from '../config/api';
+import Pagination from '../components/Pagination';
 
 interface Lead {
   id: string;
@@ -285,6 +289,7 @@ export default function Leads({
   const [loading, setLoading]     = useState(true);
   const [selected, setSelected]   = useState<string | null>(null);
   const [search,   setSearch]     = useState('');
+  const debouncedSearch           = useDebounce(search, 300);
   const [stageFilter, setStageFilter] = useState<StageKey | 'All'>('All');
   const [showAdd,  setShowAdd]    = useState(false);
 
@@ -353,8 +358,9 @@ export default function Leads({
   };
 
   const filtered = allLeads.filter(l => {
-    const matchSearch = l.name.toLowerCase().includes(search.toLowerCase()) ||
-      l.source.toLowerCase().includes(search.toLowerCase());
+    const query = debouncedSearch.toLowerCase();
+    const matchSearch = l.name.toLowerCase().includes(query) ||
+      l.source.toLowerCase().includes(query);
     const matchStage = stageFilter === 'All' || l.stage === stageFilter;
     return matchSearch && matchStage;
   });

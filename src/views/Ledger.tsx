@@ -6,6 +6,7 @@ import {
   Target, Users, BookOpen, PieChart, Activity, Eye,
 } from 'lucide-react';
 import { apiFetch } from '../config/api';
+import { useDebounce } from '../hooks/useDebounce';
 
 // ─── Colour maps ──────────────────────────────────────────────────────────────
 const categoryStyle: Record<string, string> = {
@@ -49,6 +50,7 @@ export default function Ledger({ userData }: { userData?: any }) {
   const [categoryFilter, setCategoryFilter] = useState('All');
   const [typeFilter, setTypeFilter]     = useState('All');
   const [search, setSearch]             = useState('');
+  const debouncedSearch                 = useDebounce(search, 300);
   const [page, setPage]                 = useState(1);
   const [investModal, setInvestModal]   = useState<any | null>(null);
   const [detailModal, setDetailModal]   = useState<any | null>(null);
@@ -144,7 +146,7 @@ export default function Ledger({ userData }: { userData?: any }) {
 
   useEffect(() => {
     setPage(1);
-  }, [assetFilter, categoryFilter, typeFilter, search]);
+  }, [assetFilter, categoryFilter, typeFilter, debouncedSearch]);
 
   // Derived filter options
   const categories = ['All', ...Array.from(new Set(schemes.map(s => s.category).filter(Boolean)))];
@@ -160,7 +162,7 @@ export default function Ledger({ userData }: { userData?: any }) {
     const name = s.schemeName || '';
     const amc  = s.amcName   || '';
     const code = s.externalSchemeCode || '';
-    const searchTerm = search.trim().toLowerCase();
+    const searchTerm = debouncedSearch.trim().toLowerCase();
     const matchSearch   = !searchTerm
       || name.toLowerCase().includes(searchTerm)
       || amc.toLowerCase().includes(searchTerm)
@@ -171,7 +173,7 @@ export default function Ledger({ userData }: { userData?: any }) {
     return matchSearch && matchAsset && matchCategory && matchType;
   });
 
-  const filtersActive = assetFilter !== 'All' || categoryFilter !== 'All' || typeFilter !== 'All' || search.trim() !== '';
+  const filtersActive = assetFilter !== 'All' || categoryFilter !== 'All' || typeFilter !== 'All' || debouncedSearch.trim() !== '';
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const currentPage = Math.min(page, totalPages);
   const pageStart = (currentPage - 1) * PAGE_SIZE;
@@ -979,6 +981,7 @@ function TransactionModal({ fund, userData, onClose }: { fund: any; userData?: a
   const [step, setStep] = useState(1);
   const [type, setType] = useState('SIP');
   const [investorQuery, setInvestorQuery] = useState('');
+  const debouncedInvestorQuery = useDebounce(investorQuery, 300);
   const [investorResults, setInvestorResults] = useState<any[]>([]);
   const [selectedInvestor, setSelectedInvestor] = useState<any | null>(null);
   const [investorLoading, setInvestorLoading] = useState(false);
@@ -987,7 +990,7 @@ function TransactionModal({ fund, userData, onClose }: { fund: any; userData?: a
     let cancelled = false;
 
     const searchInvestors = async () => {
-      const query = investorQuery.trim();
+      const query = debouncedInvestorQuery.trim();
       if (query.length < 1) {
         setInvestorResults([]);
         setInvestorLoading(false);
@@ -1013,12 +1016,11 @@ function TransactionModal({ fund, userData, onClose }: { fund: any; userData?: a
       }
     };
 
-    const timer = window.setTimeout(searchInvestors, 300);
+    searchInvestors();
     return () => {
       cancelled = true;
-      window.clearTimeout(timer);
     };
-  }, [investorQuery, userData]);
+  }, [debouncedInvestorQuery, userData]);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">

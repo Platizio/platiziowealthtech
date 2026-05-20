@@ -5,6 +5,7 @@ import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer
 } from 'recharts';
 import { apiFetch, apiUrl } from '../config/api';
+import { formatDate } from '../utils/formatDate';
 
 interface Distributor {
   id: number;
@@ -253,7 +254,7 @@ export default function DistributorMgmt({ userData }: { userData: any }) {
                 const investorsCount = d.investors || 0;
                 const status = d.status || 'DRAFT';
                 const tier = d.tier || 'Bronze';
-                const onboarded = d.onboarded || (d.createdAt ? d.createdAt.split('T')[0] : 'N/A');
+                const onboarded = (d.onboarded || d.createdAt) ? formatDate(d.onboarded || d.createdAt) : 'N/A';
                 
                 const sc = statusConfig[status.toUpperCase()] || statusConfig['DRAFT'];
                 

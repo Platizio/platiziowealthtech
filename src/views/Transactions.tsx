@@ -2,6 +2,9 @@ import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Search, Filter, ChevronLeft, CheckCircle2, Clock, XCircle, AlertCircle, RefreshCw, ArrowDown, ArrowUp, ArrowUpDown } from 'lucide-react';
 import { apiFetch } from '../config/api';
+import Pagination from '../components/Pagination';
+import { getPageContent, getPageMeta } from '../utils/pagination';
+import { formatDateTime } from '../utils/formatDate';
 
 type StatusKey = 'Successful' | 'Processing' | 'Submitted' | 'Payment Pending' | 'Pending Investor Action' | 'Failed' | 'Retry Available' | 'Draft' | 'Created' | 'SUCCESSFUL' | 'COMPLETED' | 'FAILED' | 'PENDING_PAYMENT' | 'DRAFT';
 
@@ -142,6 +145,10 @@ export default function Transactions({ userData }: { userData?: any }) {
   const [sortField, setSortField] = useState<SortField>('createdAt');
   const [sortDirection, setSortDirection] = useState<SortDirection>('DESC');
   const [page, setPage] = useState(0);
+  const [size, setSize] = useState(20);
+  const [totalPages, setTotalPages] = useState(1);
+  const [totalElements, setTotalElements] = useState(0);
+  const [refreshKey, setRefreshKey] = useState(0);
   const [transactions, setTransactions] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -205,6 +212,7 @@ export default function Transactions({ userData }: { userData?: any }) {
           sortBy: sortField,
           direction: sortDirection,
           page: String(page),
+          size: String(size),
         });
 
         if (statusFilter !== 'All') params.set('status', statusFilter);
@@ -223,9 +231,8 @@ export default function Transactions({ userData }: { userData?: any }) {
         ]);
 
         const ordersPayload = ordersRes.ok ? await ordersRes.json() : [];
-        const orders = Array.isArray(ordersPayload)
-          ? ordersPayload
-          : ordersPayload?.content || ordersPayload?.data || [];
+        const orders = getPageContent(ordersPayload);
+        const meta = getPageMeta(ordersPayload, orders.length);
         const investors = investorsRes.ok ? await investorsRes.json() : [];
         const schemes = schemesRes.ok ? await schemesRes.json() : [];
 
@@ -243,7 +250,7 @@ export default function Transactions({ userData }: { userData?: any }) {
             amount: o.amount ? `₹${o.amount.toLocaleString()}` : '—',
             rawAmount: o.amount || 0,
             status: o.orderStatus || 'Draft',
-            date: new Date(o.createdAt || Date.now()).toLocaleString(),
+            date: formatDateTime(o.createdAt || new Date().toISOString()),
             rawCreatedAt: o.createdAt || new Date().toISOString(),
             pan: inv?.pan || '—',
             mandate: o.paymentMode || o.mandateMode || '—'
@@ -251,6 +258,8 @@ export default function Transactions({ userData }: { userData?: any }) {
         });
 
         setTransactions(formatted);
+        setTotalPages(meta.totalPages);
+        setTotalElements(meta.totalElements);
       } catch (err) {
         console.error('Failed to fetch transactions', err);
       } finally {
@@ -259,7 +268,7 @@ export default function Transactions({ userData }: { userData?: any }) {
     };
 
     fetchData();
-  }, [userData, sortField, sortDirection, statusFilter, fromDate, toDate, page]);
+  }, [userData, sortField, sortDirection, statusFilter, fromDate, toDate, page, size, refreshKey]);
 
   const filtered = transactions
     .filter(t => {
@@ -283,7 +292,10 @@ export default function Transactions({ userData }: { userData?: any }) {
 
   if (selected !== null) {
     const tx = transactions.find(t => t.id === selected);
-    if (tx) return <TransactionDetail tx={tx} onBack={() => setSelected(null)} />;
+    if (tx) return <TransactionDetail tx={tx} onBack={() => setSelected(null)} onOrderCancelled={() => {
+      setSelected(null);
+      setRefreshKey(k => k + 1);
+    }} />;
   }
 
   return (
@@ -405,16 +417,56 @@ export default function Transactions({ userData }: { userData?: any }) {
             </table>
           )}
         </div>
+        <Pagination
+          page={page}
+          size={size}
+          totalPages={totalPages}
+          totalElements={totalElements}
+          onPageChange={setPage}
+          onSizeChange={nextSize => { setSize(nextSize); setPage(0); }}
+        />
       </div>
     </motion.div>
   );
 }
 
-function TransactionDetail({ tx, onBack }: { tx: any; onBack: () => void }) {
+function TransactionDetail({ tx, onBack, onOrderCancelled }: { tx: any; onBack: () => void; onOrderCancelled?: () => void }) {
   const s = statusConfig[tx.status as StatusKey] ?? statusConfig.Draft;
+  const [confirmCancel, setConfirmCancel] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
+  const [cancelError, setCancelError] = useState('');
+  const isSipOrder = String(tx.type || '').toUpperCase() === 'SIP';
+
+  const cancelSip = async () => {
+    setCancelling(true);
+    setCancelError('');
+    try {
+      const response = await apiFetch(`/orders/${tx.id}`, { method: 'DELETE' });
+      if (!response.ok) {
+        const errorBody = await response.json().catch(() => null);
+        throw new Error(errorBody?.message || `Cancel SIP failed (${response.status})`);
+      }
+      onOrderCancelled?.();
+    } catch (err: any) {
+      setCancelError(err?.message || 'Cancel SIP failed. Please try again.');
+    } finally {
+      setCancelling(false);
+      setConfirmCancel(false);
+    }
+  };
 
   return (
     <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} className="p-8 max-w-5xl">
+      {confirmCancel && (
+        <ConfirmModal
+          title="Cancel SIP?"
+          message="This will cancel the SIP order and notify the backend to cancel it with Cybrilla where an external order exists."
+          confirmLabel={cancelling ? 'Cancelling...' : 'Cancel SIP'}
+          disabled={cancelling}
+          onCancel={() => setConfirmCancel(false)}
+          onConfirm={cancelSip}
+        />
+      )}
       <button onClick={onBack} className="flex items-center gap-2 text-sm font-medium text-slate-500 hover:text-slate-800 mb-6 transition-colors">
         <ChevronLeft className="w-4 h-4" /> Back to Transactions
       </button>
@@ -429,12 +481,23 @@ function TransactionDetail({ tx, onBack }: { tx: any; onBack: () => void }) {
             <span className="text-slate-400 text-xs font-mono">TXN-{tx.id.substring(0, 6)}</span>
           </div>
         </div>
+        <div className="flex gap-2">
+        {isSipOrder && (
+          <button
+            onClick={() => setConfirmCancel(true)}
+            className="flex items-center gap-2 px-4 py-2 text-sm font-medium bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors"
+          >
+            <XCircle className="w-4 h-4" /> Cancel SIP
+          </button>
+        )}
         {tx.status === 'Retry Available' && (
           <button className="flex items-center gap-2 px-4 py-2 text-sm font-medium bg-[#0B1B3E] text-white rounded-lg hover:bg-[#1A3066] transition-colors">
             <RefreshCw className="w-4 h-4" /> Retry Order
           </button>
         )}
+        </div>
       </div>
+      {cancelError && <div className="mb-5 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-700">{cancelError}</div>}
 
       <div className="grid grid-cols-3 gap-6">
         <div className="col-span-2 space-y-6">
@@ -493,5 +556,46 @@ function TransactionDetail({ tx, onBack }: { tx: any; onBack: () => void }) {
         </div>
       </div>
     </motion.div>
+  );
+}
+
+function ConfirmModal({
+  title,
+  message,
+  confirmLabel,
+  disabled,
+  onCancel,
+  onConfirm,
+}: {
+  title: string;
+  message: string;
+  confirmLabel: string;
+  disabled?: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">
+      <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl">
+        <h2 className="text-lg font-semibold text-slate-800">{title}</h2>
+        <p className="mt-2 text-sm text-slate-500">{message}</p>
+        <div className="mt-6 flex justify-end gap-3">
+          <button
+            onClick={onCancel}
+            disabled={disabled}
+            className="rounded-lg border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+          >
+            Keep SIP
+          </button>
+          <button
+            onClick={onConfirm}
+            disabled={disabled}
+            className="rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-700 disabled:opacity-50"
+          >
+            {confirmLabel}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }

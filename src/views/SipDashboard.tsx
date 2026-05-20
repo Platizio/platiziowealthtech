@@ -97,6 +97,8 @@ export default function SipDashboard({ onBack, userData }: { onBack: () => void;
     { month: 'Jun', value: 0, count: 0 },
   ]);
   const [loading, setLoading] = useState(true);
+  const [cancellingId, setCancellingId] = useState('');
+  const [error, setError] = useState('');
 
   React.useEffect(() => {
     if (!userData?.id) return;
@@ -157,6 +159,26 @@ export default function SipDashboard({ onBack, userData }: { onBack: () => void;
         setLoading(false);
       });
   }, [userData]);
+
+  const cancelSip = async (sip: Sip) => {
+    if (!window.confirm(`Cancel SIP for ${sip.investor}?`)) return;
+    setCancellingId(sip.id);
+    setError('');
+    try {
+      const response = await apiFetch(`/orders/${sip.id}`, { method: 'DELETE' });
+      if (!response.ok) {
+        const errorBody = await response.json().catch(() => null);
+        throw new Error(errorBody?.message || `Cancel SIP failed (${response.status})`);
+      }
+
+      if (userData?.id) sessionStorage.removeItem(`sip_dash_${userData.id}`);
+      setSips(prev => prev.filter(item => item.id !== sip.id));
+    } catch (err: any) {
+      setError(err?.message || 'Cancel SIP failed. Please try again.');
+    } finally {
+      setCancellingId('');
+    }
+  };
 
   const visible = sips.filter(s => {
     const matchStatus = statusFilter === 'All' || s.status === statusFilter;
@@ -267,6 +289,7 @@ export default function SipDashboard({ onBack, userData }: { onBack: () => void;
 
       {/* ── SIP list ────────────────────────────────────────────────────── */}
       <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden">
+        {error && <div className="mx-5 mt-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-700">{error}</div>}
         <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
           <h2 className="font-semibold text-slate-800">
             {catFilter === 'ALL' ? 'All SIPs' : `${catFilter} SIPs`}
@@ -300,6 +323,7 @@ export default function SipDashboard({ onBack, userData }: { onBack: () => void;
                 { h: 'Mandate',  align: 'text-left'  },
                 { h: 'Next Due', align: 'text-left'  },
                 { h: 'Status',   align: 'text-left'  },
+                { h: 'Actions',  align: 'text-right' },
               ].map(col => (
                 <th key={col.h} className={`py-3 px-5 text-xs font-bold text-slate-500 uppercase tracking-wider ${col.align}`}>
                   {col.h}
@@ -331,6 +355,15 @@ export default function SipDashboard({ onBack, userData }: { onBack: () => void;
                     <span className={`inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full ${cfg.cls}`}>
                       {cfg.icon} {sip.status}
                     </span>
+                  </td>
+                  <td className="py-3.5 px-5 text-right">
+                    <button
+                      onClick={() => cancelSip(sip)}
+                      disabled={cancellingId === sip.id || sip.status !== 'Active'}
+                      className="rounded-lg border border-red-200 px-3 py-1.5 text-xs font-semibold text-red-600 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      {cancellingId === sip.id ? 'Cancelling...' : 'Cancel SIP'}
+                    </button>
                   </td>
                 </tr>
               );

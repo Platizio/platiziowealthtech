@@ -1,14 +1,21 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
+import { useForm } from 'react-hook-form';
+import { zodResolver } from '@hookform/resolvers/zod';
+import { z } from 'zod';
 import {
   ArrowLeft, ArrowRight, CheckCircle2, Building2,
-  CreditCard, TrendingUp, ShieldCheck, Clock, Wallet,
+  CreditCard, TrendingUp, ShieldCheck, Clock, Wallet, AlertCircle,
 } from 'lucide-react';
+import { apiFetch } from '../config/api';
+import { getPageContent } from '../utils/pagination';
+import { formatDate } from '../utils/formatDate';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 interface Investor {
-  id: number;
-  name: string;
+  id: string;
+  name?: string;
+  fullName?: string;
   type: string;
   kyc: string;
   aum: string;
@@ -20,34 +27,71 @@ interface Props {
   onBack: () => void;
 }
 
+type ProductColor = 'blue' | 'violet' | 'indigo' | 'rose' | 'emerald';
+type Product = {
+  id: string;
+  name: string;
+  category: string;
+  risk: string;
+  nav: string;
+  returns: Record<string, string>;
+  minSip: number;
+  minLumpsum: number;
+  color: ProductColor;
+};
+
+const sipSchema = z.object({
+  amount: z.number().min(500, 'Minimum SIP is ₹500'),
+  frequency: z.enum(['MONTHLY', 'QUARTERLY']),
+  startDate: z.string().refine(d => new Date(d) > new Date(), 'Start date must be in the future'),
+  instalments: z.number().int().positive().optional(),
+});
+
+type SipFormValues = z.infer<typeof sipSchema>;
+
+const frequencyLabel = (value: SipFormValues['frequency']) =>
+  value === 'MONTHLY' ? 'Monthly' : 'Quarterly';
+
+const parseAmountInput = (value: unknown) => {
+  if (typeof value === 'number') return value;
+  const parsed = Number(String(value ?? '').replace(/,/g, ''));
+  return Number.isFinite(parsed) ? parsed : 0;
+};
+
+const parseOptionalPositiveInt = (value: unknown) => {
+  if (value === '' || value === null || value === undefined) return undefined;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+};
+
 // ── Sample funds ─────────────────────────────────────────────────────────────
-const PRODUCTS = [
+const PRODUCTS: Product[] = [
   {
-    id: 1, name: 'HDFC Large & Mid Cap Fund',
+    id: '11111111-1111-4111-8111-111111111111', name: 'HDFC Large & Mid Cap Fund',
     category: 'Equity – Large & Mid Cap', risk: 'Moderate',
     nav: '₹198.45', returns: { '1Y': '+18.2%', '3Y': '+14.1%', '5Y': '+12.8%' },
     minSip: 1000, minLumpsum: 5000, color: 'blue',
   },
   {
-    id: 2, name: 'Parag Parikh Flexi Cap Fund',
+    id: '22222222-2222-4222-8222-222222222222', name: 'Parag Parikh Flexi Cap Fund',
     category: 'Equity – Flexi Cap', risk: 'Moderate',
     nav: '₹89.12', returns: { '1Y': '+22.4%', '3Y': '+17.5%', '5Y': '+16.1%' },
     minSip: 1000, minLumpsum: 1000, color: 'violet',
   },
   {
-    id: 3, name: 'ICICI Prudential Bluechip Fund',
+    id: '33333333-3333-4333-8333-333333333333', name: 'ICICI Prudential Bluechip Fund',
     category: 'Equity – Large Cap', risk: 'Moderately Low',
     nav: '₹112.78', returns: { '1Y': '+15.3%', '3Y': '+12.8%', '5Y': '+11.4%' },
     minSip: 1000, minLumpsum: 5000, color: 'indigo',
   },
   {
-    id: 4, name: 'SBI Small Cap Fund',
+    id: '44444444-4444-4444-8444-444444444444', name: 'SBI Small Cap Fund',
     category: 'Equity – Small Cap', risk: 'High',
     nav: '₹148.30', returns: { '1Y': '+28.7%', '3Y': '+21.2%', '5Y': '+20.5%' },
     minSip: 500, minLumpsum: 5000, color: 'rose',
   },
   {
-    id: 5, name: 'HDFC Short Term Debt Fund',
+    id: '55555555-5555-4555-8555-555555555555', name: 'HDFC Short Term Debt Fund',
     category: 'Debt – Short Term', risk: 'Low',
     nav: '₹28.14', returns: { '1Y': '+7.4%', '3Y': '+6.9%', '5Y': '+7.1%' },
     minSip: 1000, minLumpsum: 5000, color: 'emerald',
@@ -74,7 +118,7 @@ const riskColor: Record<string, string> = {
   'High':             'text-red-700 bg-red-50',
 };
 
-const accentColor: Record<string, string> = {
+const accentColor: Record<ProductColor, string> = {
   blue: 'border-blue-500 bg-blue-50',
   violet: 'border-violet-500 bg-violet-50',
   indigo: 'border-indigo-500 bg-indigo-50',
@@ -114,21 +158,118 @@ function StepBar({ current }: { current: number }) {
 // ── Main component ────────────────────────────────────────────────────────────
 export default function InvestorTransaction({ investor, onComplete, onBack }: Props) {
   const [step,     setStep]     = useState(1);
-  const [product,  setProduct]  = useState<typeof PRODUCTS[0] | null>(null);
+  const [products, setProducts] = useState(PRODUCTS);
+  const [product,  setProduct]  = useState<Product | null>(null);
   const [txType,   setTxType]   = useState<'sip' | 'lumpsum'>('sip');
-  const [amount,   setAmount]   = useState('');
   const [bank,     setBank]     = useState<typeof BANKS[0] | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [done,     setDone]     = useState(false);
+  const [submitError, setSubmitError] = useState('');
   const [refNo]                 = useState(`APX${Date.now().toString().slice(-8)}`);
+  const {
+    register,
+    watch,
+    trigger,
+    formState: { errors },
+    resetField,
+  } = useForm<SipFormValues>({
+    resolver: zodResolver(sipSchema),
+    mode: 'onBlur',
+    reValidateMode: 'onBlur',
+    defaultValues: {
+      frequency: 'MONTHLY',
+      startDate: '',
+    },
+  });
 
-  const amountNum = parseFloat(amount.replace(/,/g, '')) || 0;
-  const minAmount = product ? (txType === 'sip' ? product.minSip : product.minLumpsum) : 0;
+  const amountNum = parseAmountInput(watch('amount'));
+  const frequency = watch('frequency') || 'MONTHLY';
+  const startDate = watch('startDate') || '';
+  const instalments = watch('instalments');
+  const minAmount = product ? (txType === 'sip' ? 500 : product.minLumpsum) : 0;
   const amountValid = amountNum >= minAmount;
+  const investorName = investor.fullName || investor.name || 'Investor';
+  const isSip = txType === 'sip';
+  const sipFieldsValid = !isSip || sipSchema.safeParse({
+    amount: amountNum,
+    frequency,
+    startDate,
+    instalments,
+  }).success;
 
-  const handleConfirm = () => {
+  React.useEffect(() => {
+    let cancelled = false;
+
+    apiFetch('/products/schemes?page=0&size=50')
+      .then(res => res.ok ? res.json() : null)
+      .then(payload => {
+        if (cancelled || !payload) return;
+        const schemes = getPageContent(payload);
+        if (schemes.length === 0) return;
+        const colors: ProductColor[] = ['blue', 'violet', 'indigo', 'rose', 'emerald'];
+        setProducts(schemes.map((scheme: any, index: number) => ({
+          id: scheme.id,
+          name: scheme.schemeName || scheme.name || 'Unknown Scheme',
+          category: scheme.category || scheme.productType || 'Mutual Fund',
+          risk: scheme.riskLevel || 'Moderate',
+          nav: scheme.nav ? `₹${scheme.nav}` : '₹0.00',
+          returns: { '1Y': '+0.0%', '3Y': '+0.0%', '5Y': '+0.0%' },
+          minSip: Number(scheme.minSip || 500),
+          minLumpsum: Number(scheme.minInvestment || 1000),
+          color: colors[index % colors.length],
+        })));
+      })
+      .catch(err => console.error('Failed to load product schemes for transaction form', err));
+
+    return () => { cancelled = true; };
+  }, []);
+
+  const handleConfirm = async () => {
+    const validSipForm = !isSip || await trigger();
+    if (!product || !bank || !amountValid || !validSipForm) return;
+
     setSubmitting(true);
-    setTimeout(() => { setSubmitting(false); setDone(true); }, 1800);
+    setSubmitError('');
+    try {
+      const payload = {
+        investorId: investor.id,
+        productSchemeId: product.id,
+        type: isSip ? 'SIP' : 'LUMPSUM',
+        transactionType: isSip ? 'SIP' : 'LUMPSUM_PURCHASE',
+        amount: amountNum,
+        paymentMode: isSip ? 'MANDATE' : 'BANK_TRANSFER',
+        mandateMode: isSip ? 'AUTO_DEBIT' : bank.name,
+        sipFrequency: isSip ? frequency : undefined,
+        sipStartDate: isSip ? startDate : undefined,
+        sipInstalments: isSip && instalments ? instalments : undefined,
+      };
+
+      const response = await apiFetch('/orders', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+
+      const result = await response.json().catch(() => null);
+      if (!response.ok) {
+        throw new Error(result?.message || `Order creation failed (${response.status})`);
+      }
+
+      setDone(true);
+    } catch (err: any) {
+      setSubmitError(err?.message || 'Order creation failed. Please try again.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const goToBankStep = async () => {
+    if (isSip) {
+      const isValid = await trigger(['amount', 'frequency', 'startDate', 'instalments']);
+      if (!isValid) return;
+    }
+    if (!amountValid) return;
+    setStep(3);
   };
 
   // ── Success screen ─────────────────────────────────────────────────────────
@@ -150,10 +291,12 @@ export default function InvestorTransaction({ investor, onComplete, onBack }: Pr
 
           <div className="bg-slate-50 rounded-2xl p-5 text-left space-y-3 mb-8">
             <Row label="Reference No."  value={refNo}                              mono />
-            <Row label="Investor"       value={investor.name}                      />
+            <Row label="Investor"       value={investorName}                      />
             <Row label="Fund"           value={product?.name || ''}               />
-            <Row label="Type"           value={txType === 'sip' ? 'SIP' : 'Lumpsum'} />
-            <Row label="Amount"         value={`₹${Number(amount.replace(/,/g,'')).toLocaleString('en-IN')}`} />
+            <Row label="Type"           value={txType === 'sip' ? `SIP · ${frequencyLabel(frequency)}` : 'Lumpsum'} />
+            <Row label="Amount"         value={`₹${amountNum.toLocaleString('en-IN')}`} />
+            {txType === 'sip' && <Row label="Start Date" value={formatDate(startDate)} />}
+            {txType === 'sip' && instalments && <Row label="Instalments" value={String(instalments)} />}
             <Row label="Bank"           value={`${bank?.name} ${bank?.account}`}  />
             <Row label="Status"         value="Processing"
               valueClass="inline-flex items-center gap-1.5 text-amber-700 font-semibold">
@@ -198,9 +341,9 @@ export default function InvestorTransaction({ investor, onComplete, onBack }: Pr
       </button>
 
       <div className="mb-8">
-        <h1 className="text-2xl font-semibold text-slate-800">New Investment</h1>
+        <h1 className="text-2xl font-semibold text-slate-800">{txType === 'sip' ? 'Start SIP' : 'New Investment'}</h1>
         <p className="text-slate-500 text-sm mt-1">
-          Placing transaction for <span className="font-semibold text-slate-700">{investor.name}</span>
+          Placing transaction for <span className="font-semibold text-slate-700">{investorName}</span>
         </p>
       </div>
 
@@ -213,7 +356,7 @@ export default function InvestorTransaction({ investor, onComplete, onBack }: Pr
           <motion.div key="s1" initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }}>
             <h2 className="font-semibold text-slate-800 mb-4">Select a Fund</h2>
             <div className="space-y-3">
-              {PRODUCTS.map(p => (
+              {products.map(p => (
                 <button
                   key={p.id}
                   onClick={() => setProduct(p)}
@@ -292,12 +435,12 @@ export default function InvestorTransaction({ investor, onComplete, onBack }: Pr
                 {(['sip', 'lumpsum'] as const).map(t => (
                   <button
                     key={t}
-                    onClick={() => { setTxType(t); setAmount(''); }}
+                    onClick={() => { setTxType(t); resetField('amount'); }}
                     className={`px-5 py-2 text-sm font-semibold rounded-lg transition-all ${
                       txType === t ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'
                     }`}
                   >
-                    {t === 'sip' ? 'SIP (Monthly)' : 'Lumpsum'}
+                    {t === 'sip' ? 'Start SIP' : 'Lumpsum'}
                   </button>
                 ))}
               </div>
@@ -313,17 +456,24 @@ export default function InvestorTransaction({ investor, onComplete, onBack }: Pr
                 <span className="absolute left-4 top-3.5 text-sm font-semibold text-slate-400">₹</span>
                 <input
                   type="text"
-                  value={amount}
-                  onChange={e => setAmount(e.target.value.replace(/[^0-9,]/g, ''))}
-                  placeholder={`Min. ₹${(txType === 'sip' ? product.minSip : product.minLumpsum).toLocaleString('en-IN')}`}
+                  {...register('amount', {
+                    setValueAs: parseAmountInput,
+                    onChange: e => {
+                      e.target.value = e.target.value.replace(/[^0-9,]/g, '');
+                    },
+                  })}
+                  placeholder={`Min. ₹${minAmount.toLocaleString('en-IN')}`}
                   className={`w-full pl-8 pr-4 py-3 bg-slate-50 border rounded-xl text-sm font-mono font-semibold focus:ring-2 focus:ring-blue-100 focus:border-blue-500 outline-none transition-all ${
-                    amount && !amountValid ? 'border-red-300 bg-red-50' : 'border-slate-200'
+                    (isSip && errors.amount) || (!isSip && amountNum > 0 && !amountValid) ? 'border-red-300 bg-red-50' : 'border-slate-200'
                   }`}
                 />
               </div>
-              {amount && !amountValid && (
+              {isSip && errors.amount && (
+                <p className="text-xs text-red-500 mt-1">{errors.amount.message}</p>
+              )}
+              {!isSip && amountNum > 0 && !amountValid && (
                 <p className="text-xs text-red-500 mt-1">
-                  Minimum {txType === 'sip' ? 'SIP' : 'lumpsum'} amount is ₹{(txType === 'sip' ? product.minSip : product.minLumpsum).toLocaleString('en-IN')}
+                  Minimum lumpsum amount is ₹{minAmount.toLocaleString('en-IN')}
                 </p>
               )}
               <p className="text-[11px] text-slate-400 mt-1">
@@ -334,17 +484,39 @@ export default function InvestorTransaction({ investor, onComplete, onBack }: Pr
             </div>
 
             {txType === 'sip' && (
-              <div className="mb-6">
-                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5">SIP Date</label>
-                <div className="flex gap-2 flex-wrap">
-                  {[1, 5, 7, 10, 15, 20, 25, 28].map(d => (
-                    <button key={d}
-                      className="w-10 h-10 rounded-xl border-2 border-slate-200 bg-white text-sm font-semibold text-slate-600 hover:border-blue-400 hover:text-blue-600 transition-all">
-                      {d}
-                    </button>
-                  ))}
+              <div className="mb-6 grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5">Frequency</label>
+                  <select
+                    {...register('frequency')}
+                    className={`w-full px-3.5 py-3 text-sm bg-slate-50 border rounded-xl outline-none focus:ring-2 focus:ring-blue-100 focus:border-blue-500 ${errors.frequency ? 'border-red-300 bg-red-50' : 'border-slate-200'}`}
+                  >
+                    <option value="MONTHLY">Monthly</option>
+                    <option value="QUARTERLY">Quarterly</option>
+                  </select>
+                  {errors.frequency && <p className="text-xs text-red-500 mt-1">{errors.frequency.message}</p>}
                 </div>
-                <p className="text-[11px] text-slate-400 mt-1">Select the day of each month for your SIP debit.</p>
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5">Start Date</label>
+                  <input
+                    type="date"
+                    min={new Date(Date.now() + 86400000).toISOString().slice(0, 10)}
+                    {...register('startDate')}
+                    className={`w-full px-3.5 py-3 text-sm bg-slate-50 border rounded-xl outline-none focus:ring-2 focus:ring-blue-100 focus:border-blue-500 ${errors.startDate ? 'border-red-300 bg-red-50' : 'border-slate-200'}`}
+                  />
+                  {errors.startDate && <p className="text-xs text-red-500 mt-1">{errors.startDate.message}</p>}
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5">Instalments</label>
+                  <input
+                    type="number"
+                    min={1}
+                    {...register('instalments', { setValueAs: parseOptionalPositiveInt })}
+                    placeholder="Optional"
+                    className={`w-full px-3.5 py-3 text-sm bg-slate-50 border rounded-xl outline-none focus:ring-2 focus:ring-blue-100 focus:border-blue-500 ${errors.instalments ? 'border-red-300 bg-red-50' : 'border-slate-200'}`}
+                  />
+                  {errors.instalments && <p className="text-xs text-red-500 mt-1">{errors.instalments.message}</p>}
+                </div>
               </div>
             )}
 
@@ -354,8 +526,8 @@ export default function InvestorTransaction({ investor, onComplete, onBack }: Pr
                 <ArrowLeft className="w-4 h-4" /> Back
               </button>
               <button
-                onClick={() => setStep(3)}
-                disabled={!amountValid}
+                onClick={goToBankStep}
+                disabled={!amountValid || !sipFieldsValid}
                 className="flex items-center gap-2 px-6 py-3 bg-[#0B1B3E] text-white font-semibold text-sm rounded-xl hover:bg-[#1A3066] transition-colors disabled:opacity-50 disabled:cursor-not-allowed shadow-lg"
               >
                 Next <ArrowRight className="w-4 h-4" />
@@ -429,13 +601,15 @@ export default function InvestorTransaction({ investor, onComplete, onBack }: Pr
 
             <div className="bg-white rounded-2xl border border-slate-200 p-6 mb-6 space-y-4">
               <p className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-2">Order Summary</p>
-              <Row label="Investor"    value={investor.name} />
+              <Row label="Investor"    value={investorName} />
               <Row label="Fund"        value={product.name}  />
               <Row label="Category"    value={product.category} />
-              <Row label="Type"        value={txType === 'sip' ? 'SIP – Monthly' : 'Lumpsum (One-time)'} />
+              <Row label="Type"        value={txType === 'sip' ? `SIP – ${frequencyLabel(frequency)}` : 'Lumpsum (One-time)'} />
               <Row label="Amount"
-                value={`₹${Number(amount.replace(/,/g,'')).toLocaleString('en-IN')}${txType === 'sip' ? ' / month' : ''}`}
+                value={`₹${amountNum.toLocaleString('en-IN')}${txType === 'sip' ? ' / month' : ''}`}
                 valueClass="font-bold text-blue-700" />
+              {txType === 'sip' && <Row label="Start Date" value={formatDate(startDate)} />}
+              {txType === 'sip' && instalments && <Row label="Instalments" value={String(instalments)} />}
               <Row label="Bank"
                 value={`${bank.name} · ${bank.account}`} />
               <Row label="IFSC"        value={bank.ifsc} />
@@ -445,9 +619,15 @@ export default function InvestorTransaction({ investor, onComplete, onBack }: Pr
               <ShieldCheck className="w-4 h-4 text-[#0B1B3E] flex-shrink-0 mt-0.5" />
               <p className="text-xs text-slate-600 leading-relaxed">
                 By confirming, you authorise Platizio to place this {txType === 'sip' ? 'SIP mandate' : 'investment order'} on behalf of{' '}
-                <span className="font-semibold">{investor.name}</span> in accordance with SEBI regulations and the investor's signed consent.
+                <span className="font-semibold">{investorName}</span> in accordance with SEBI regulations and the investor's signed consent.
               </p>
             </div>
+            {submitError && (
+              <div className="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-700 flex gap-2">
+                <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+                {submitError}
+              </div>
+            )}
 
             <div className="flex items-center justify-between">
               <button onClick={() => setStep(3)}

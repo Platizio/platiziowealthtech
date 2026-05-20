@@ -1,3 +1,6 @@
+import axios from 'axios';
+import { parseServerValidation } from '../utils/serverValidation';
+
 const configuredBaseUrl = import.meta.env.VITE_API_BASE_URL || '/api/v1';
 
 export const API_BASE_URL = configuredBaseUrl.replace(/\/$/, '');
@@ -31,6 +34,33 @@ const clearLocalAuthState = () => {
 };
 
 let sessionRedirectInProgress = false;
+let refreshInProgress: Promise<boolean> | null = null;
+
+const refreshSession = async () => {
+  if (!refreshInProgress) {
+    refreshInProgress = fetch(apiUrl('/auth/refresh'), {
+      method: 'POST',
+      credentials: 'include',
+    })
+      .then(response => response.ok)
+      .catch(() => false)
+      .finally(() => {
+        refreshInProgress = null;
+      });
+  }
+
+  return refreshInProgress;
+};
+
+axios.interceptors.response.use(
+  response => response,
+  error => {
+    if (error?.response?.status === 400) {
+      error.serverValidation = parseServerValidation(error.response.data);
+    }
+    return Promise.reject(error);
+  },
+);
 
 export const apiFetch = async (pathOrUrl: string, init: ApiFetchInit = {}) => {
   const { skipAuthRedirect, ...fetchInit } = init;
@@ -41,19 +71,23 @@ export const apiFetch = async (pathOrUrl: string, init: ApiFetchInit = {}) => {
     credentials: fetchInit.credentials ?? 'include',
   });
 
-  if (
-    response.status === 401 &&
-    !skipAuthRedirect &&
-    !isAuthRedirectExcluded(pathOrUrl) &&
-    typeof window !== 'undefined' &&
-    !sessionRedirectInProgress
-  ) {
-    sessionRedirectInProgress = true;
-    clearLocalAuthState();
-    window.dispatchEvent(new CustomEvent(SESSION_EXPIRED_EVENT));
+  if (response.status === 401 && !skipAuthRedirect && !isAuthRedirectExcluded(pathOrUrl) && typeof window !== 'undefined') {
+    const refreshed = await refreshSession();
+    if (refreshed) {
+      return fetch(url, {
+        ...fetchInit,
+        credentials: fetchInit.credentials ?? 'include',
+      });
+    }
 
-    if (window.location.pathname !== '/login') {
-      window.location.replace('/login?reason=session_expired');
+    if (!sessionRedirectInProgress) {
+      sessionRedirectInProgress = true;
+      clearLocalAuthState();
+      window.dispatchEvent(new CustomEvent(SESSION_EXPIRED_EVENT));
+
+      if (window.location.pathname !== '/login') {
+        window.location.replace('/login?reason=session_expired');
+      }
     }
   }
 

@@ -3,6 +3,9 @@ import { motion, AnimatePresence } from 'motion/react';
 import { Search, Filter, Trash2, X, ChevronDown, Lock, Rocket, Eye, EyeOff, RefreshCw, AlertCircle } from 'lucide-react';
 import { Product } from '../data/products';
 import { apiFetch } from '../config/api';
+import Pagination from '../components/Pagination';
+import { getPageContent, getPageMeta } from '../utils/pagination';
+import { useDebounce } from '../hooks/useDebounce';
 
 // ─── Display helpers ──────────────────────────────────────────────────────────
 
@@ -119,12 +122,17 @@ export default function ProductMgmt({
   userData?: any;
 }) {
   const [search,         setSearch]         = useState('');
+  const debouncedSearch                     = useDebounce(search, 300);
   const [assetFilter,    setAssetFilter]    = useState('All');
   const [categoryFilter, setCategoryFilter] = useState('All');
   const [showFilters,    setShowFilters]    = useState(false);
   const [showAddModal,   setShowAddModal]   = useState(false);
   const [loadingProducts, setLoadingProducts] = useState(false);
   const [syncError, setSyncError] = useState('');
+  const [page, setPage] = useState(0);
+  const [size, setSize] = useState(20);
+  const [totalPages, setTotalPages] = useState(1);
+  const [totalElements, setTotalElements] = useState(0);
   const refreshInFlightRef = useRef(false);
   const canRefreshLiveSchemes = normalizeRole(userData?.role) === 'ADMIN';
 
@@ -142,10 +150,15 @@ export default function ProductMgmt({
     setLoadingProducts(true);
     setSyncError('');
     try {
-      const response = await apiFetch('/products/schemes');
+      const params = new URLSearchParams({ page: String(page), size: String(size) });
+      if (debouncedSearch.trim()) params.set('query', debouncedSearch.trim());
+      const response = await apiFetch(`/products/schemes?${params.toString()}`);
       const result = response.ok ? await response.json() : [];
-      const schemes = Array.isArray(result) ? result : [];
+      const schemes = getPageContent(result);
+      const meta = getPageMeta(result, schemes.length);
       setProducts(schemes.map(mapBackendSchemeToProduct));
+      setTotalPages(meta.totalPages);
+      setTotalElements(meta.totalElements);
     } catch (error) {
       console.error('Failed to load cached product schemes:', error);
       setSyncError(error instanceof Error ? error.message : 'Unable to load cached products');
@@ -156,7 +169,7 @@ export default function ProductMgmt({
 
   useEffect(() => {
     loadCachedProducts();
-  }, []);
+  }, [page, size, debouncedSearch]);
 
   const fetchProductsFromCybrilla = async () => {
     if (!canRefreshLiveSchemes) {
@@ -274,7 +287,7 @@ export default function ProductMgmt({
         ].map(item => (
           <button
             key={item.filter}
-            onClick={() => setAssetFilter(assetFilter === item.filter ? 'All' : item.filter)}
+            onClick={() => { setAssetFilter(assetFilter === item.filter ? 'All' : item.filter); setPage(0); }}
             className={`bg-gradient-to-r ${item.color} text-white rounded-2xl p-5 text-left transition-all shadow-sm hover:shadow-md ${assetFilter === item.filter ? 'ring-2 ring-offset-2 ring-blue-400' : ''}`}
           >
             <div className="flex justify-between items-start">
@@ -297,7 +310,7 @@ export default function ProductMgmt({
           <div className="relative flex-1 min-w-[200px] max-w-sm">
             <Search className="w-4 h-4 absolute left-3 top-3 text-slate-400" />
             <input
-              type="text" value={search} onChange={e => setSearch(e.target.value)}
+              type="text" value={search} onChange={e => { setSearch(e.target.value); setPage(0); }}
               placeholder="Search by fund name or AMC…"
               className="w-full pl-9 pr-4 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:bg-white focus:ring-2 focus:ring-blue-100 focus:border-blue-500 transition-all outline-none"
             />
@@ -325,7 +338,7 @@ export default function ProductMgmt({
                   <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">Asset Class</p>
                   <div className="flex gap-2">
                     {ASSET_CLASSES.map(c => (
-                      <button key={c} onClick={() => setAssetFilter(c)}
+                      <button key={c} onClick={() => { setAssetFilter(c); setPage(0); }}
                         className={`px-3 py-1 text-xs font-semibold rounded-md border transition-colors ${assetFilter === c ? 'bg-[#0B1B3E] text-white border-[#0B1B3E]' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-100'}`}>
                         {c}
                       </button>
@@ -336,7 +349,7 @@ export default function ProductMgmt({
                   <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">Category</p>
                   <div className="flex gap-2 flex-wrap">
                     {CATEGORIES.map(c => (
-                      <button key={c} onClick={() => setCategoryFilter(c)}
+                      <button key={c} onClick={() => { setCategoryFilter(c); setPage(0); }}
                         className={`px-3 py-1 text-xs font-semibold rounded-md border transition-colors ${categoryFilter === c ? 'bg-[#0B1B3E] text-white border-[#0B1B3E]' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-100'}`}>
                         {c}
                       </button>
@@ -345,7 +358,7 @@ export default function ProductMgmt({
                 </div>
                 {(assetFilter !== 'All' || categoryFilter !== 'All') && (
                   <button
-                    onClick={() => { setAssetFilter('All'); setCategoryFilter('All'); }}
+                    onClick={() => { setAssetFilter('All'); setCategoryFilter('All'); setPage(0); }}
                     className="self-end flex items-center gap-1 text-xs text-red-500 hover:text-red-700 font-semibold"
                   >
                     <X className="w-3 h-3" /> Clear
@@ -432,6 +445,14 @@ export default function ProductMgmt({
             </tbody>
           </table>
         </div>
+        <Pagination
+          page={page}
+          size={size}
+          totalPages={totalPages}
+          totalElements={totalElements}
+          onPageChange={setPage}
+          onSizeChange={nextSize => { setSize(nextSize); setPage(0); }}
+        />
       </div>
 
       {/* Coming-soon section */}

@@ -3,6 +3,7 @@ import { motion } from 'motion/react';
 import { useForm } from 'react-hook-form';
 import { AlertTriangle, CheckCircle2, Edit2, Building, ShieldCheck, CreditCard, User, XCircle, X } from 'lucide-react';
 import { apiFetch } from '../config/api';
+import { buildValidationSummary, readServerValidation, setHookFormServerErrors } from '../utils/serverValidation';
 
 type ProfileFormValues = {
   name: string;
@@ -33,6 +34,7 @@ export default function Profile({ userData }: { userData?: any }) {
     register,
     handleSubmit,
     reset,
+    setError,
     formState: { errors, isDirty },
   } = useForm<ProfileFormValues>({
     values: profileDefaults,
@@ -111,8 +113,14 @@ export default function Profile({ userData }: { userData?: any }) {
       });
 
       if (!response.ok) {
-        const errorBody = await response.json().catch(() => null);
-        throw new Error(errorBody?.message || `Profile update failed (${response.status})`);
+        const validation = await readServerValidation(response);
+        if (response.status === 400) {
+          setHookFormServerErrors(setError, validation.fieldErrors, {
+            mobileNumber: 'phone',
+          });
+          throw new Error(buildValidationSummary(validation));
+        }
+        throw new Error(validation.payload?.message || `Profile update failed (${response.status})`);
       }
 
       const updated = await response.json().catch(() => changedFields);

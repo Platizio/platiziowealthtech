@@ -6,6 +6,7 @@ import {
   ShieldCheck,
 } from 'lucide-react';
 import { apiFetch } from '../config/api';
+import { buildValidationSummary, mapServerErrorsToState, readServerValidation } from '../utils/serverValidation';
 
 // ─── Password strength helpers ────────────────────────────────────────────────
 
@@ -424,8 +425,22 @@ export default function Onboarding({ onComplete, onBack }: { onComplete: () => v
         body:    JSON.stringify(payload),
       });
       if (!res.ok) {
-        const err = await res.json().catch(() => null);
-        throw new Error(err?.message || `Server error: ${res.status}`);
+        const validation = await readServerValidation(res);
+        if (res.status === 400) {
+          const mappedErrors = mapServerErrorsToState(validation.fieldErrors, {
+            fullName: 'firstName',
+            mobileNumber: 'mobile',
+            arnNumber: 'arn',
+            bankIfsc: 'ifscCode',
+            bankAccountNumber: 'accountNumber',
+            nismCertificateNumber: 'nismCertificateNumber',
+            nismExpiryDate: 'nismExpiryDate',
+            arnExpiryDate: 'arnExpiryDate',
+          });
+          setErrors(mappedErrors);
+          throw new Error(buildValidationSummary(validation));
+        }
+        throw new Error(validation.payload?.message || `Server error: ${res.status}`);
       }
       await apiFetch('/auth/logout', { method: 'POST' }).catch(() => undefined);
       onComplete();

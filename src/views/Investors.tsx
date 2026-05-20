@@ -10,15 +10,17 @@ import {
   AreaChart as RechartsArea, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
 } from 'recharts';
 import { apiFetch, apiUrl } from '../config/api';
+import Pagination from '../components/Pagination';
+import { getPageContent, getPageMeta } from '../utils/pagination';
+import { formatDate } from '../utils/formatDate';
+import { useDebounce } from '../hooks/useDebounce';
 
 // ─── KYC status config ─────────────────────────────────────────────────────────
-const kycConfig: Record<string, { label: string; color: string; icon: React.ReactNode }> = {
-  COMPLETED:       { label: 'KYC Verified',   color: 'text-green-600',  icon: <CheckCircle2 className="w-3.5 h-3.5" /> },
-  IN_PROGRESS:     { label: 'In Progress',    color: 'text-amber-600',  icon: <Clock        className="w-3.5 h-3.5" /> },
-  PENDING:         { label: 'Pending',        color: 'text-amber-600',  icon: <Clock        className="w-3.5 h-3.5" /> },
-  NOT_STARTED:     { label: 'Not Started',    color: 'text-slate-400',  icon: <XCircle      className="w-3.5 h-3.5" /> },
-  FAILED:          { label: 'KYC Failed',     color: 'text-red-600',    icon: <XCircle      className="w-3.5 h-3.5" /> },
-  RETRY_REQUIRED:  { label: 'Retry Required', color: 'text-orange-500', icon: <AlertCircle  className="w-3.5 h-3.5" /> },
+const KYC_BADGE_CONFIG: Record<string, { label: string; bg: string; text: string }> = {
+  VERIFIED: { label: 'KYC Verified', bg: 'bg-green-100', text: 'text-green-700' },
+  PENDING: { label: 'KYC Pending', bg: 'bg-amber-100', text: 'text-amber-700' },
+  REJECTED: { label: 'KYC Failed', bg: 'bg-red-100', text: 'text-red-700' },
+  NOT_STARTED: { label: 'Not Started', bg: 'bg-slate-100', text: 'text-slate-500' }
 };
 
 const statusConfig: Record<string, string> = {
@@ -187,9 +189,14 @@ export default function Investors({
   const [loading, setLoading]             = useState(true);
   const [error, setError]                 = useState('');
   const [search, setSearch]               = useState('');
+  const debouncedSearch                   = useDebounce(search, 300);
   const [kycFilter, setKycFilter]         = useState('All');
   const [statusFilter, setStatusFilter]   = useState('All');
   const [selectedInvestor, setSelectedInvestor] = useState<any | null>(null);
+  const [page, setPage]                   = useState(0);
+  const [size, setSize]                   = useState(20);
+  const [totalPages, setTotalPages]       = useState(1);
+  const [totalElements, setTotalElements] = useState(0);
   const hasLoadedRef = React.useRef(false);
   const baseInvestorsRef = React.useRef<any[]>([]);
   const distributorId = userData?.id;
@@ -201,7 +208,7 @@ export default function Investors({
       if (!hasLoadedRef.current) setLoading(true);
       setError('');
       try {
-        const query = search.trim();
+        const query = debouncedSearch.trim();
         const params = new URLSearchParams();
         let url = distributorId
           ? apiUrl(`/investors/by-distributor/${distributorId}`)
@@ -253,14 +260,13 @@ export default function Investors({
       }
     };
 
-    const timer = window.setTimeout(fetchInvestors, search.trim().length >= 2 ? 250 : 0);
+    fetchInvestors();
     return () => {
       cancelled = true;
-      window.clearTimeout(timer);
     };
-  }, [search, distributorId]);
+  }, [debouncedSearch, distributorId]);
 
-  const KYC_OPTIONS    = ['All', 'COMPLETED', 'PENDING', 'IN_PROGRESS', 'NOT_STARTED', 'FAILED', 'RETRY_REQUIRED'];
+  const KYC_OPTIONS    = ['All', 'VERIFIED', 'PENDING', 'REJECTED', 'NOT_STARTED'];
   const STATUS_OPTIONS = ['All', 'ACTIVE', 'READY_FOR_TRANSACTIONS', 'ONBOARDING', 'DRAFT', 'BLOCKED', 'ARCHIVED'];
 
   const filtered = investors.filter(inv => {
@@ -315,7 +321,7 @@ export default function Investors({
               onChange={e => setKycFilter(e.target.value)}
               className="text-xs font-semibold bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 outline-none cursor-pointer"
             >
-              {KYC_OPTIONS.map(o => <option key={o} value={o}>{o === 'All' ? 'All KYC' : (kycConfig[o]?.label || o)}</option>)}
+              {KYC_OPTIONS.map(o => <option key={o} value={o}>{o === 'All' ? 'All KYC' : (KYC_BADGE_CONFIG[o]?.label || o)}</option>)}
             </select>
             <select
               value={statusFilter}
@@ -360,11 +366,11 @@ export default function Investors({
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {filtered.map(inv => {
-                  const kyc    = kycConfig[inv.kycStatus]    || kycConfig['NOT_STARTED'];
+                  const kyc    = KYC_BADGE_CONFIG[inv.kycStatus] || KYC_BADGE_CONFIG['NOT_STARTED'];
                   const stCls  = statusConfig[inv.investorStatus] || 'bg-slate-100 text-slate-500';
                   const riskCls = riskConfig[inv.riskProfile] || 'bg-slate-50 text-slate-500';
                   const initials = (inv.fullName || 'IN').split(' ').map((n: string) => n[0]).join('').substring(0, 2).toUpperCase();
-                  const isKycDone = inv.kycStatus === 'COMPLETED';
+                  const isKycDone = inv.kycStatus === 'VERIFIED';
 
                   return (
                     <tr key={inv.id} className="group hover:bg-slate-50 transition-colors">
@@ -386,8 +392,8 @@ export default function Investors({
                         </span>
                       </td>
                       <td className="px-6 py-4">
-                        <span className={`flex items-center gap-1.5 text-xs font-medium ${kyc.color}`}>
-                          {kyc.icon} {kyc.label}
+                        <span className={`inline-flex items-center px-2.5 py-1 text-xs font-semibold rounded-md ${kyc.bg} ${kyc.text}`}>
+                          {kyc.label}
                         </span>
                       </td>
                       <td className="px-6 py-4">
@@ -478,9 +484,9 @@ function InvestorDetail({
       });
   }, [currentInvestor.id]);
 
-  const kyc = kycConfig[currentInvestor.kycStatus] || kycConfig['NOT_STARTED'];
+  const kyc = KYC_BADGE_CONFIG[currentInvestor.kycStatus] || KYC_BADGE_CONFIG['NOT_STARTED'];
   const stCls = statusConfig[currentInvestor.investorStatus] || 'bg-slate-100 text-slate-500';
-  const isKycDone = currentInvestor.kycStatus === 'COMPLETED';
+  const isKycDone = currentInvestor.kycStatus === 'VERIFIED';
   const initials = (currentInvestor.fullName || 'IN').split(' ').map((n: string) => n[0]).join('').substring(0, 2).toUpperCase();
 
   const tabs = [
@@ -506,8 +512,8 @@ function InvestorDetail({
               <span className={`px-2.5 py-1 text-xs font-semibold rounded-md ${stCls}`}>
                 {(currentInvestor.investorStatus || 'DRAFT').replace(/_/g, ' ')}
               </span>
-              <span className={`flex items-center gap-1.5 text-xs font-medium ${kyc.color}`}>
-                {kyc.icon} {kyc.label}
+              <span className={`inline-flex items-center px-2.5 py-1 text-xs font-semibold rounded-md ${kyc.bg} ${kyc.text}`}>
+                {kyc.label}
               </span>
               {currentInvestor.pan && (
                 <span className="text-slate-400 font-mono text-xs">PAN: {currentInvestor.pan}</span>
@@ -554,7 +560,7 @@ function InvestorDetail({
               {[
                 { label: 'Email',        value: currentInvestor.email },
                 { label: 'Mobile',       value: currentInvestor.mobileNumber },
-                { label: 'Date of Birth',value: currentInvestor.dateOfBirth || '—' },
+                { label: 'Date of Birth',value: formatDate(currentInvestor.dateOfBirth) },
                 { label: 'City',         value: currentInvestor.city || '—' },
                 { label: 'State',        value: currentInvestor.state || '—' },
                 { label: 'Risk Profile', value: (currentInvestor.riskProfile || 'UNASSESSED').replace(/_/g, ' ') },
@@ -609,7 +615,7 @@ function InvestorDetail({
         {activeTab === 'compliance' && (
           <motion.div key="compliance" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="space-y-4">
             {[
-              { label: 'KYC Status',          value: (kycConfig[currentInvestor.kycStatus]?.label || currentInvestor.kycStatus || 'Not Started') },
+              { label: 'KYC Status',          value: (KYC_BADGE_CONFIG[currentInvestor.kycStatus]?.label || currentInvestor.kycStatus || 'Not Started') },
               { label: 'Bank Verification',   value: (currentInvestor.bankVerificationStatus || 'NOT_CAPTURED').replace(/_/g, ' ') },
               { label: 'Investor Status',     value: (currentInvestor.investorStatus || 'DRAFT').replace(/_/g, ' ') },
               { label: 'Risk Profile',        value: (currentInvestor.riskProfile || 'UNASSESSED').replace(/_/g, ' ') },

@@ -52,23 +52,44 @@ export default function App() {
   const navigate = useNavigate();
 
   useEffect(() => {
-    apiFetch('/auth/me', { skipAuthRedirect: true })
-      .then(res => {
+    const restoreSession = async () => {
+      const isProtectedPath = window.location.pathname.startsWith('/admin') || window.location.pathname.startsWith('/distributor');
+      if (!isProtectedPath) {
+        setLoadingSession(false);
+        return;
+      }
+
+      try {
+        let res = await apiFetch('/auth/me', { skipAuthRedirect: true });
+        if (res.status === 401) {
+          const refreshRes = await apiFetch('/auth/refresh', { method: 'POST', skipAuthRedirect: true });
+          if (refreshRes.ok) {
+            res = await apiFetch('/auth/me', { skipAuthRedirect: true });
+          }
+        }
+
         if (res.status === 401 || res.status === 403) {
           if (window.location.pathname.startsWith('/admin') || window.location.pathname.startsWith('/distributor')) {
             navigate('/login?reason=session_expired', { replace: true });
           }
-          return null;
+          setUserSession(null);
+          return;
         }
-        if (res.ok) return res.json();
+        if (res.ok) {
+          const user = await res.json();
+          setUserSession(normalizeAuthUser(user));
+          return;
+        }
         throw new Error('Failed to restore session');
-      })
-      .then(user => setUserSession(normalizeAuthUser(user)))
-      .catch(err => {
+      } catch (err) {
         console.error('Session restore failed:', err);
         setUserSession(null);
-      })
-      .finally(() => setLoadingSession(false));
+      } finally {
+        setLoadingSession(false);
+      }
+    };
+
+    restoreSession();
   }, [navigate]);
 
   useEffect(() => {
@@ -98,13 +119,27 @@ export default function App() {
     navigate('/distributor/dashboard');
   };
 
-  const handleSignOut = () => {
-    console.log("App.tsx -> handleSignOut called. Clearing user session.");
-    apiFetch('/auth/logout', { method: 'POST' }).catch(err => {
-      console.error('Logout request failed:', err);
-    });
+  const clearAuthContext = () => {
     setUserSession(null);
-    navigate('/');
+    window.sessionStorage.removeItem('authToken');
+    window.sessionStorage.removeItem('userSession');
+    window.localStorage.removeItem('authToken');
+    window.localStorage.removeItem('userSession');
+  };
+
+  const handleSignOut = async () => {
+    console.log("App.tsx -> handleSignOut called. Invalidating server session.");
+    try {
+      const response = await apiFetch('/auth/logout', { method: 'POST', skipAuthRedirect: true });
+      if (!response.ok) {
+        console.error('Logout request failed:', response.status);
+      }
+    } catch (err) {
+      console.error('Logout request failed:', err);
+    } finally {
+      clearAuthContext();
+      navigate('/login', { replace: true });
+    }
   };
 
   if (loadingSession) {
@@ -137,7 +172,7 @@ export default function App() {
           <Route path="/distributor/notifications" element={<Notifications userData={userData} />} />
           <Route path="/distributor/profile" element={<Profile userData={userData} />} />
           <Route path="/distributor/aum-breakdown"   element={<AumBreakdown onBack={() => navigate('/distributor/dashboard')} userData={userData} />} />
-          <Route path="/distributor/sip-dashboard"   element={<SipDashboard onBack={() => navigate('/distributor/dashboard')} />} />
+          <Route path="/distributor/sip-dashboard"   element={<SipDashboard onBack={() => navigate('/distributor/dashboard')} userData={userData} />} />
           <Route path="/distributor/action-center"   element={<ActionCenter onBack={() => navigate('/distributor/dashboard')} />} />
           <Route path="/distributor/portfolio"       element={<Portfolio userData={userData} />} />
           <Route path="/distributor/reports"         element={<Reports userData={userData} />} />

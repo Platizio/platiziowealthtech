@@ -6,6 +6,7 @@ import {
   ShieldCheck, Upload, Building2, User,
 } from 'lucide-react';
 import { apiFetch, apiUrl } from '../config/api';
+import { buildValidationSummary, mapServerErrorsToState, parseServerValidation } from '../utils/serverValidation';
 
 // ── Step metadata ────────────────────────────────────────────────────────────
 const STEPS = [
@@ -55,8 +56,8 @@ interface Props {
 
 // ── Shared field wrapper ──────────────────────────────────────────────────────
 function Field({
-  label, required, children,
-}: { label: string; required?: boolean; children: React.ReactNode }) {
+  label, required, children, error,
+}: { label: string; required?: boolean; children: React.ReactNode; error?: string }) {
   return (
     <div>
       <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5">
@@ -64,6 +65,7 @@ function Field({
         {required && <span className="text-red-400 ml-0.5">*</span>}
       </label>
       {children}
+      {error && <p className="mt-1.5 text-xs font-medium text-red-600">{error}</p>}
     </div>
   );
 }
@@ -91,6 +93,7 @@ export default function InvestorOnboarding({ prospect, userData, onComplete, onB
   const [submitted, setSubmitted] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState('');
+  const [serverErrors, setServerErrors] = useState<Record<string, string>>({});
   const [refNum] = useState(() => 'APX' + Date.now().toString().slice(-8));
 
   // ── Step 1 — Basic Identity ─────────────────────────────────────────────────
@@ -294,6 +297,7 @@ export default function InvestorOnboarding({ prospect, userData, onComplete, onB
 
     setSubmitting(true);
     setSubmitError('');
+    setServerErrors({});
     console.groupCollapsed('[Cybrilla Workflow] Investor onboarding submit');
     console.log('frontend_route=', '/distributor/investor-onboarding');
     console.log('frontend_note=', 'Browser calls Platizio backend only. Backend then calls FP/Cybrilla using server-side bearer tokens.');
@@ -320,6 +324,15 @@ export default function InvestorOnboarding({ prospect, userData, onComplete, onB
       });
 
       if (!investorResponse.ok) {
+        if (investorResponse.status === 400) {
+          const validation = parseServerValidation(investorResult);
+          setServerErrors(mapServerErrorsToState(validation.fieldErrors, {
+            fullName: 'firstName',
+            mobileNumber: 'mobile',
+            dateOfBirth: 'dob',
+          }));
+          throw new Error(buildValidationSummary(validation));
+        }
         throw new Error(typeof investorResult === 'string' ? investorResult : investorResult?.message || 'Investor creation failed');
       }
 
@@ -363,6 +376,14 @@ export default function InvestorOnboarding({ prospect, userData, onComplete, onB
       });
 
       if (!bankResponse.ok) {
+        if (bankResponse.status === 400) {
+          const validation = parseServerValidation(bankResult);
+          setServerErrors(mapServerErrorsToState(validation.fieldErrors, {
+            accountNumber: 'accNumber',
+            ifscCode: 'ifsc',
+          }));
+          throw new Error(buildValidationSummary(validation));
+        }
         throw new Error(typeof bankResult === 'string' ? bankResult : bankResult?.message || 'Bank account creation failed');
       }
 
@@ -519,13 +540,13 @@ export default function InvestorOnboarding({ prospect, userData, onComplete, onB
               <h2 className="text-lg font-semibold text-slate-800 mb-1">Basic Identity</h2>
               <p className="text-sm text-slate-500 mb-6">Investor's core identification details</p>
               <div className="grid grid-cols-2 gap-5">
-                <Field label="First Name" required>
+                <Field label="First Name" required error={serverErrors.firstName}>
                   <input value={s1.firstName} onChange={e => setS1({ ...s1, firstName: e.target.value })} placeholder="Rahul" className={inp} />
                 </Field>
-                <Field label="Last Name" required>
+                <Field label="Last Name" required error={serverErrors.lastName}>
                   <input value={s1.lastName} onChange={e => setS1({ ...s1, lastName: e.target.value })} placeholder="Verma" className={inp} />
                 </Field>
-                <Field label="PAN Number" required>
+                <Field label="PAN Number" required error={serverErrors.pan}>
                   <input
                     value={s1.pan}
                     onChange={e => setS1({ ...s1, pan: e.target.value.toUpperCase() })}
@@ -534,13 +555,13 @@ export default function InvestorOnboarding({ prospect, userData, onComplete, onB
                     className={inp + ' font-mono tracking-widest'}
                   />
                 </Field>
-                <Field label="Date of Birth">
+                <Field label="Date of Birth" error={serverErrors.dob}>
                   <input type="date" value={s1.dob} onChange={e => setS1({ ...s1, dob: e.target.value })} className={inp} />
                 </Field>
-                <Field label="Mobile Number" required>
+                <Field label="Mobile Number" required error={serverErrors.mobile}>
                   <input value={s1.mobile} onChange={e => setS1({ ...s1, mobile: e.target.value.replace(/\D/g, '') })} placeholder="9876543210" maxLength={13} className={inp} />
                 </Field>
-                <Field label="Email Address" required>
+                <Field label="Email Address" required error={serverErrors.email}>
                   <input type="email" value={s1.email} onChange={e => setS1({ ...s1, email: e.target.value })} placeholder="investor@email.com" className={inp} />
                 </Field>
               </div>
@@ -776,7 +797,7 @@ export default function InvestorOnboarding({ prospect, userData, onComplete, onB
               <h2 className="text-lg font-semibold text-slate-800 mb-1">Bank Details</h2>
               <p className="text-sm text-slate-500 mb-6">Link the investor's bank account for transactions</p>
               <div className="grid grid-cols-2 gap-5">
-                <Field label="Account Number" required>
+                <Field label="Account Number" required error={serverErrors.accNumber}>
                   <input
                     value={s5.accNumber}
                     onChange={e => setS5({ ...s5, accNumber: e.target.value.replace(/\D/g, '') })}
@@ -791,7 +812,7 @@ export default function InvestorOnboarding({ prospect, userData, onComplete, onB
                   </select>
                 </Field>
                 <div className="col-span-2">
-                  <Field label="IFSC Code" required>
+                  <Field label="IFSC Code" required error={serverErrors.ifsc}>
                     <div className="flex gap-3 items-start flex-wrap">
                       <input
                         value={s5.ifsc}

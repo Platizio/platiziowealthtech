@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { motion } from 'motion/react';
 import { CheckCircle2, XCircle, AlertCircle, Clock, RefreshCw } from 'lucide-react';
 import { apiFetch } from '../config/api';
+import { formatDateTime } from '../utils/formatDate';
 
 type NotifType = 'success' | 'error' | 'warning' | 'info';
 
@@ -84,7 +85,7 @@ export default function Notifications({ userData }: { userData?: any }) {
               category,
               title: n.title,
               message: n.message,
-              time: new Date(n.createdAt || Date.now()).toLocaleString(),
+              time: formatDateTime(n.createdAt || new Date().toISOString()),
               read: n.readFlag === true
             };
           });
