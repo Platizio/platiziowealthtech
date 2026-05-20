@@ -23,8 +23,12 @@ public class NotificationService {
     }
 
     public Notification getNotification(UUID notificationId) {
+        // EntityNotFoundException is the codebase-wide convention for 404s and is
+        // already mapped to HTTP 404 by GlobalExceptionHandler. Including the id
+        // makes the 404 response and server logs actionable.
         return notificationRepository.findById(notificationId)
-                .orElseThrow(() -> new EntityNotFoundException("Notification not found"));
+                .orElseThrow(() -> new EntityNotFoundException(
+                        "Notification not found with id: " + notificationId));
     }
 
     @Transactional

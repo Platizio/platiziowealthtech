@@ -90,6 +90,20 @@
             <artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
             <version>2.6.0</version>
         </dependency>
+        <!-- B-46: auth-endpoint rate limiting. bucket4j-core = token-bucket
+             algorithm (not in the Spring Boot BOM, explicit version required).
+             Caffeine = bounded, self-expiring IP->bucket store so the limiter
+             itself can't become an unbounded-memory DoS; its version is
+             managed by the spring-boot-starter-parent BOM. -->
+        <dependency>
+            <groupId>com.bucket4j</groupId>
+            <artifactId>bucket4j-core</artifactId>
+            <version>8.10.1</version>
+        </dependency>
+        <dependency>
+            <groupId>com.github.ben-manes.caffeine</groupId>
+            <artifactId>caffeine</artifactId>
+        </dependency>
     </dependencies>
 
     <build>

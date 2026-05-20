@@ -21,7 +21,7 @@ class NotificationControllerTest {
 
     @Test
     void notificationEndpointsRequirePreAuthorization() throws NoSuchMethodException {
-        Method list = NotificationController.class.getMethod("list", UUID.class);
+        Method list = NotificationController.class.getMethod("list", UUID.class, Authentication.class);
         Method markRead = NotificationController.class.getMethod("markRead", UUID.class, Authentication.class);
 
         assertThat(list.getAnnotation(PreAuthorize.class).value())
@@ -52,6 +52,22 @@ class NotificationControllerTest {
         assertThat(notificationService.markedNotification).isNull();
     }
 
+    @Test
+    void listQueriesByAuthenticatedPrincipalNotPathVariable() {
+        UUID principalDistributorId = UUID.randomUUID();
+        UUID attackerSuppliedPathId = UUID.randomUUID(); // a DIFFERENT distributor's id
+        RecordingNotificationService notificationService =
+                new RecordingNotificationService(notification(principalDistributorId));
+        NotificationController controller = new NotificationController(notificationService);
+
+        controller.list(attackerSuppliedPathId, auth(principalDistributorId));
+
+        // B-53: the lookup must be scoped to the JWT principal, never the
+        // client-supplied path segment.
+        assertThat(notificationService.listedDistributorId).isEqualTo(principalDistributorId);
+        assertThat(notificationService.listedDistributorId).isNotEqualTo(attackerSuppliedPathId);
+    }
+
     private Notification notification(UUID distributorId) {
         Notification notification = new Notification();
         notification.setDistributorId(distributorId);
@@ -73,10 +89,17 @@ class NotificationControllerTest {
 
         private final Notification notification;
         private Notification markedNotification;
+        private UUID listedDistributorId;
 
         RecordingNotificationService(Notification notification) {
             super(null);
             this.notification = notification;
+        }
+
+        @Override
+        public List<Notification> listByDistributor(UUID distributorId) {
+            this.listedDistributorId = distributorId;
+            return List.of(notification);
         }
 
         @Override

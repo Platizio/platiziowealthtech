@@ -163,6 +163,12 @@ public class DashboardService {
         List<Investor> investors = investorRepository.findByDistributorId(distributorId);
         List<TransactionOrder> orders = orderRepository.findByDistributorId(distributorId);
 
+        // O(1) investor lookup keyed by id. Replaces the previous per-order
+        // investors.stream().filter().findFirst() linear scan, which made the
+        // failed-order loop O(orders ├ù investors). Same idiom as getSipDashboard().
+        Map<UUID, Investor> investorById = investors.stream()
+                .collect(Collectors.toMap(Investor::getId, i -> i));
+
         int idCounter = 1;
 
         for (Investor inv : investors) {
@@ -176,7 +182,7 @@ public class DashboardService {
 
         for (TransactionOrder o : orders) {
             if (o.getOrderStatus() == OrderStatus.FAILED) {
-                Investor inv = investors.stream().filter(i -> i.getId().equals(o.getInvestorId())).findFirst().orElse(null);
+                Investor inv = investorById.get(o.getInvestorId());
                 String name = inv != null ? inv.getFullName() : "Unknown";
                 String cat = o.getTransactionType() == TransactionType.SIP ? "SIP" : "Transaction";
                 actions.add(new ActionItemDto(String.valueOf(idCounter++), cat, "High", name, "Transaction failed: " + (o.getFailureReason() != null ? o.getFailureReason() : "Unknown reason"), "Today"));

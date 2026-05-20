@@ -30,14 +30,19 @@ import java.util.List;
 public class SecurityConfig {
 
     private final JwtAuthFilter jwtAuthFilter;
+    private final LoginRateLimitFilter loginRateLimitFilter;
     private final CustomUserDetailsService userDetailsService;
     private final ObjectMapper objectMapper;
 
     @org.springframework.beans.factory.annotation.Value("${app.cors.allowed-origins}")
     private List<String> allowedOrigins;
 
-    public SecurityConfig(JwtAuthFilter jwtAuthFilter, CustomUserDetailsService userDetailsService, ObjectMapper objectMapper) {
+    public SecurityConfig(JwtAuthFilter jwtAuthFilter,
+                          LoginRateLimitFilter loginRateLimitFilter,
+                          CustomUserDetailsService userDetailsService,
+                          ObjectMapper objectMapper) {
         this.jwtAuthFilter = jwtAuthFilter;
+        this.loginRateLimitFilter = loginRateLimitFilter;
         this.userDetailsService = userDetailsService;
         this.objectMapper = objectMapper;
     }
@@ -50,7 +55,13 @@ public class SecurityConfig {
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers(
                     "/api/v1/auth/**",
-                    "/api/v1/debug/external-auth/**",
+                    // NOTE: /api/v1/debug/external-auth/** is deliberately NOT
+                    // permit-listed. The ExternalAuthDebugController is already
+                    // gated by @ConditionalOnProperty(external-auth.debug.enabled,
+                    // default=false) so the bean only exists when explicitly
+                    // opted in; on top of that, when it IS enabled it must still
+                    // require an authenticated principal (falls through to
+                    // .anyRequest().authenticated() below). Do not re-add it here.
                     "/actuator/health",
                     "/actuator/info",
                     "/v3/api-docs/**",
@@ -85,7 +96,10 @@ public class SecurityConfig {
                 .sessionCreationPolicy(SessionCreationPolicy.STATELESS)
             )
             .authenticationProvider(authenticationProvider())
-            .addFilterBefore(jwtAuthFilter, UsernamePasswordAuthenticationFilter.class);
+            .addFilterBefore(jwtAuthFilter, UsernamePasswordAuthenticationFilter.class)
+            // Rate limiter runs ahead of JwtAuthFilter so an attacker flooding
+            // /api/v1/auth/login is rejected with 429 before any work is done.
+            .addFilterBefore(loginRateLimitFilter, JwtAuthFilter.class);
 
         return http.build();
     }

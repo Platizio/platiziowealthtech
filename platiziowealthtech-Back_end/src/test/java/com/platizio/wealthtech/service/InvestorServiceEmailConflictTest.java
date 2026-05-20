@@ -3,7 +3,7 @@ package com.platizio.wealthtech.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-import com.platizio.wealthtech.common.ConflictException;
+import com.platizio.wealthtech.common.DuplicateResourceException;
 import com.platizio.wealthtech.domain.Investor;
 import com.platizio.wealthtech.dto.InvestorCreateRequest;
 import com.platizio.wealthtech.repository.InvestorRepository;
@@ -28,8 +28,8 @@ class InvestorServiceEmailConflictTest {
         );
 
         assertThatThrownBy(() -> investorService.createInvestor(request()))
-                .isInstanceOf(ConflictException.class)
-                .hasMessage("An investor with this email is already registered");
+                .isInstanceOf(DuplicateResourceException.class)
+                .hasMessage("An investor with this email address already exists");
         assertThat(saveCalled).isFalse();
     }
 

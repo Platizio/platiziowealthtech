@@ -2,6 +2,7 @@ package com.platizio.wealthtech.controller;
 
 import com.platizio.wealthtech.common.AccountNotApprovedException;
 import com.platizio.wealthtech.common.ConflictException;
+import com.platizio.wealthtech.common.DuplicateResourceException;
 import com.platizio.wealthtech.dto.ApiErrorResponse;
 import jakarta.persistence.EntityNotFoundException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -34,6 +35,7 @@ public class GlobalExceptionHandler {
         // investors
         m.put("investors_pan_key",                        "An investor with this PAN already exists");
         m.put("investors_email_key",                      "An investor with this email is already registered");
+        m.put("uq_investor_email",                        "An investor with this email address already exists");
         // distributors
         m.put("distributors_email_key",                   "A distributor with this email address already exists");
         m.put("distributors_mobile_number_key",           "A distributor with this mobile number already exists");
@@ -115,6 +117,17 @@ public class GlobalExceptionHandler {
     public ApiErrorResponse handleForbidden(AccessDeniedException ex, HttpServletRequest request) {
         logger.warn("Access denied for {} at {}", request.getUserPrincipal() != null ? request.getUserPrincipal().getName() : "anonymous", request.getRequestURI());
         return new ApiErrorResponse(OffsetDateTime.now(), 403, "FORBIDDEN", "Access denied", request.getRequestURI());
+    }
+
+    /**
+     * Thrown by service-layer duplicate checks (application-level guard).
+     * Returns 409 with the human-readable message set by the caller.
+     */
+    @ExceptionHandler(DuplicateResourceException.class)
+    @ResponseStatus(HttpStatus.CONFLICT)
+    public ApiErrorResponse handleDuplicateResource(DuplicateResourceException ex, HttpServletRequest request) {
+        logger.warn("Duplicate resource at {}: {}", request.getRequestURI(), ex.getMessage());
+        return new ApiErrorResponse(OffsetDateTime.now(), 409, "CONFLICT", ex.getMessage(), request.getRequestURI());
     }
 
     /**
