@@ -5,11 +5,8 @@ import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer
 } from 'recharts';
 import { apiFetch, apiUrl } from '../config/api';
-<<<<<<< HEAD
 import { formatDate } from '../utils/formatDate';
-=======
 import { useFocusTrap } from '../hooks/useFocusTrap';
->>>>>>> 9097ae05093f32c59233f39e83ef0a37300917e0
 
 interface Distributor {
   id: number;

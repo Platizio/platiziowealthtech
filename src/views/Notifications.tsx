@@ -2,11 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { motion } from 'motion/react';
 import { CheckCircle2, XCircle, AlertCircle, Clock, RefreshCw, Bell } from 'lucide-react';
 import { apiFetch } from '../config/api';
-<<<<<<< HEAD
 import { formatDateTime } from '../utils/formatDate';
-=======
 import EmptyState from '../components/EmptyState';
->>>>>>> 9097ae05093f32c59233f39e83ef0a37300917e0
 
 type NotifType = 'success' | 'error' | 'warning' | 'info';
 

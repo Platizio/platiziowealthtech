@@ -3,14 +3,11 @@ import { motion, AnimatePresence } from 'motion/react';
 import { Search, Filter, Trash2, X, ChevronDown, Lock, Rocket, Eye, EyeOff, RefreshCw, AlertCircle, Layers } from 'lucide-react';
 import { Product } from '../data/products';
 import { apiFetch } from '../config/api';
-<<<<<<< HEAD
 import Pagination from '../components/Pagination';
 import { getPageContent, getPageMeta } from '../utils/pagination';
 import { useDebounce } from '../hooks/useDebounce';
-=======
 import EmptyState from '../components/EmptyState';
 import { useFocusTrap } from '../hooks/useFocusTrap';
->>>>>>> 9097ae05093f32c59233f39e83ef0a37300917e0
 
 // ─── Display helpers ──────────────────────────────────────────────────────────
 

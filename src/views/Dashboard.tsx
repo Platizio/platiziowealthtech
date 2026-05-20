@@ -513,7 +513,7 @@ const statusColors: Record<string, string> = {
 };
 
 function KanbanCard({ name, detail, days, status }: {
-  name: string; detail: string; days: string; status: string;
+  key?: React.Key; name: string; detail: string; days: string; status: string;
 }) {
   return (
     <div className="bg-white p-3 rounded-lg shadow-sm border border-slate-200 hover:border-blue-300 transition-colors cursor-pointer group">

@@ -6,11 +6,8 @@ import {
   Target, Users, BookOpen, PieChart, Activity, Eye,
 } from 'lucide-react';
 import { apiFetch } from '../config/api';
-<<<<<<< HEAD
 import { useDebounce } from '../hooks/useDebounce';
-=======
 import { useFocusTrap } from '../hooks/useFocusTrap';
->>>>>>> 9097ae05093f32c59233f39e83ef0a37300917e0
 
 // ─── Colour maps ──────────────────────────────────────────────────────────────
 const categoryStyle: Record<string, string> = {

@@ -49,9 +49,10 @@ export function useFocusTrap<T extends HTMLElement = HTMLDivElement>(active: boo
 
     // offsetParent === null filters out elements that are display:none or
     // inside a display:none ancestor, which aren't actually focusable.
-    const getFocusable = () =>
-      Array.from(container.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR))
-        .filter(el => el.offsetParent !== null);
+    const getFocusable = (): HTMLElement[] => {
+      const elements = Array.from(container.querySelectorAll(FOCUSABLE_SELECTOR)) as HTMLElement[];
+      return elements.filter(el => el.offsetParent !== null);
+    };
 
     // Move focus into the dialog on open.
     getFocusable()[0]?.focus();

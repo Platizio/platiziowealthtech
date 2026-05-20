@@ -1,7 +1,5 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { getPageContent, getPageMeta } from '../utils/pagination';
-import { formatDate } from '../utils/formatDate';
 import { useDebounce } from '../hooks/useDebounce';
 import {
   Search, Filter, ChevronLeft, MessageSquare, Phone,
@@ -9,12 +7,8 @@ import {
   CheckCircle2, Target,
 } from 'lucide-react';
 import { apiFetch } from '../config/api';
-<<<<<<< HEAD
-import Pagination from '../components/Pagination';
-=======
 import EmptyState from '../components/EmptyState';
 import { useFocusTrap } from '../hooks/useFocusTrap';
->>>>>>> 9097ae05093f32c59233f39e83ef0a37300917e0
 
 interface Lead {
   id: string;

@@ -2,13 +2,10 @@ import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Search, Filter, ChevronLeft, CheckCircle2, Clock, XCircle, AlertCircle, RefreshCw, ArrowDown, ArrowUp, ArrowUpDown, Inbox } from 'lucide-react';
 import { apiFetch } from '../config/api';
-<<<<<<< HEAD
 import Pagination from '../components/Pagination';
 import { getPageContent, getPageMeta } from '../utils/pagination';
 import { formatDateTime } from '../utils/formatDate';
-=======
 import EmptyState from '../components/EmptyState';
->>>>>>> 9097ae05093f32c59233f39e83ef0a37300917e0
 
 type StatusKey = 'Successful' | 'Processing' | 'Submitted' | 'Payment Pending' | 'Pending Investor Action' | 'Failed' | 'Retry Available' | 'Draft' | 'Created' | 'SUCCESSFUL' | 'COMPLETED' | 'FAILED' | 'PENDING_PAYMENT' | 'DRAFT';
 

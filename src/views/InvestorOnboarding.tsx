@@ -247,7 +247,7 @@ export default function InvestorOnboarding({ prospect, userData, onComplete, onB
   const uploadKycDocument = async (investorId: string, key: keyof typeof docs, file: File) => {
     const formData = new FormData();
     formData.append('file', file);
-    formData.append('documentType', key.toUpperCase());
+    formData.append('documentType', String(key).toUpperCase());
 
     const response = await axios.put(apiUrl(`/investors/${investorId}/documents`), formData, {
       withCredentials: true,
@@ -348,8 +348,8 @@ export default function InvestorOnboarding({ prospect, userData, onComplete, onB
 
       console.log('step_1b_upload_documents_request=', {
         endpoint: `PUT /api/v1/investors/${investorResult.id}/documents`,
-        documents: Object.entries(docs).map(([key, file]) => ({
-          documentType: key.toUpperCase(),
+        documents: (Object.entries(docs) as [keyof typeof docs, File | null][]).map(([key, file]) => ({
+          documentType: String(key).toUpperCase(),
           fileName: file?.name,
           fileSize: file?.size,
         })),

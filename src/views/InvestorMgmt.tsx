@@ -44,8 +44,8 @@ const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3
 
 const isUuid = (value?: string) => Boolean(value && UUID_PATTERN.test(value));
 
-const getDistributorDisplayName = (distributor: any) =>
-  distributor?.fullName || distributor?.name || distributor?.companyName || distributor?.email || distributor?.id;
+const getDistributorDisplayName = (distributor: any): string =>
+  String(distributor?.fullName || distributor?.name || distributor?.companyName || distributor?.email || distributor?.id || '');
 
 const getKycLabel = (status?: string): Investor['kyc'] => {
   const normalized = status?.trim().toUpperCase() || '';
@@ -69,9 +69,9 @@ export default function InvestorMgmt({ userData }: { userData?: any }) {
   const userId = userData?.id;
   const userRole = userData?.role;
 
-  const distributorNameById = React.useMemo(() => {
-    return new Map([
-      ...distributors.map((d: any) => [d.id, getDistributorDisplayName(d)] as [string, string]),
+  const distributorNameById = React.useMemo<Map<string, string>>(() => {
+    return new Map<string, string>([
+      ...distributors.map((d: any) => [String(d.id), getDistributorDisplayName(d)] as [string, string]),
       ...Object.entries(fetchedDistributorNames),
     ]);
   }, [distributors, fetchedDistributorNames]);
@@ -87,7 +87,7 @@ export default function InvestorMgmt({ userData }: { userData?: any }) {
     pan: inv.pan || '—',
   }), [distributorNameById]);
 
-  const resolveDistributorName = React.useCallback((inv: Investor) => {
+  const resolveDistributorName = React.useCallback((inv: Investor): string => {
     const id = inv.distributorId || (isUuid(inv.distributor) ? inv.distributor : undefined);
     const resolved = id ? distributorNameById.get(id) : undefined;
     if (resolved && !isUuid(resolved)) return resolved;
@@ -207,7 +207,14 @@ export default function InvestorMgmt({ userData }: { userData?: any }) {
     return matchKyc && matchDist;
   });
 
-  const distributorOptions = ['All', ...Array.from(new Set(investors.map(resolveDistributorName).filter(Boolean)))];
+  const distributorOptions: string[] = [
+    'All',
+    ...Array.from(new Set<string>(
+      investors
+        .map(inv => resolveDistributorName(inv))
+        .filter((name): name is string => Boolean(name))
+    )),
+  ];
 
   // KYC stats
   const total       = investors.length;

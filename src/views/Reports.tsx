@@ -1,11 +1,8 @@
 import React, { useState } from 'react';
 import { FileText, Download, Search, Filter } from 'lucide-react';
 import { apiFetch } from '../config/api';
-<<<<<<< HEAD
 import { formatDate } from '../utils/formatDate';
-=======
 import EmptyState from '../components/EmptyState';
->>>>>>> 9097ae05093f32c59233f39e83ef0a37300917e0
 
 const REPORT_TYPES = [
   { id: 'investors',    label: 'Investor Report',         desc: 'All investors with KYC and status details' },

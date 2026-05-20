@@ -140,12 +140,9 @@ export default function SipDashboard({ onBack, userData }: { onBack: () => void;
   // rendered a fake flat-zero chart that looked like real data. Start empty.
   const [sipTrend, setSipTrend] = useState<SipTrend[]>([]);
   const [loading, setLoading] = useState(true);
-<<<<<<< HEAD
   const [cancellingId, setCancellingId] = useState('');
-  const [error, setError] = useState('');
-=======
-  const [error, setError] = useState(false);
->>>>>>> 9097ae05093f32c59233f39e83ef0a37300917e0
+  const [loadError, setLoadError] = useState(false);
+  const [cancelError, setCancelError] = useState('');
 
   React.useEffect(() => {
     if (!userData?.id) return;
@@ -168,7 +165,7 @@ export default function SipDashboard({ onBack, userData }: { onBack: () => void;
               count: t.count ?? 0,
             }))
           );
-          setError(false);
+          setLoadError(false);
           setLoading(false);
           return; // skip network fetch — cache is still fresh
         }
@@ -200,14 +197,14 @@ export default function SipDashboard({ onBack, userData }: { onBack: () => void;
             count: t.count ?? 0,
           }))
         );
-        setError(false);
+        setLoadError(false);
         setLoading(false);
       })
       .catch(err => {
         console.error('Failed to fetch SIP dashboard', err);
         // F-16: surface a real error state instead of silently rendering
         // empty/zero values that the user would read as "no SIPs".
-        setError(true);
+        setLoadError(true);
         setLoading(false);
       });
   }, [userData]);
@@ -215,7 +212,7 @@ export default function SipDashboard({ onBack, userData }: { onBack: () => void;
   const cancelSip = async (sip: Sip) => {
     if (!window.confirm(`Cancel SIP for ${sip.investor}?`)) return;
     setCancellingId(sip.id);
-    setError('');
+    setCancelError('');
     try {
       const response = await apiFetch(`/orders/${sip.id}`, { method: 'DELETE' });
       if (!response.ok) {
@@ -226,7 +223,7 @@ export default function SipDashboard({ onBack, userData }: { onBack: () => void;
       if (userData?.id) sessionStorage.removeItem(`sip_dash_${userData.id}`);
       setSips(prev => prev.filter(item => item.id !== sip.id));
     } catch (err: any) {
-      setError(err?.message || 'Cancel SIP failed. Please try again.');
+      setCancelError(err?.message || 'Cancel SIP failed. Please try again.');
     } finally {
       setCancellingId('');
     }
@@ -252,7 +249,7 @@ export default function SipDashboard({ onBack, userData }: { onBack: () => void;
   //   empty   → empty state (genuinely no SIPs, distinct from an error)
   //   else    → real dashboard, with real resolved data only
   if (loading) return <SipDashboardSkeleton />;
-  if (error) return <SipDashboardError onBack={onBack} />;
+  if (loadError) return <SipDashboardError onBack={onBack} />;
   if (sips.length === 0) return <SipDashboardEmpty onBack={onBack} />;
 
   return (
@@ -345,7 +342,7 @@ export default function SipDashboard({ onBack, userData }: { onBack: () => void;
 
       {/* ── SIP list ────────────────────────────────────────────────────── */}
       <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden">
-        {error && <div className="mx-5 mt-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-700">{error}</div>}
+        {cancelError && <div className="mx-5 mt-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-700">{cancelError}</div>}
         <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
           <h2 className="font-semibold text-slate-800">
             {catFilter === 'ALL' ? 'All SIPs' : `${catFilter} SIPs`}
