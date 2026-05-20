@@ -80,6 +80,53 @@ function SipDashboardSkeleton() {
   );
 }
 
+// Shared chrome (breadcrumb + heading) so the empty/error screens are not
+// dead-ends and stay visually consistent with the loaded dashboard.
+function SipDashboardChrome({ onBack, children }: { onBack: () => void; children: React.ReactNode }) {
+  return (
+    <div className="p-8 space-y-6">
+      <button
+        onClick={onBack}
+        className="flex items-center gap-2 text-slate-500 hover:text-slate-800 text-sm font-medium transition-colors"
+      >
+        <ArrowLeft className="w-4 h-4" /> Back to Dashboard
+      </button>
+      <div>
+        <h1 className="text-2xl font-semibold text-slate-800">SIP Dashboard</h1>
+        <p className="text-slate-500 text-sm mt-1">Track active, failed and upcoming systematic investment plans</p>
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function SipDashboardEmpty({ onBack }: { onBack: () => void }) {
+  return (
+    <SipDashboardChrome onBack={onBack}>
+      <div className="bg-white rounded-2xl border border-slate-200 py-16 text-center">
+        <p className="text-sm font-semibold text-slate-600">No SIP data yet</p>
+        <p className="text-xs text-slate-400 mt-1">
+          SIPs will appear here once your investors set up systematic plans.
+        </p>
+      </div>
+    </SipDashboardChrome>
+  );
+}
+
+function SipDashboardError({ onBack }: { onBack: () => void }) {
+  return (
+    <SipDashboardChrome onBack={onBack}>
+      <div className="bg-white rounded-2xl border border-red-200 py-16 text-center">
+        <XCircle className="w-7 h-7 text-red-400 mx-auto mb-2" />
+        <p className="text-sm font-semibold text-slate-700">Couldn’t load SIP data</p>
+        <p className="text-xs text-slate-400 mt-1">
+          Something went wrong fetching this dashboard. Please try again later.
+        </p>
+      </div>
+    </SipDashboardChrome>
+  );
+}
+
 // Session-cache TTL: 5 minutes
 const CACHE_TTL_MS = 5 * 60 * 1_000;
 
@@ -87,16 +134,13 @@ export default function SipDashboard({ onBack, userData }: { onBack: () => void;
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('All');
   const [catFilter, setCatFilter] = useState<CatFilter>('ALL');
   const [sips, setSips] = useState<Sip[]>([]);
-  // Pre-fill 6 zero months so the chart skeleton renders immediately on first paint.
-  const [sipTrend, setSipTrend] = useState<SipTrend[]>([
-    { month: 'Jan', value: 0, count: 0 },
-    { month: 'Feb', value: 0, count: 0 },
-    { month: 'Mar', value: 0, count: 0 },
-    { month: 'Apr', value: 0, count: 0 },
-    { month: 'May', value: 0, count: 0 },
-    { month: 'Jun', value: 0, count: 0 },
-  ]);
+  // F-16: do NOT pre-populate with fabricated zero months. The dedicated
+  // <SipDashboardSkeleton/> (rendered while `loading`) is the loading visual;
+  // a non-null placeholder here only ever surfaced on the error path, where it
+  // rendered a fake flat-zero chart that looked like real data. Start empty.
+  const [sipTrend, setSipTrend] = useState<SipTrend[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(false);
 
   React.useEffect(() => {
     if (!userData?.id) return;
@@ -119,6 +163,7 @@ export default function SipDashboard({ onBack, userData }: { onBack: () => void;
               count: t.count ?? 0,
             }))
           );
+          setError(false);
           setLoading(false);
           return; // skip network fetch — cache is still fresh
         }
@@ -150,10 +195,14 @@ export default function SipDashboard({ onBack, userData }: { onBack: () => void;
             count: t.count ?? 0,
           }))
         );
+        setError(false);
         setLoading(false);
       })
       .catch(err => {
         console.error('Failed to fetch SIP dashboard', err);
+        // F-16: surface a real error state instead of silently rendering
+        // empty/zero values that the user would read as "no SIPs".
+        setError(true);
         setLoading(false);
       });
   }, [userData]);
@@ -172,10 +221,14 @@ export default function SipDashboard({ onBack, userData }: { onBack: () => void;
   const failedSips = sips.filter(s => s.status === 'Failed').length;
   const pausedSips = sips.filter(s => s.status === 'Paused').length;
 
-  // Show the skeleton on the very first load (before any data arrives).
-  // Once the cache or network fetch resolves, loading flips to false and
-  // the real dashboard fades in via the motion wrapper below.
+  // F-16 render guards — strict order so no fabricated/stale values ever show:
+  //   loading → skeleton (never a zero-filled chart)
+  //   error   → explicit error screen (not a misleading "no data" / ₹0.00)
+  //   empty   → empty state (genuinely no SIPs, distinct from an error)
+  //   else    → real dashboard, with real resolved data only
   if (loading) return <SipDashboardSkeleton />;
+  if (error) return <SipDashboardError onBack={onBack} />;
+  if (sips.length === 0) return <SipDashboardEmpty onBack={onBack} />;
 
   return (
     <motion.div
