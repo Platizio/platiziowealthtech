@@ -6,10 +6,15 @@ import { useDebounce } from '../hooks/useDebounce';
 import {
   Search, Filter, ChevronLeft, MessageSquare, Phone,
   Plus, Youtube, Instagram, Globe, UserCheck, X,
-  CheckCircle2,
+  CheckCircle2, Target,
 } from 'lucide-react';
 import { apiFetch } from '../config/api';
+<<<<<<< HEAD
 import Pagination from '../components/Pagination';
+=======
+import EmptyState from '../components/EmptyState';
+import { useFocusTrap } from '../hooks/useFocusTrap';
+>>>>>>> 9097ae05093f32c59233f39e83ef0a37300917e0
 
 interface Lead {
   id: string;
@@ -146,6 +151,7 @@ function AddProspectModal({
   onClose: () => void;
   onAdd: (lead: Lead) => void;
 }) {
+  const dialogRef = useFocusTrap<HTMLDivElement>(true);
   const [form, setForm] = useState<ProspectForm>({
     firstName: '', lastName: '', mobile: '', email: '',
     pan: '', dob: '', source: 'Referral', amount: '', notes: '',
@@ -192,7 +198,13 @@ function AddProspectModal({
   };
 
   return (
-    <div className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+    <div
+      ref={dialogRef}
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="add-prospect-title"
+      className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+    >
       <motion.div
         initial={{ opacity: 0, scale: 0.95, y: 16 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
@@ -201,11 +213,11 @@ function AddProspectModal({
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-5 border-b border-slate-100">
           <div>
-            <h2 className="text-lg font-semibold text-slate-800">Add New Prospect</h2>
+            <h2 id="add-prospect-title" className="text-lg font-semibold text-slate-800">Add New Prospect</h2>
             <p className="text-sm text-slate-500 mt-0.5">Create a new lead in the pipeline</p>
           </div>
-          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition-colors">
-            <X className="w-5 h-5" />
+          <button onClick={onClose} aria-label="Close dialog" className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition-colors">
+            <X className="w-5 h-5" aria-hidden="true" />
           </button>
         </div>
 
@@ -462,8 +474,12 @@ export default function Leads({
                 </tr>
               ) : filtered.length === 0 ? (
                 <tr>
-                  <td colSpan={5} className="px-6 py-12 text-center text-sm text-slate-400">
-                    No leads match your search.
+                  <td colSpan={5} className="px-0 py-0">
+                    <EmptyState
+                      icon={Target}
+                      title="No leads found"
+                      subtitle="Try adjusting your search or status filter"
+                    />
                   </td>
                 </tr>
               ) : (

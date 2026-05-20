@@ -173,6 +173,16 @@ export default function InvestorOnboarding({ prospect, userData, onComplete, onB
     setDemoOtp(code);
     setOtpSent(true);
     setCountdown(30);
+    // F-18: in Vite dev only, auto-fill the boxes with the *generated* demo
+    // code so the consent step doesn't block the demo. A literal "123456"
+    // can't be used here — otpCorrect checks against this randomly generated
+    // demoOtp, so the autofill must be `code` itself. import.meta.env.DEV is
+    // false in production builds, so prod still requires manual entry (and
+    // will be wired to a real backend OTP endpoint when one exists — there is
+    // currently no /auth/send-otp or /auth/verify-otp on the backend).
+    if (import.meta.env.DEV) {
+      setOtp(code.split(''));
+    }
     setTimeout(() => otpRefs.current[0]?.focus(), 50);
   };
 

@@ -7,6 +7,7 @@ import {
   PieChart, RefreshCw, FileBarChart2, MessageSquare, ClipboardList
 } from 'lucide-react';
 import { apiFetch } from '../config/api';
+import { useFocusTrap } from '../hooks/useFocusTrap';
 
 const DIST_NAV_PRIMARY = [
   { id: '/distributor/dashboard',      icon: <LayoutDashboard className="w-4 h-4" />, label: 'Dashboard' },
@@ -79,8 +80,8 @@ export default function AppLayout({ userData, onSignOut }: { userData: any, onSi
 
   const mode = location.pathname.startsWith('/admin') ? 'admin' : 'distributor';
 
-  const displayName = userData?.fullName || userData?.full_name || userData?.firstName || 'uknown';
-  const displayArn = userData?.arnNumber || userData?.arn_number || userData?.arn || 'uknown';
+  const displayName = userData?.fullName || userData?.full_name || userData?.firstName || 'Unknown';
+  const displayArn = userData?.arnNumber || userData?.arn_number || userData?.arn || 'Unknown';
   const displayRole = normalizeRole(userData?.role) || 'SUB_DISTRIBUTOR';
   const canAccessAdmin = ADMIN_ROLES.has(displayRole);
   const nismExpiryDate = userData?.nismExpiryDate || userData?.nism_expiry_date || null;
@@ -105,7 +106,13 @@ export default function AppLayout({ userData, onSignOut }: { userData: any, onSi
   const arnExpired  = checkExpired(arnExpiryDate);
   const isExpired   = nismExpired || arnExpired;
 
-  const displayInitials = displayName !== 'uknown'
+  // F-32: focus-trap the expired-credentials dialog while it's open so
+  // keyboard users can't Tab into the page behind it. Pre-compute the open
+  // condition once so the hook and the JSX use the same value.
+  const expiredDialogOpen = isExpired && showInactivePopup && mode === 'distributor';
+  const expiredDialogRef = useFocusTrap<HTMLDivElement>(expiredDialogOpen);
+
+  const displayInitials = displayName !== 'Unknown'
     ? displayName.split(' ').map((n: string) => n[0]).join('').substring(0, 2).toUpperCase()
     : 'US';
 
@@ -121,17 +128,30 @@ export default function AppLayout({ userData, onSignOut }: { userData: any, onSi
 
   return (
     <>
-      {isExpired && showInactivePopup && mode === 'distributor' && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
+      {expiredDialogOpen && (
+        // F-32: role/aria-modal/aria-labelledby make this a true ARIA dialog
+        // for assistive tech; useFocusTrap keeps Tab inside while it's open
+        // and restores focus to the previously-focused element on close.
+        <div
+          ref={expiredDialogRef}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="expired-credentials-title"
+          className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm"
+        >
           <div className="bg-white w-full max-w-sm rounded-3xl shadow-xl p-6 relative">
-            <button onClick={() => setShowInactivePopup(false)} className="absolute top-4 right-4 p-1.5 text-slate-400 hover:text-slate-600 bg-slate-100 rounded-full transition-colors">
+            <button
+              onClick={() => setShowInactivePopup(false)}
+              aria-label="Close dialog"
+              className="absolute top-4 right-4 p-1.5 text-slate-400 hover:text-slate-600 bg-slate-100 rounded-full transition-colors"
+            >
               <X className="w-4 h-4" />
             </button>
             <div className="flex flex-col items-center text-center mt-2">
               <div className="w-12 h-12 rounded-full bg-red-100 flex items-center justify-center mb-4">
                 <AlertTriangle className="w-6 h-6 text-red-500" />
               </div>
-              <h2 className="text-lg font-bold text-slate-800 mb-2">
+              <h2 id="expired-credentials-title" className="text-lg font-bold text-slate-800 mb-2">
                 {arnExpired && nismExpired ? 'Credentials Expired' : arnExpired ? 'ARN Expired' : 'NISM Expired'}
               </h2>
               <p className="text-sm text-slate-500 mb-6">
@@ -277,7 +297,7 @@ export default function AppLayout({ userData, onSignOut }: { userData: any, onSi
               <Search className="w-4 h-4 absolute left-3 top-2.5 text-slate-400" />
               <input
                 type="text"
-                placeholder={mode === 'admin' ? 'Search distributors, investors…' : 'Search clients, funds, or PAN…'}
+                placeholder={mode === 'admin' ? 'Search distributors, investors…' : 'Search investors, funds, or PAN…'}
                 className="w-full pl-10 pr-4 py-2 text-sm bg-slate-100/50 border border-slate-200 rounded-full focus:bg-white focus:ring-2 focus:ring-blue-100 focus:border-blue-500 transition-all outline-none"
               />
             </div>
@@ -312,11 +332,19 @@ export default function AppLayout({ userData, onSignOut }: { userData: any, onSi
 
               <button
                 onClick={() => mode === 'distributor' && navigate('/distributor/notifications')}
+                aria-label={
+                  unreadNotifs > 0
+                    ? `View notifications (${unreadNotifs} unread)`
+                    : 'View notifications'
+                }
                 className="text-slate-400 hover:text-slate-600 transition-colors relative"
               >
-                <Bell className="w-5 h-5" />
+                <Bell className="w-5 h-5" aria-hidden="true" />
                 {unreadNotifs > 0 && (
-                  <span className="absolute -top-2 -right-2 min-w-5 h-5 px-1 bg-red-500 border border-white rounded-full text-[10px] font-bold text-white flex items-center justify-center leading-none">
+                  <span
+                    aria-hidden="true"
+                    className="absolute -top-2 -right-2 min-w-5 h-5 px-1 bg-red-500 border border-white rounded-full text-[10px] font-bold text-white flex items-center justify-center leading-none"
+                  >
                     {unreadNotifs > 99 ? '99+' : unreadNotifs}
                   </span>
                 )}

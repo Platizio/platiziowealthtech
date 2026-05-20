@@ -6,7 +6,11 @@ import {
   Target, Users, BookOpen, PieChart, Activity, Eye,
 } from 'lucide-react';
 import { apiFetch } from '../config/api';
+<<<<<<< HEAD
 import { useDebounce } from '../hooks/useDebounce';
+=======
+import { useFocusTrap } from '../hooks/useFocusTrap';
+>>>>>>> 9097ae05093f32c59233f39e83ef0a37300917e0
 
 // ─── Colour maps ──────────────────────────────────────────────────────────────
 const categoryStyle: Record<string, string> = {
@@ -464,6 +468,7 @@ export default function Ledger({ userData }: { userData?: any }) {
 
 // ─── Fund Detail Modal ────────────────────────────────────────────────────────
 function FundDetailModal({ fund, onClose, onInvest }: { fund: any; onClose: () => void; onInvest: () => void }) {
+  const dialogRef = useFocusTrap<HTMLDivElement>(true);
   const [activeTab, setActiveTab] = useState<'overview' | 'performance' | 'portfolio' | 'details'>('overview');
 
   const meta = (() => { try { return fund.metadataJson ? JSON.parse(fund.metadataJson) : {}; } catch { return {}; } })();
@@ -574,7 +579,13 @@ function FundDetailModal({ fund, onClose, onInvest }: { fund: any; onClose: () =
   const maxRet = isEquity ? 45 : isDebt ? 12 : 25;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+    <div
+      ref={dialogRef}
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="fund-detail-title"
+      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+    >
       <motion.div
         initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
         onClick={onClose}
@@ -600,12 +611,12 @@ function FundDetailModal({ fund, onClose, onInvest }: { fund: any; onClose: () =
                 </span>
               )}
             </div>
-            <button onClick={onClose} className="p-2 text-white/60 hover:text-white bg-white/10 rounded-full transition-colors flex-shrink-0 ml-4">
-              <X className="w-4 h-4" />
+            <button onClick={onClose} aria-label="Close dialog" className="p-2 text-white/60 hover:text-white bg-white/10 rounded-full transition-colors flex-shrink-0 ml-4">
+              <X className="w-4 h-4" aria-hidden="true" />
             </button>
           </div>
 
-          <h2 className="text-xl font-bold text-white leading-snug mb-1">{fund.schemeName}</h2>
+          <h2 id="fund-detail-title" className="text-xl font-bold text-white leading-snug mb-1">{fund.schemeName}</h2>
           <p className="text-white/55 text-sm mb-5">{fund.amcName}</p>
 
           {/* Key stats */}
@@ -735,33 +746,35 @@ function FundDetailModal({ fund, onClose, onInvest }: { fund: any; onClose: () =
                     <TrendingUp className="w-4 h-4 text-emerald-500" /> Annualized Returns
                   </h3>
                   <div className="rounded-xl overflow-hidden border border-slate-200">
-                    <table className="w-full text-sm">
-                      <thead>
-                        <tr className="bg-[#0B1B3E] text-white text-xs">
-                          <th className="text-left px-4 py-3 font-semibold">Period</th>
-                          <th className="text-right px-4 py-3 font-semibold">This Fund</th>
-                          <th className="text-right px-4 py-3 font-semibold">Benchmark</th>
-                          <th className="text-right px-4 py-3 font-semibold">Alpha</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {(Object.entries(returns) as [string, string][]).map(([period, val], i) => {
-                          const fundPct   = parseFloat(val);
-                          const benchPct  = Math.max(0, fundPct - pr(1, 4, 50 + i) - pd(50 + i));
-                          const alpha     = fundPct - benchPct;
-                          return (
-                            <tr key={period} className={`border-b border-slate-100 last:border-0 ${i % 2 === 0 ? 'bg-white' : 'bg-slate-50/60'}`}>
-                              <td className="px-4 py-3 font-semibold text-slate-700">{period}</td>
-                              <td className="px-4 py-3 text-right font-bold text-emerald-600">{val}</td>
-                              <td className="px-4 py-3 text-right text-slate-500">+{benchPct.toFixed(1)}%</td>
-                              <td className="px-4 py-3 text-right">
-                                <span className="text-xs font-bold text-emerald-500">+{alpha.toFixed(1)}%</span>
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="bg-[#0B1B3E] text-white text-xs">
+                            <th className="text-left px-4 py-3 font-semibold">Period</th>
+                            <th className="text-right px-4 py-3 font-semibold">This Fund</th>
+                            <th className="text-right px-4 py-3 font-semibold">Benchmark</th>
+                            <th className="text-right px-4 py-3 font-semibold">Alpha</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {(Object.entries(returns) as [string, string][]).map(([period, val], i) => {
+                            const fundPct   = parseFloat(val);
+                            const benchPct  = Math.max(0, fundPct - pr(1, 4, 50 + i) - pd(50 + i));
+                            const alpha     = fundPct - benchPct;
+                            return (
+                              <tr key={period} className={`border-b border-slate-100 last:border-0 ${i % 2 === 0 ? 'bg-white' : 'bg-slate-50/60'}`}>
+                                <td className="px-4 py-3 font-semibold text-slate-700">{period}</td>
+                                <td className="px-4 py-3 text-right font-bold text-emerald-600">{val}</td>
+                                <td className="px-4 py-3 text-right text-slate-500">+{benchPct.toFixed(1)}%</td>
+                                <td className="px-4 py-3 text-right">
+                                  <span className="text-xs font-bold text-emerald-500">+{alpha.toFixed(1)}%</span>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
                   </div>
                   <p className="text-[11px] text-slate-400 mt-2">* Returns over 1 year are CAGR. Past performance does not guarantee future returns.</p>
                 </section>
@@ -978,6 +991,7 @@ function FundDetailModal({ fund, onClose, onInvest }: { fund: any; onClose: () =
 
 // ─── Transaction Modal ────────────────────────────────────────────────────────
 function TransactionModal({ fund, userData, onClose }: { fund: any; userData?: any; onClose: () => void }) {
+  const dialogRef = useFocusTrap<HTMLDivElement>(true);
   const [step, setStep] = useState(1);
   const [type, setType] = useState('SIP');
   const [investorQuery, setInvestorQuery] = useState('');
@@ -1023,7 +1037,13 @@ function TransactionModal({ fund, userData, onClose }: { fund: any; userData?: a
   }, [debouncedInvestorQuery, userData]);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+    <div
+      ref={dialogRef}
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="transaction-modal-title"
+      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+    >
       <motion.div
         initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
         onClick={onClose}
@@ -1036,13 +1056,13 @@ function TransactionModal({ fund, userData, onClose }: { fund: any; userData?: a
         className="bg-white/95 backdrop-blur-xl w-full max-w-lg rounded-3xl shadow-xl overflow-hidden relative z-10 border border-white/20"
       >
         <div className="absolute top-4 right-4">
-          <button onClick={onClose} className="p-2 text-slate-400 hover:text-slate-600 bg-slate-100 rounded-full transition-colors">
-            <X className="w-5 h-5" />
+          <button onClick={onClose} aria-label="Close dialog" className="p-2 text-slate-400 hover:text-slate-600 bg-slate-100 rounded-full transition-colors">
+            <X className="w-5 h-5" aria-hidden="true" />
           </button>
         </div>
 
         <div className="p-8">
-          <h2 className="text-xl font-semibold mb-1 text-slate-800">New Transaction</h2>
+          <h2 id="transaction-modal-title" className="text-xl font-semibold mb-1 text-slate-800">New Transaction</h2>
           <p className="text-sm text-slate-500 mb-8">{fund.schemeName}</p>
 
           {/* Progress bar */}

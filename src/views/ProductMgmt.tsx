@@ -1,11 +1,16 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Search, Filter, Trash2, X, ChevronDown, Lock, Rocket, Eye, EyeOff, RefreshCw, AlertCircle } from 'lucide-react';
+import { Search, Filter, Trash2, X, ChevronDown, Lock, Rocket, Eye, EyeOff, RefreshCw, AlertCircle, Layers } from 'lucide-react';
 import { Product } from '../data/products';
 import { apiFetch } from '../config/api';
+<<<<<<< HEAD
 import Pagination from '../components/Pagination';
 import { getPageContent, getPageMeta } from '../utils/pagination';
 import { useDebounce } from '../hooks/useDebounce';
+=======
+import EmptyState from '../components/EmptyState';
+import { useFocusTrap } from '../hooks/useFocusTrap';
+>>>>>>> 9097ae05093f32c59233f39e83ef0a37300917e0
 
 // ─── Display helpers ──────────────────────────────────────────────────────────
 
@@ -371,6 +376,18 @@ export default function ProductMgmt({
 
         {/* Table */}
         <div className="overflow-auto">
+          {loadingProducts ? (
+            <div className="p-16 text-center text-slate-500">
+              <div className="animate-spin w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full mx-auto mb-4" />
+              Fetching fund schemes from Cybrilla…
+            </div>
+          ) : filtered.length === 0 ? (
+            <EmptyState
+              icon={Layers}
+              title="No products found"
+              subtitle="Try adjusting your filters"
+            />
+          ) : (
           <table className="w-full text-left">
             <thead className="bg-slate-50 text-[10px] uppercase tracking-wider text-slate-500 font-semibold sticky top-0 z-10">
               <tr>
@@ -385,13 +402,6 @@ export default function ProductMgmt({
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {filtered.length === 0 && (
-                <tr>
-                  <td colSpan={8} className="px-6 py-10 text-center text-sm text-slate-400">
-                    {loadingProducts ? 'Fetching fund schemes from Cybrilla...' : 'No products match your filters'}
-                  </td>
-                </tr>
-              )}
               {filtered.map(p => (
                 <tr
                   key={p.id}
@@ -444,6 +454,7 @@ export default function ProductMgmt({
               ))}
             </tbody>
           </table>
+          )}
         </div>
         <Pagination
           page={page}
@@ -507,6 +518,7 @@ function AddProductModal({
   onClose: () => void;
   onAdd:   (p: Omit<Product, 'id'>) => void;
 }) {
+  const dialogRef = useFocusTrap<HTMLDivElement>(true);
   const [assetClass,    setAssetClass]    = useState<'MF' | 'SIF'>('MF');
   const [name,          setName]          = useState('');
   const [amc,           setAmc]           = useState('');
@@ -538,19 +550,25 @@ function AddProductModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+    <div
+      ref={dialogRef}
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="add-product-title"
+      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+    >
       <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
         onClick={onClose} className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm" />
       <motion.div
         initial={{ opacity: 0, scale: 0.95, y: 20 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.95, y: 20 }}
         className="bg-white w-full max-w-lg rounded-3xl shadow-xl relative z-10 overflow-hidden max-h-[90vh] overflow-y-auto"
       >
-        <button onClick={onClose} className="absolute top-4 right-4 p-2 text-slate-400 hover:text-slate-600 bg-slate-100 rounded-full transition-colors z-10">
-          <X className="w-5 h-5" />
+        <button onClick={onClose} aria-label="Close dialog" className="absolute top-4 right-4 p-2 text-slate-400 hover:text-slate-600 bg-slate-100 rounded-full transition-colors z-10">
+          <X className="w-5 h-5" aria-hidden="true" />
         </button>
 
         <div className="p-8">
-          <h2 className="text-xl font-semibold text-slate-800 mb-1">Add New Product</h2>
+          <h2 id="add-product-title" className="text-xl font-semibold text-slate-800 mb-1">Add New Product</h2>
           <p className="text-sm text-slate-500 mb-6">New products immediately appear in the distributor catalog</p>
 
           <div className="space-y-5">

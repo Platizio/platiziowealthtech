@@ -54,8 +54,8 @@ const statusColors: Record<string, string> = {
 
 export default function AdminOverview() {
   return (
-    <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="p-8 space-y-6">
-      <div className="flex justify-between items-end">
+    <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="p-4 md:p-8 space-y-6">
+      <div className="flex flex-wrap justify-between items-end gap-3">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight text-slate-800">Master Overview</h1>
           <p className="text-slate-500 text-sm mt-1">Full network view across all distributors and investors</p>
@@ -68,7 +68,7 @@ export default function AdminOverview() {
       </div>
 
       {/* KPI Cards */}
-      <div className="grid grid-cols-4 gap-6">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-6">
         {[
           { label: 'Total AUM',         value: '₹412 Cr',  trend: '↑ 9.8% this month',    trendColor: 'text-green-500',  icon: <TrendingUp   className="w-5 h-5 text-green-400"  /> },
           { label: 'Total Investors',   value: '1,240',    trend: '+18 this month',        trendColor: 'text-blue-500',   icon: <Users        className="w-5 h-5 text-blue-400"   /> },
@@ -161,32 +161,34 @@ export default function AdminOverview() {
               View All <ArrowUpRight className="w-3 h-3" />
             </button>
           </div>
-          <table className="w-full text-left">
-            <thead className="bg-slate-50 text-[10px] uppercase text-slate-500 font-semibold tracking-wider">
-              <tr>
-                <th className="px-5 py-3">Investor</th>
-                <th className="px-5 py-3">Distributor</th>
-                <th className="px-5 py-3">Type / Amount</th>
-                <th className="px-5 py-3 text-right">Status</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {recentTxns.map((t, i) => (
-                <tr key={i} className="hover:bg-slate-50 transition-colors cursor-pointer">
-                  <td className="px-5 py-3.5 text-sm font-semibold text-slate-800">{t.investor}</td>
-                  <td className="px-5 py-3.5 text-xs text-slate-500">{t.distributor}</td>
-                  <td className="px-5 py-3.5">
-                    <div className="text-sm font-mono font-medium text-slate-700">{t.amount}</div>
-                    <div className="text-[10px] text-slate-400 mt-0.5">{t.type}</div>
-                  </td>
-                  <td className="px-5 py-3.5 text-right">
-                    <span className={`text-xs font-semibold ${statusColors[t.status] ?? 'text-slate-500'}`}>{t.status}</span>
-                    <div className="text-[10px] text-slate-400 mt-0.5">{t.time}</div>
-                  </td>
+          <div className="overflow-x-auto">
+            <table className="w-full text-left">
+              <thead className="bg-slate-50 text-[10px] uppercase text-slate-500 font-semibold tracking-wider">
+                <tr>
+                  <th className="px-5 py-3">Investor</th>
+                  <th className="px-5 py-3">Distributor</th>
+                  <th className="px-5 py-3">Type / Amount</th>
+                  <th className="px-5 py-3 text-right">Status</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {recentTxns.map((t, i) => (
+                  <tr key={i} className="hover:bg-slate-50 transition-colors cursor-pointer">
+                    <td className="px-5 py-3.5 text-sm font-semibold text-slate-800">{t.investor}</td>
+                    <td className="px-5 py-3.5 text-xs text-slate-500">{t.distributor}</td>
+                    <td className="px-5 py-3.5">
+                      <div className="text-sm font-mono font-medium text-slate-700">{t.amount}</div>
+                      <div className="text-[10px] text-slate-400 mt-0.5">{t.type}</div>
+                    </td>
+                    <td className="px-5 py-3.5 text-right">
+                      <span className={`text-xs font-semibold ${statusColors[t.status] ?? 'text-slate-500'}`}>{t.status}</span>
+                      <div className="text-[10px] text-slate-400 mt-0.5">{t.time}</div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
 
         {/* Top Distributors */}

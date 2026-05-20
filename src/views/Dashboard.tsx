@@ -14,6 +14,21 @@ interface DashboardProps {
   userData?: any;
 }
 
+/* Mirrors backend OnboardingCardDto / OnboardingPipelineDto. */
+interface OnboardingCardItem {
+  id: string;
+  name: string;
+  detail: string;
+  days: string;
+  status: string;
+}
+
+interface OnboardingPipeline {
+  kycPending: OnboardingCardItem[];
+  bankPending: OnboardingCardItem[];
+  readyToInvest: OnboardingCardItem[];
+}
+
 export default function Dashboard({ onNavigate, userData }: DashboardProps) {
   const [metrics, setMetrics] = React.useState({
     totalAum: 0,
@@ -27,7 +42,11 @@ export default function Dashboard({ onNavigate, userData }: DashboardProps) {
     leadSub: [] as any[],
     donutData: [] as any[],
     recentActivity: [] as any[],
-    onboarding: { kycPending: [] as any[], bankPending: [] as any[], readyToInvest: [] as any[] }
+    onboarding: {
+      kycPending: [] as OnboardingCardItem[],
+      bankPending: [] as OnboardingCardItem[],
+      readyToInvest: [] as OnboardingCardItem[],
+    } as OnboardingPipeline
   });
 
   React.useEffect(() => {
@@ -44,7 +63,8 @@ export default function Dashboard({ onNavigate, userData }: DashboardProps) {
           apiFetch(`/dashboard/distributor/${userData.id}/onboarding`, { headers })
         ]);
 
-        let orders: any[] = [], investors: any[] = [], schemes: any[] = [], leads: any[] = [], onboarding: any = { kycPending: [], bankPending: [], readyToInvest: [] };
+        let orders: any[] = [], investors: any[] = [], schemes: any[] = [], leads: any[] = [];
+        let onboarding: OnboardingPipeline = { kycPending: [], bankPending: [], readyToInvest: [] };
         if (ordersRes.ok) orders = await ordersRes.json();
         if (investorsRes.ok) investors = await investorsRes.json();
         if (schemesRes.ok) schemes = await schemesRes.json();
@@ -57,9 +77,17 @@ export default function Dashboard({ onNavigate, userData }: DashboardProps) {
         let failedSips = 0;
         let todayOrders = 0;
 
+        // All-time order-status tallies (consumed by Card 4 "Txn Failed").
         let successfulOrders = 0;
         let pendingOrders = 0;
         let failedOrders = 0;
+
+        // F-17: separate TODAY-scoped tallies for the "Today's Transactions"
+        // donut. The donut's title + centre count are today-only, so its
+        // segments must be today-only too, otherwise centre != Σ(segments).
+        let todaySuccessful = 0;
+        let todayPending = 0;
+        let todayFailed = 0;
 
         let mfAum = 0;
         let sifAum = 0;
@@ -75,15 +103,11 @@ export default function Dashboard({ onNavigate, userData }: DashboardProps) {
           if (o.orderStatus === 'COMPLETED') {
             totalAum += o.amount || 0;
             const s = schemeMap.get(o.productSchemeId);
-            console.log('Order:', o);
-            console.log('Matched Scheme:', s);
-            
+
             const rawCat = (o.productCategory || o.category || o.product_category || s?.productCategory || s?.category || s?.product_category || s?.assetClass || 'OTHER').toString().toUpperCase();
-            console.log('Determined Raw Category:', rawCat);
 
             let cat = 'SIF'; // Default to SIF instead of OTHER
             if (rawCat.includes('MF') || rawCat.includes('MUTUAL')) cat = 'MF';
-            console.log('Final Category Bucket:', cat);
 
             if (cat === 'MF') mfAum += o.amount || 0;
             else sifAum += o.amount || 0; // Everything else goes to SIF
@@ -96,6 +120,12 @@ export default function Dashboard({ onNavigate, userData }: DashboardProps) {
           }
           if (new Date(o.createdAt || Date.now()).toDateString() === today) {
             todayOrders++;
+            // Bucket within today's orders so the donut segments sum exactly
+            // to todayOrders (the centre label). Same exhaustive
+            // success/failed/else partition used for the all-time tallies.
+            if (o.orderStatus === 'COMPLETED' || o.orderStatus === 'SUCCESSFUL') todaySuccessful++;
+            else if (o.orderStatus === 'FAILED') todayFailed++;
+            else todayPending++;
           }
 
           if (o.orderStatus === 'COMPLETED' || o.orderStatus === 'SUCCESSFUL') successfulOrders++;
@@ -168,10 +198,12 @@ export default function Dashboard({ onNavigate, userData }: DashboardProps) {
             { label: 'In Progress', value: inProgressLeads, color: 'bg-amber-400' },
             { label: 'Converted', value: convertedLeads, color: 'bg-green-400' },
           ],
+          // F-17: today-scoped so the donut is internally consistent with its
+          // "Today's Transactions" title and the centre {todayOrders} count.
           donutData: [
-            { name: 'Successful', value: successfulOrders, color: '#22c55e' },
-            { name: 'Pending', value: pendingOrders, color: '#eab308' },
-            { name: 'Failed', value: failedOrders, color: '#ef4444' },
+            { name: 'Successful', value: todaySuccessful, color: '#22c55e' },
+            { name: 'Pending', value: todayPending, color: '#eab308' },
+            { name: 'Failed', value: todayFailed, color: '#ef4444' },
           ],
           recentActivity,
           onboarding
@@ -312,17 +344,17 @@ export default function Dashboard({ onNavigate, userData }: DashboardProps) {
           <div className="flex-1 p-5 overflow-x-auto">
             <div className="flex gap-4 min-w-max">
               <KanbanColumn title="KYC Pending" count={metrics.onboarding.kycPending.length} accent="border-t-amber-400">
-                {metrics.onboarding.kycPending.map((item: any) => (
+                {metrics.onboarding.kycPending.map((item) => (
                   <KanbanCard key={item.id} name={item.name} detail={item.detail} days={item.days} status={item.status} />
                 ))}
               </KanbanColumn>
               <KanbanColumn title="Bank Pending" count={metrics.onboarding.bankPending.length} accent="border-t-blue-400">
-                {metrics.onboarding.bankPending.map((item: any) => (
+                {metrics.onboarding.bankPending.map((item) => (
                   <KanbanCard key={item.id} name={item.name} detail={item.detail} days={item.days} status={item.status} />
                 ))}
               </KanbanColumn>
               <KanbanColumn title="Ready to Invest" count={metrics.onboarding.readyToInvest.length} accent="border-t-green-400">
-                {metrics.onboarding.readyToInvest.map((item: any) => (
+                {metrics.onboarding.readyToInvest.map((item) => (
                   <KanbanCard key={item.id} name={item.name} detail={item.detail} days={item.days} status={item.status} />
                 ))}
               </KanbanColumn>

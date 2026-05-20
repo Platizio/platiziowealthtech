@@ -1,8 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { motion } from 'motion/react';
-import { CheckCircle2, XCircle, AlertCircle, Clock, RefreshCw } from 'lucide-react';
+import { CheckCircle2, XCircle, AlertCircle, Clock, RefreshCw, Bell } from 'lucide-react';
 import { apiFetch } from '../config/api';
+<<<<<<< HEAD
 import { formatDateTime } from '../utils/formatDate';
+=======
+import EmptyState from '../components/EmptyState';
+>>>>>>> 9097ae05093f32c59233f39e83ef0a37300917e0
 
 type NotifType = 'success' | 'error' | 'warning' | 'info';
 
@@ -172,12 +176,11 @@ export default function Notifications({ userData }: { userData?: any }) {
         {loading ? (
            <div className="py-20 text-center text-slate-500">Loading notifications...</div>
         ) : filtered.length === 0 ? (
-          <div className="py-20 text-center">
-            <div className="w-16 h-16 mx-auto mb-4 bg-slate-100 rounded-full flex items-center justify-center">
-              <CheckCircle2 className="w-8 h-8 text-slate-300" />
-            </div>
-            <p className="text-slate-500 font-medium">No notifications in this category</p>
-          </div>
+          <EmptyState
+            icon={Bell}
+            title="All caught up"
+            subtitle="No new notifications"
+          />
         ) : (
           filtered.map(n => {
             const cfg = typeConfig[n.type] || typeConfig['info'];

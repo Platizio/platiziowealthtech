@@ -1,10 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Search, Filter, ChevronLeft, CheckCircle2, Clock, XCircle, AlertCircle, RefreshCw, ArrowDown, ArrowUp, ArrowUpDown } from 'lucide-react';
+import { Search, Filter, ChevronLeft, CheckCircle2, Clock, XCircle, AlertCircle, RefreshCw, ArrowDown, ArrowUp, ArrowUpDown, Inbox } from 'lucide-react';
 import { apiFetch } from '../config/api';
+<<<<<<< HEAD
 import Pagination from '../components/Pagination';
 import { getPageContent, getPageMeta } from '../utils/pagination';
 import { formatDateTime } from '../utils/formatDate';
+=======
+import EmptyState from '../components/EmptyState';
+>>>>>>> 9097ae05093f32c59233f39e83ef0a37300917e0
 
 type StatusKey = 'Successful' | 'Processing' | 'Submitted' | 'Payment Pending' | 'Pending Investor Action' | 'Failed' | 'Retry Available' | 'Draft' | 'Created' | 'SUCCESSFUL' | 'COMPLETED' | 'FAILED' | 'PENDING_PAYMENT' | 'DRAFT';
 
@@ -370,7 +374,11 @@ export default function Transactions({ userData }: { userData?: any }) {
           {loading ? (
             <div className="p-8 text-center text-slate-500">Loading transactions...</div>
           ) : filtered.length === 0 ? (
-            <div className="p-8 text-center text-slate-500">No transactions found.</div>
+            <EmptyState
+              icon={Inbox}
+              title="No transactions found"
+              subtitle="Try adjusting your filters or date range"
+            />
           ) : (
             <table className="w-full text-left">
               <thead className="bg-slate-50 text-[10px] uppercase tracking-wider text-slate-500 sticky top-0 z-10 font-semibold">

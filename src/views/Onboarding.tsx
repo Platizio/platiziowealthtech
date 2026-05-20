@@ -693,8 +693,9 @@ export default function Onboarding({ onComplete, onBack }: { onComplete: () => v
                             className={CLS_INPUT + ' pr-11' + (errors.password ? ' border-red-300 ring-1 ring-red-200' : '')}
                           />
                           <button type="button" onClick={() => setShowPwd(p => !p)}
+                            aria-label={showPwd ? 'Hide password' : 'Show password'}
                             className="absolute right-3 top-2.5 text-slate-400 hover:text-slate-600 transition-colors">
-                            {showPwd ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                            {showPwd ? <EyeOff className="w-4 h-4" aria-hidden="true" /> : <Eye className="w-4 h-4" aria-hidden="true" />}
                           </button>
                         </div>
                         {errors.password
@@ -712,8 +713,9 @@ export default function Onboarding({ onComplete, onBack }: { onComplete: () => v
                             className={CLS_INPUT + ' pr-11' + (errors.confirmPassword ? ' border-red-300 ring-1 ring-red-200' : '')}
                           />
                           <button type="button" onClick={() => setShowConfPwd(p => !p)}
+                            aria-label={showConfPwd ? 'Hide password' : 'Show password'}
                             className="absolute right-3 top-2.5 text-slate-400 hover:text-slate-600 transition-colors">
-                            {showConfPwd ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                            {showConfPwd ? <EyeOff className="w-4 h-4" aria-hidden="true" /> : <Eye className="w-4 h-4" aria-hidden="true" />}
                           </button>
                         </div>
                         {errors.confirmPassword

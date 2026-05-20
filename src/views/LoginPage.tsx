@@ -545,8 +545,9 @@ export default function LoginPage({
                         placeholder="Enter your password"
                         className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 pr-11 text-sm focus:ring-2 focus:ring-blue-100 focus:border-blue-500 outline-none transition-all" />
                       <button type="button" onClick={() => setShowPwd(p => !p)}
+                        aria-label={showPwd ? 'Hide password' : 'Show password'}
                         className="absolute right-3 top-3 text-slate-400 hover:text-slate-600 transition-colors">
-                        {showPwd ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+                        {showPwd ? <EyeOff className="w-5 h-5" aria-hidden="true" /> : <Eye className="w-5 h-5" aria-hidden="true" />}
                       </button>
                     </div>
                   </div>
