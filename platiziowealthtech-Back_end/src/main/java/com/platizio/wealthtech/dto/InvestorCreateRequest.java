@@ -3,6 +3,8 @@ package com.platizio.wealthtech.dto;
 import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Pattern;
+import jakarta.validation.constraints.Size;
 import java.time.LocalDate;
 import java.util.UUID;
 
@@ -11,7 +13,10 @@ public record InvestorCreateRequest(
         @NotBlank String fullName,
         @NotBlank String mobileNumber,
         @NotBlank @Email String email,
-        @NotBlank String pan,
+        @NotBlank
+        @Size(min = 10, max = 10, message = "PAN must be exactly 10 characters")
+        @Pattern(regexp = "^[A-Z]{5}[0-9]{4}[A-Z]$", message = "Invalid PAN format. Expected format: AAAAA9999A")
+        String pan,
         LocalDate dateOfBirth,
         String addressLine1,
         String addressLine2,

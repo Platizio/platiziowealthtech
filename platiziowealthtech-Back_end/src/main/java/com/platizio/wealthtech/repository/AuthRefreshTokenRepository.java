@@ -6,5 +6,5 @@ import java.util.UUID;
 import org.springframework.data.jpa.repository.JpaRepository;
 
 public interface AuthRefreshTokenRepository extends JpaRepository<AuthRefreshToken, UUID> {
-    Optional<AuthRefreshToken> findByToken(UUID token);
+    Optional<AuthRefreshToken> findByTokenHash(String tokenHash);
 }

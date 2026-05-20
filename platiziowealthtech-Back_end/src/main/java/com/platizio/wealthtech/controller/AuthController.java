@@ -62,9 +62,10 @@ public class AuthController {
     public AuthResponse refresh(HttpServletRequest request, HttpServletResponse response) {
         String refreshToken = authCookieService.readRefreshToken(request)
                 .orElseThrow(() -> new BadCredentialsException("Refresh token is required"));
-        AuthResponse authResponse = authService.refreshAccessToken(refreshToken);
-        authCookieService.writeAccessToken(response, authResponse.token());
-        return authResponse;
+        AuthService.RefreshResult refreshResult = authService.refresh(refreshToken);
+        authCookieService.writeAccessToken(response, refreshResult.authResponse().token());
+        authCookieService.writeRefreshToken(response, refreshResult.refreshToken());
+        return refreshResult.authResponse();
     }
 
     @GetMapping("/me")

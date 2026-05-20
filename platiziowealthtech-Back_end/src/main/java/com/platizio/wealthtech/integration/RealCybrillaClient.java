@@ -127,6 +127,20 @@ public class RealCybrillaClient implements CybrillaClient {
         return "cyb-red-" + UUID.randomUUID();
     }
 
+    @Override
+    public void cancelOrder(TransactionOrder order) {
+        if (!StringUtils.hasText(order.getExternalOrderId())) {
+            logger.warn("cybrilla_workflow operation='cancel_order' status='skipped' reason='missing_external_order_id' local_order_id='{}'", order.getId());
+            return;
+        }
+
+        executeWithTenantTokenRetry("cancel order", () -> {
+            delete("/v2/orders/" + order.getExternalOrderId());
+            logger.info("cybrilla_workflow operation='cancel_order' status='completed' local_order_id='{}' external_order_id='{}'", order.getId(), order.getExternalOrderId());
+            return null;
+        });
+    }
+
     private void createAddressIfPresent(String profileId, Investor investor) {
         if (!StringUtils.hasText(investor.getAddressLine1()) || !StringUtils.hasText(investor.getPostalCode())) {
             return;
@@ -172,6 +186,15 @@ public class RealCybrillaClient implements CybrillaClient {
                 .body(payload)
                 .retrieve()
                 .body(JsonNode.class);
+    }
+
+    private void delete(String path) {
+        logger.info("cybrilla_api direction='backend_to_finprim' method='DELETE' path='{}'", path);
+        restClient.delete()
+                .uri(path)
+                .headers(this::setTenantAuthHeaders)
+                .retrieve()
+                .toBodilessEntity();
     }
 
     private JsonNode getFundSchemesPage(int page, int size) {

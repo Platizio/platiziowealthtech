@@ -11,6 +11,7 @@ import com.platizio.wealthtech.dto.*;
 import com.platizio.wealthtech.repository.InvestorRepository;
 import com.platizio.wealthtech.repository.TransactionOrderRepository;
 import com.platizio.wealthtech.repository.ProductSchemeRepository;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
@@ -28,6 +29,34 @@ import java.util.stream.IntStream;
 @Service
 public class DashboardService {
 
+    private static final Map<OrderStatus, String> SIP_STATUS_LABEL = Map.of(
+            OrderStatus.ACTIVE, "Active SIPs",
+            OrderStatus.PROCESSING, "Active SIPs",
+            OrderStatus.PAUSED, "Paused SIPs",
+            OrderStatus.COMPLETED, "Completed SIPs",
+            OrderStatus.FAILED, "Failed SIPs"
+    );
+    private static final Map<OrderStatus, OrderStatus> SIP_STATUS_GROUP = Map.ofEntries(
+            Map.entry(OrderStatus.ACTIVE, OrderStatus.ACTIVE),
+            Map.entry(OrderStatus.PROCESSING, OrderStatus.PROCESSING),
+            Map.entry(OrderStatus.PAUSED, OrderStatus.PAUSED),
+            Map.entry(OrderStatus.COMPLETED, OrderStatus.COMPLETED),
+            Map.entry(OrderStatus.FAILED, OrderStatus.FAILED),
+            Map.entry(OrderStatus.SUCCESSFUL, OrderStatus.ACTIVE),
+            Map.entry(OrderStatus.CREATED, OrderStatus.PROCESSING),
+            Map.entry(OrderStatus.PENDING_INVESTOR_ACTION, OrderStatus.PROCESSING),
+            Map.entry(OrderStatus.PAYMENT_PENDING, OrderStatus.PROCESSING),
+            Map.entry(OrderStatus.SUBMITTED, OrderStatus.PROCESSING),
+            Map.entry(OrderStatus.RETRY_AVAILABLE, OrderStatus.PROCESSING),
+            Map.entry(OrderStatus.DRAFT, OrderStatus.PAUSED)
+    );
+    private static final List<String> SIP_STATUS_LABEL_ORDER = List.of(
+            "Active SIPs",
+            "Paused SIPs",
+            "Completed SIPs",
+            "Failed SIPs"
+    );
+
     private final InvestorRepository investorRepository;
     private final TransactionOrderRepository orderRepository;
     private final ProductSchemeRepository schemeRepository;
@@ -39,10 +68,12 @@ public class DashboardService {
     }
 
     public SipDashboardDto getSipDashboard(UUID distributorId) {
-        List<TransactionOrder> orders = orderRepository.findByDistributorId(distributorId);
-        List<TransactionOrder> sipOrders = orders.stream()
-                .filter(o -> o.getTransactionType() == TransactionType.SIP)
-                .collect(Collectors.toList());
+        List<TransactionOrder> sipOrders = orderRepository
+                .findByDistributorIdAndTransactionType(
+                        distributorId,
+                        TransactionType.SIP,
+                        PageRequest.of(0, 50))
+                .getContent();
 
         Map<UUID, Investor> investorMap = investorRepository.findByDistributorId(distributorId).stream()
                 .collect(Collectors.toMap(Investor::getId, i -> i));
@@ -59,24 +90,7 @@ public class DashboardService {
         List<SipItemDto> sips = sipOrders.stream().map(o -> {
             Investor inv = investorMap.get(o.getInvestorId());
             ProductScheme scheme = schemeMap.get(o.getProductSchemeId());
-            String status;
-            switch (o.getOrderStatus()) {
-                case COMPLETED:
-                case SUCCESSFUL:
-                case PENDING_INVESTOR_ACTION:
-                case CREATED:
-                    status = "Active";
-                    break;
-                case FAILED:
-                    status = "Failed";
-                    break;
-                case DRAFT:
-                    status = "Paused";
-                    break;
-                default: // PAYMENT_PENDING, SUBMITTED, PROCESSING, RETRY_AVAILABLE
-                    status = "Processing";
-                    break;
-            }
+            String status = sipStatusLabel(o.getOrderStatus());
             
             // Apply robust bucketing logic
             String rawCat = "OTHER";
@@ -99,6 +113,7 @@ public class DashboardService {
                     category
             );
         }).collect(Collectors.toList());
+        Map<String, Long> statusCounts = sipStatusCounts(distributorId);
 
         // ── Real SIP trend: aggregate transaction_orders by createdAt month ──────
         // Build a rolling 6-month window anchored to today (e.g. Jan–Jun when run in June)
@@ -140,7 +155,7 @@ public class DashboardService {
                         countByMonth.getOrDefault(ym, 0L).intValue()))
                 .collect(Collectors.toList());
 
-        return new SipDashboardDto(trend, sips);
+        return new SipDashboardDto(trend, sips, statusCounts);
     }
 
     public List<ActionItemDto> getActionCenter(UUID distributorId) {
@@ -192,5 +207,19 @@ public class DashboardService {
         }
 
         return new OnboardingPipelineDto(kycPending, bankPending, ready);
+    }
+
+    private Map<String, Long> sipStatusCounts(UUID distributorId) {
+        Map<String, Long> counts = new LinkedHashMap<>();
+        SIP_STATUS_LABEL_ORDER.forEach(label -> counts.put(label, 0L));
+        orderRepository
+                .countByDistributorIdAndTransactionTypeGroupedByOrderStatus(distributorId, TransactionType.SIP)
+                .forEach(row -> counts.merge(sipStatusLabel(row.getOrderStatus()), row.getTotal(), Long::sum));
+        return counts;
+    }
+
+    private String sipStatusLabel(OrderStatus orderStatus) {
+        OrderStatus groupedStatus = SIP_STATUS_GROUP.getOrDefault(orderStatus, OrderStatus.PROCESSING);
+        return SIP_STATUS_LABEL.get(groupedStatus);
     }
 }

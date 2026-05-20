@@ -8,11 +8,11 @@ import java.time.OffsetDateTime;
 import java.util.UUID;
 
 @Entity
-@Table(name = "auth_refresh_tokens")
+@Table(name = "refresh_tokens")
 public class AuthRefreshToken extends BaseEntity {
 
-    @Column(nullable = false, unique = true)
-    private UUID token;
+    @Column(nullable = false, unique = true, length = 64)
+    private String tokenHash;
 
     @Column(nullable = false)
     private UUID distributorId;
@@ -20,12 +20,17 @@ public class AuthRefreshToken extends BaseEntity {
     @Column(nullable = false)
     private OffsetDateTime expiresAt;
 
-    public UUID getToken() {
-        return token;
+    @Column(nullable = false)
+    private Boolean revoked = Boolean.FALSE;
+
+    private OffsetDateTime revokedAt;
+
+    public String getTokenHash() {
+        return tokenHash;
     }
 
-    public void setToken(UUID token) {
-        this.token = token;
+    public void setTokenHash(String tokenHash) {
+        this.tokenHash = tokenHash;
     }
 
     public UUID getDistributorId() {
@@ -42,5 +47,21 @@ public class AuthRefreshToken extends BaseEntity {
 
     public void setExpiresAt(OffsetDateTime expiresAt) {
         this.expiresAt = expiresAt;
+    }
+
+    public Boolean getRevoked() {
+        return revoked;
+    }
+
+    public void setRevoked(Boolean revoked) {
+        this.revoked = revoked;
+    }
+
+    public OffsetDateTime getRevokedAt() {
+        return revokedAt;
+    }
+
+    public void setRevokedAt(OffsetDateTime revokedAt) {
+        this.revokedAt = revokedAt;
     }
 }

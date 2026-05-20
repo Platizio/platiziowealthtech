@@ -66,7 +66,7 @@ external-auth:
 
 jwt:
   secret: ${JWT_SECRET:local-dev-jwt-secret-32-bytes-minimum-not-for-prod}
-  expiration-ms: 1800000  # 30 minutes
+  expiration-ms: 900000  # 15 minutes
 
 app:
   cors:
@@ -75,5 +75,5 @@ app:
     cookie-name: ${AUTH_COOKIE_NAME:access_token}
     refresh-cookie-name: ${AUTH_REFRESH_COOKIE_NAME:refresh_token}
     refresh-token-expiration-ms: ${AUTH_REFRESH_TOKEN_EXPIRATION_MS:604800000}  # 7 days
-    cookie-secure: ${AUTH_COOKIE_SECURE:true}
+    cookie-secure: ${AUTH_COOKIE_SECURE:false}
     cookie-same-site: ${AUTH_COOKIE_SAME_SITE:Lax}

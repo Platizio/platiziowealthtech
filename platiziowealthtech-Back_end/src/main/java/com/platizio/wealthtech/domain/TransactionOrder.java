@@ -3,6 +3,7 @@ package com.platizio.wealthtech.domain;
 import com.platizio.wealthtech.common.BaseEntity;
 import jakarta.persistence.*;
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.UUID;
 import org.hibernate.annotations.SQLRestriction;
@@ -39,6 +40,9 @@ public class TransactionOrder extends BaseEntity {
     private String externalOrderId;
     private String failureReason;
     private String investorActionUrl;
+    private String sipFrequency;
+    private LocalDate sipStartDate;
+    private Integer sipInstalments;
     @Column(nullable = false)
     private Boolean isDeleted = Boolean.FALSE;
     private LocalDateTime deletedAt;
@@ -67,6 +71,12 @@ public class TransactionOrder extends BaseEntity {
     public void setFailureReason(String failureReason) { this.failureReason = failureReason; }
     public String getInvestorActionUrl() { return investorActionUrl; }
     public void setInvestorActionUrl(String investorActionUrl) { this.investorActionUrl = investorActionUrl; }
+    public String getSipFrequency() { return sipFrequency; }
+    public void setSipFrequency(String sipFrequency) { this.sipFrequency = sipFrequency; }
+    public LocalDate getSipStartDate() { return sipStartDate; }
+    public void setSipStartDate(LocalDate sipStartDate) { this.sipStartDate = sipStartDate; }
+    public Integer getSipInstalments() { return sipInstalments; }
+    public void setSipInstalments(Integer sipInstalments) { this.sipInstalments = sipInstalments; }
 
     public ProductCategory getProductCategory() { return productCategory; }
     public void setProductCategory(ProductCategory productCategory) { this.productCategory = productCategory; }

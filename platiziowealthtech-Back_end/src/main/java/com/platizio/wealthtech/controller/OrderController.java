@@ -11,6 +11,8 @@ import com.platizio.wealthtech.service.OrderService;
 import jakarta.validation.Valid;
 import java.util.List;
 import java.util.UUID;
+import org.springframework.data.domain.Page;
+import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -41,6 +43,21 @@ public class OrderController {
             @AuthenticationPrincipal AuthenticatedDistributorPrincipal principal
     ) {
         return orderService.createOrders(request, authenticatedDistributorId(principal));
+    }
+
+    @GetMapping
+    public Page<TransactionOrder> listOrders(
+            @RequestParam(required = false) String status,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) java.time.LocalDate from,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) java.time.LocalDate to,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size,
+            @RequestParam(defaultValue = "createdAt") String sortBy,
+            @RequestParam(defaultValue = "DESC") String direction,
+            Authentication auth
+    ) {
+        JwtAuthPrincipal principal = actorPrincipal(auth);
+        return orderService.listOrders(principal.getDistributorId(), principal.getRole(), status, from, to, page, size, sortBy, direction);
     }
 
     @GetMapping("/{orderId}")
@@ -79,7 +96,6 @@ public class OrderController {
         return orderService.createRedemption(orderId, actorId(auth));
     }
 
-    @PreAuthorize("hasRole('ADMIN')")
     @DeleteMapping("/{orderId}")
     public void deleteOrder(@PathVariable UUID orderId, Authentication auth) {
         orderService.deleteOrder(orderId, actorId(auth));
@@ -93,9 +109,13 @@ public class OrderController {
     }
 
     private UUID actorId(Authentication auth) {
+        return actorPrincipal(auth).getDistributorId();
+    }
+
+    private JwtAuthPrincipal actorPrincipal(Authentication auth) {
         if (auth == null || !(auth.getPrincipal() instanceof JwtAuthPrincipal)) {
             throw new AccessDeniedException("Authenticated distributor principal is required");
         }
-        return ((JwtAuthPrincipal) auth.getPrincipal()).getDistributorId();
+        return (JwtAuthPrincipal) auth.getPrincipal();
     }
 }

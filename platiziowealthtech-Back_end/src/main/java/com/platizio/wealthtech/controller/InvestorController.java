@@ -17,6 +17,7 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import java.util.List;
 import java.util.UUID;
+import org.springframework.data.domain.Page;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -33,13 +34,17 @@ public class InvestorController {
         this.investorService = investorService;
     }
 
-    @Operation(summary = "List all investors", description = "Returns a complete list of all investors in the system. Requires ADMIN role.")
+    @Operation(summary = "List investors", description = "Returns paginated investors visible to the authenticated distributor.")
     @ApiResponse(responseCode = "200", description = "List of investors", 
                  content = @Content(array = @ArraySchema(schema = @Schema(implementation = Investor.class))))
-    @PreAuthorize("hasRole('ADMIN')")
     @GetMapping
-    public List<Investor> listAll() {
-        return investorService.listAll();
+    public Page<Investor> listAll(
+            @RequestParam(required = false) UUID distributorId,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size,
+            Authentication auth
+    ) {
+        return investorService.listVisibleToRequesterPage(actorId(auth), distributorId, page, size);
     }
 
     @Operation(summary = "Create a new investor", description = "Registers a new investor in the system with DRAFT status.")
@@ -62,20 +67,20 @@ public class InvestorController {
     public List<Investor> search(
             @RequestParam String query,
             @RequestParam(required = false) UUID distributorId,
-            @RequestParam(required = false) UUID requesterId,
-            @RequestParam(defaultValue = "10") int limit
+            @RequestParam(defaultValue = "10") int limit,
+            Authentication auth
     ) {
-        return investorService.search(query, distributorId, requesterId, limit);
+        return investorService.search(query, distributorId, actorId(auth), limit);
     }
 
     @GetMapping("/search/transaction-eligible")
     public List<Investor> searchTransactionEligible(
             @RequestParam String query,
             @RequestParam(required = false) UUID distributorId,
-            @RequestParam(required = false) UUID requesterId,
-            @RequestParam(defaultValue = "10") int limit
+            @RequestParam(defaultValue = "10") int limit,
+            Authentication auth
     ) {
-        return investorService.searchEligibleForTransactions(query, distributorId, requesterId, limit);
+        return investorService.searchEligibleForTransactions(query, distributorId, actorId(auth), limit);
     }
 
     @GetMapping("/by-distributor/{distributorId}")

@@ -82,4 +82,9 @@ public class MockCybrillaClient implements CybrillaClient {
     public String createRedemption(TransactionOrder order) {
         return "cyb-red-" + UUID.randomUUID();
     }
+
+    @Override
+    public void cancelOrder(TransactionOrder order) {
+        logger.warn("cybrilla_client mode='mock' operation='cancel_order' local_order_id='{}' external_order_id='{}'", order.getId(), order.getExternalOrderId());
+    }
 }

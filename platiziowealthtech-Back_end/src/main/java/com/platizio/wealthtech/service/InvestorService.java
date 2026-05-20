@@ -1,6 +1,7 @@
 package com.platizio.wealthtech.service;
 
 import com.platizio.wealthtech.domain.*;
+import com.platizio.wealthtech.common.ConflictException;
 import com.platizio.wealthtech.dto.InvestorBankRequest;
 import com.platizio.wealthtech.dto.InvestorCreateRequest;
 import com.platizio.wealthtech.dto.InvestorUpdateRequest;
@@ -11,7 +12,10 @@ import jakarta.persistence.EntityNotFoundException;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.UUID;
+import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -44,6 +48,45 @@ public class InvestorService {
 
     public List<Investor> listAll() {
         return investorRepository.findAll();
+    }
+
+    public Page<Investor> listVisibleToRequesterPage(UUID requesterId, UUID distributorId, int page, int size) {
+        Distributor requester = distributorService.getDistributor(requesterId);
+        PageRequest pageRequest = PageRequest.of(
+                Math.max(page, 0),
+                Math.min(Math.max(size, 1), 100),
+                Sort.by(Sort.Direction.ASC, "fullName")
+        );
+
+        if (requester.getRole() == DistributorRole.ADMIN) {
+            return distributorId == null
+                    ? investorRepository.findAll(pageRequest)
+                    : investorRepository.findByDistributorId(distributorId, pageRequest);
+        }
+
+        if (requester.getRole() == DistributorRole.MASTER_DISTRIBUTOR) {
+            if (distributorId != null) {
+                Distributor targetDistributor = distributorService.getDistributor(distributorId);
+                if (!requester.getId().equals(distributorId) && !requester.getId().equals(targetDistributor.getMasterDistributorId())) {
+                    throw new AccessDeniedException("Requester cannot fetch investors for this distributor");
+                }
+                return investorRepository.findByDistributorId(distributorId, pageRequest);
+            }
+
+            List<UUID> distributorIds = distributorService.findSubDistributors(requesterId).stream()
+                    .map(Distributor::getId)
+                    .toList();
+            distributorIds = new java.util.ArrayList<>(distributorIds);
+            distributorIds.add(requester.getId());
+            return distributorIds.isEmpty()
+                    ? Page.empty(pageRequest)
+                    : investorRepository.findByDistributorIdIn(distributorIds, pageRequest);
+        }
+
+        if (distributorId != null && !requester.getId().equals(distributorId)) {
+            throw new AccessDeniedException("Requester cannot fetch investors for this distributor");
+        }
+        return investorRepository.findByDistributorId(requester.getId(), pageRequest);
     }
 
     public List<Investor> filterByKycStatus(String status, UUID distributorId) {
@@ -129,6 +172,9 @@ public class InvestorService {
     public Investor createInvestor(InvestorCreateRequest request) {
         investorRepository.findByPan(request.pan()).ifPresent(existing -> {
             throw new IllegalArgumentException("Investor with same PAN already exists");
+        });
+        investorRepository.findByEmail(request.email()).ifPresent(existing -> {
+            throw new ConflictException("An investor with this email is already registered");
         });
         distributorService.getDistributor(request.distributorId());
 

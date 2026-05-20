@@ -31,7 +31,7 @@ class AuthControllerRefreshTest {
         assertThat(cookies).anySatisfy(cookie -> {
             assertThat(cookie).contains("access_token=access.jwt");
             assertThat(cookie).contains("HttpOnly");
-            assertThat(cookie).contains("Max-Age=1800");
+            assertThat(cookie).contains("Max-Age=900");
         });
         assertThat(cookies).anySatisfy(cookie -> {
             assertThat(cookie).contains("refresh_token=" + refreshToken);
@@ -43,7 +43,8 @@ class AuthControllerRefreshTest {
     @Test
     void refreshUsesRefreshCookieAndWritesNewAccessCookie() {
         UUID refreshToken = UUID.randomUUID();
-        RecordingAuthService authService = new RecordingAuthService(refreshToken);
+        UUID rotatedRefreshToken = UUID.randomUUID();
+        RecordingAuthService authService = new RecordingAuthService(refreshToken, rotatedRefreshToken);
         AuthController controller = new AuthController(authService, cookieService());
         MockHttpServletRequest request = new MockHttpServletRequest();
         request.setCookies(new Cookie("refresh_token", refreshToken.toString()));
@@ -55,6 +56,8 @@ class AuthControllerRefreshTest {
         assertThat(authResponse.message()).isEqualTo("Token refreshed");
         assertThat(response.getHeaders(HttpHeaders.SET_COOKIE))
                 .anySatisfy(cookie -> assertThat(cookie).contains("access_token=refreshed.jwt"));
+        assertThat(response.getHeaders(HttpHeaders.SET_COOKIE))
+                .anySatisfy(cookie -> assertThat(cookie).contains("refresh_token=" + rotatedRefreshToken));
     }
 
     @Test
@@ -95,7 +98,7 @@ class AuthControllerRefreshTest {
                 "refresh_token",
                 false,
                 "Lax",
-                1_800_000,
+                900_000,
                 604_800_000
         );
     }
@@ -103,14 +106,20 @@ class AuthControllerRefreshTest {
     private static class RecordingAuthService extends AuthService {
 
         private final UUID refreshToken;
+        private final UUID rotatedRefreshToken;
         private String refreshedToken;
         private String revokedToken;
         private String blockedAccessToken;
         private boolean purgeCalled;
 
         RecordingAuthService(UUID refreshToken) {
+            this(refreshToken, UUID.randomUUID());
+        }
+
+        RecordingAuthService(UUID refreshToken, UUID rotatedRefreshToken) {
             super(null, null, null, null, null, null, null);
             this.refreshToken = refreshToken;
+            this.rotatedRefreshToken = rotatedRefreshToken;
         }
 
         @Override
@@ -124,9 +133,9 @@ class AuthControllerRefreshTest {
         }
 
         @Override
-        public AuthResponse refreshAccessToken(String refreshToken) {
+        public RefreshResult refresh(String refreshToken) {
             refreshedToken = refreshToken;
-            return response("refreshed.jwt", "Token refreshed");
+            return new RefreshResult(response("refreshed.jwt", "Token refreshed"), rotatedRefreshToken);
         }
 
         @Override

@@ -13,4 +13,5 @@ public interface CybrillaClient {
     String createOrder(TransactionOrder order, Investor investor);
     String generateInvestorActionUrl(TransactionOrder order);
     String createRedemption(TransactionOrder order);
+    void cancelOrder(TransactionOrder order);
 }

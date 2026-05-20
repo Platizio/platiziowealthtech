@@ -1,6 +1,7 @@
 package com.platizio.wealthtech.controller;
 
 import com.platizio.wealthtech.common.AccountNotApprovedException;
+import com.platizio.wealthtech.common.ConflictException;
 import com.platizio.wealthtech.dto.ApiErrorResponse;
 import jakarta.persistence.EntityNotFoundException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -32,6 +33,7 @@ public class GlobalExceptionHandler {
         Map<String, String> m = new LinkedHashMap<>();
         // investors
         m.put("investors_pan_key",                        "An investor with this PAN already exists");
+        m.put("investors_email_key",                      "An investor with this email is already registered");
         // distributors
         m.put("distributors_email_key",                   "A distributor with this email address already exists");
         m.put("distributors_mobile_number_key",           "A distributor with this mobile number already exists");
@@ -99,6 +101,13 @@ public class GlobalExceptionHandler {
         response.put("accountStatus", ex.getAccountStatus());
         response.put("path", request.getRequestURI());
         return response;
+    }
+
+    @ExceptionHandler(ConflictException.class)
+    @ResponseStatus(HttpStatus.CONFLICT)
+    public ApiErrorResponse handleConflict(ConflictException ex, HttpServletRequest request) {
+        logger.warn("Conflict at {}: {}", request.getRequestURI(), ex.getMessage());
+        return new ApiErrorResponse(OffsetDateTime.now(), 409, "CONFLICT", ex.getMessage(), request.getRequestURI());
     }
 
     @ExceptionHandler(AccessDeniedException.class)

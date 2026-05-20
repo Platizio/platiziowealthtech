@@ -45,10 +45,14 @@ class OrderServiceTest {
         OrderCreateRequest request = new OrderCreateRequest(
                 investorId,
                 UUID.randomUUID(),
+                null,
                 TransactionType.LUMPSUM_PURCHASE,
                 BigDecimal.TEN,
                 null,
                 "NET_BANKING",
+                null,
+                null,
+                null,
                 null
         );
 
@@ -69,6 +73,7 @@ class OrderServiceTest {
         UUID orderId = UUID.randomUUID();
         UUID actorId = UUID.randomUUID();
         TransactionOrder order = new TransactionOrder();
+        order.setDistributorId(actorId);
         AtomicReference<TransactionOrder> savedOrder = new AtomicReference<>();
         AtomicBoolean hardDeleteCalled = new AtomicBoolean(false);
         AtomicReference<String> auditDetails = new AtomicReference<>();

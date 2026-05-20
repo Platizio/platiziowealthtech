@@ -17,6 +17,8 @@ import java.util.UUID;
 @Service
 public class AuthService {
 
+    public record RefreshResult(AuthResponse authResponse, UUID refreshToken) {}
+
     private final DistributorRepository distributorRepository;
     private final DistributorService distributorService;
     private final JwtService jwtService;
@@ -110,16 +112,22 @@ public class AuthService {
         return refreshTokenService.createToken(distributorId);
     }
 
-    public AuthResponse refreshAccessToken(String refreshToken) {
-        Distributor distributor = refreshTokenService.validate(refreshToken);
+    public RefreshResult refresh(String refreshToken) {
+        RefreshTokenService.RotatedRefreshToken rotatedRefreshToken = refreshTokenService.rotate(refreshToken);
+        Distributor distributor = rotatedRefreshToken.distributor();
         if (distributor.getStatus() != DistributorStatus.APPROVED) {
             throw new AccountNotApprovedException(distributor.getStatus());
         }
         String token = jwtService.generateToken(
                 distributor.getId(), distributor.getEmail(), distributor.getRole().name());
-        return new AuthResponse(
+        AuthResponse response = new AuthResponse(
                 token, distributor.getId(), distributor.getEmail(),
                 distributor.getFullName(), distributor.getRole(), distributor.getStatus(), "Token refreshed");
+        return new RefreshResult(response, rotatedRefreshToken.refreshToken());
+    }
+
+    public AuthResponse refreshAccessToken(String refreshToken) {
+        return refresh(refreshToken).authResponse();
     }
 
     public void revokeRefreshToken(String refreshToken) {

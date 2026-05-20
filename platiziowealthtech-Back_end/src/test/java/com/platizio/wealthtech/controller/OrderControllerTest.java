@@ -25,10 +25,14 @@ class OrderControllerTest {
         OrderCreateRequest request = new OrderCreateRequest(
                 UUID.randomUUID(),
                 UUID.randomUUID(),
+                null,
                 TransactionType.LUMPSUM_PURCHASE,
                 BigDecimal.TEN,
                 null,
                 "NET_BANKING",
+                null,
+                null,
+                null,
                 null
         );
 
