@@ -4,7 +4,7 @@ import axios from 'axios';
 import {
   Search, Filter, ChevronLeft, Download, ShieldCheck, Users,
   TrendingUp, AreaChart as AreaChartIcon, Activity,
-  CheckCircle2, Clock, XCircle, AlertCircle, Upload,
+  CheckCircle2, Clock, XCircle, AlertCircle, Upload, Pencil,
 } from 'lucide-react';
 import {
   AreaChart as RechartsArea, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
@@ -15,6 +15,7 @@ import { getPageContent, getPageMeta } from '../utils/pagination';
 import { formatDate } from '../utils/formatDate';
 import { useDebounce } from '../hooks/useDebounce';
 import EmptyState from '../components/EmptyState';
+import InvestorEditForm from '../components/InvestorEditForm';
 
 // ─── KYC status config ─────────────────────────────────────────────────────────
 const KYC_BADGE_CONFIG: Record<string, { label: string; bg: string; text: string }> = {
@@ -445,6 +446,15 @@ function InvestorDetail({
 }) {
   const [activeTab, setActiveTab] = useState('overview');
   const [currentInvestor, setCurrentInvestor] = useState(investor);
+  // F-10: edit-form toggle for the Overview tab + a transient "Saved" pill
+  // that auto-fades a few seconds after a successful PUT.
+  const [isEditing, setIsEditing] = useState(false);
+  const [savedFlash, setSavedFlash] = useState(false);
+  useEffect(() => {
+    if (!savedFlash) return;
+    const t = setTimeout(() => setSavedFlash(false), 3000);
+    return () => clearTimeout(t);
+  }, [savedFlash]);
   // Pre-fill so the chart renders a flat baseline immediately rather than being empty.
   const ZERO_MONTHS = [
     { month: 'Jan', value: 0 }, { month: 'Feb', value: 0 },
@@ -522,7 +532,22 @@ function InvestorDetail({
             </div>
           </div>
         </div>
-        <div className="flex gap-2">
+        <div className="flex items-center gap-2">
+          {/* F-10: inline "Saved" pill — appears for 3s after a successful PUT
+              in lieu of a toast library (none is installed). */}
+          {savedFlash && (
+            <span className="flex items-center gap-1.5 text-xs font-semibold text-green-700 bg-green-50 border border-green-200 px-2.5 py-1 rounded-full">
+              <CheckCircle2 className="w-3.5 h-3.5" /> Saved
+            </span>
+          )}
+          {!isEditing && (
+            <button
+              onClick={() => setIsEditing(true)}
+              className="flex items-center gap-2 px-4 py-2 text-sm font-medium bg-white border border-slate-200 text-slate-700 rounded-lg shadow-sm hover:bg-slate-50 transition-colors"
+            >
+              <Pencil className="w-4 h-4" /> Edit
+            </button>
+          )}
           <button className="flex items-center gap-2 px-4 py-2 text-sm font-medium bg-white border border-slate-200 text-slate-700 rounded-lg shadow-sm hover:bg-slate-50 transition-colors">
             <Download className="w-4 h-4" /> Dossier
           </button>
@@ -556,6 +581,20 @@ function InvestorDetail({
       <AnimatePresence mode="wait">
         {activeTab === 'overview' && (
           <motion.div key="overview" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} className="space-y-6">
+            {/* F-10: when editing, the Overview tab content swaps to the
+                edit form. The performance chart is intentionally hidden in
+                edit mode to keep the focused task front-and-centre. */}
+            {isEditing ? (
+              <InvestorEditForm
+                investor={currentInvestor}
+                onSaved={updated => {
+                  setCurrentInvestor((prev: any) => ({ ...prev, ...updated }));
+                  setIsEditing(false);
+                  setSavedFlash(true);
+                }}
+                onCancel={() => setIsEditing(false)}
+              />
+            ) : (<>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
               {/* Info cards */}
               {[
@@ -610,6 +649,7 @@ function InvestorDetail({
                 </ResponsiveContainer>
               </div>
             </div>
+            </>)}
           </motion.div>
         )}
 

@@ -433,17 +433,19 @@ export default function ProductMgmt({
                       <button
                         onClick={() => handleToggleStatus(p.id)}
                         title={p.status === 'Active' ? 'Deactivate (hides from distributor)' : 'Activate'}
+                        aria-label={p.status === 'Active' ? `Deactivate ${p.name}` : `Activate ${p.name}`}
                         className={`p-1.5 rounded-lg transition-colors ${p.status === 'Active' ? 'text-green-500 hover:bg-green-50' : 'text-slate-400 hover:bg-slate-100'}`}
                       >
-                        {p.status === 'Active' ? <Eye className="w-4 h-4" /> : <EyeOff className="w-4 h-4" />}
+                        {p.status === 'Active' ? <Eye className="w-4 h-4" aria-hidden="true" /> : <EyeOff className="w-4 h-4" aria-hidden="true" />}
                       </button>
                       {/* Delete */}
                       <button
                         onClick={() => handleDelete(p.id)}
                         title="Remove product"
+                        aria-label={`Remove ${p.name}`}
                         className="p-1.5 text-red-400 hover:bg-red-50 rounded-lg transition-colors"
                       >
-                        <Trash2 className="w-4 h-4" />
+                        <Trash2 className="w-4 h-4" aria-hidden="true" />
                       </button>
                     </div>
                   </td>

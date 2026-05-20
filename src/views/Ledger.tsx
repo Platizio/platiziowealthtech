@@ -637,11 +637,12 @@ function FundDetailModal({ fund, onClose, onInvest }: { fund: any; onClose: () =
               <button
                 key={id}
                 onClick={() => setActiveTab(id)}
+                aria-label={label}
                 className={`flex-1 flex items-center justify-center gap-1.5 py-2 text-xs font-semibold rounded-lg transition-all ${
                   activeTab === id ? 'bg-white text-[#0B1B3E] shadow-sm' : 'text-white/60 hover:text-white'
                 }`}
               >
-                <Icon className="w-3.5 h-3.5" />
+                <Icon className="w-3.5 h-3.5" aria-hidden="true" />
                 <span className="hidden sm:inline">{label}</span>
               </button>
             ))}
