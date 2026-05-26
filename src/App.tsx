@@ -36,6 +36,7 @@ const InvestorOnboarding  = lazy(() => import('./views/InvestorOnboarding'));
 const InvestorTransaction = lazy(() => import('./views/InvestorTransaction'));
 const Portfolio           = lazy(() => import('./views/Portfolio'));
 const Reports             = lazy(() => import('./views/Reports'));
+const BulkOrderUpload     = lazy(() => import('./views/BulkOrderUpload'));
 const Communications      = lazy(() => import('./views/Communications'));
 
 // Admin views
@@ -205,9 +206,10 @@ export default function App() {
           <Route path="/distributor/profile" element={<Profile userData={userData} />} />
           <Route path="/distributor/aum-breakdown"   element={<AumBreakdown onBack={() => navigate('/distributor/dashboard')} userData={userData} />} />
           <Route path="/distributor/sip-dashboard"   element={<SipDashboard onBack={() => navigate('/distributor/dashboard')} userData={userData} />} />
-          <Route path="/distributor/action-center"   element={<ActionCenter onBack={() => navigate('/distributor/dashboard')} />} />
+          <Route path="/distributor/action-center"   element={<ActionCenter onBack={() => navigate('/distributor/dashboard')} userData={userData} />} />
           <Route path="/distributor/portfolio"       element={<Portfolio userData={userData} />} />
           <Route path="/distributor/reports"         element={<Reports userData={userData} />} />
+          <Route path="/distributor/tools"           element={<BulkOrderUpload userData={userData} />} />
           <Route path="/distributor/communications"  element={<Communications userData={userData} />} />
           
           {/* Pass state dynamically or let the components grab it from location state */}

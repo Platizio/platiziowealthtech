@@ -1,10 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import axios from 'axios';
 import {
   Search, Filter, ChevronLeft, Download, ShieldCheck, Users,
   TrendingUp, AreaChart as AreaChartIcon, Activity,
-  CheckCircle2, Clock, XCircle, AlertCircle, Upload,
+  CheckCircle2, Clock, XCircle, AlertCircle, Upload, RefreshCw, ExternalLink,
 } from 'lucide-react';
 import {
   AreaChart as RechartsArea, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
@@ -18,8 +17,12 @@ import EmptyState from '../components/EmptyState';
 
 // ─── KYC status config ─────────────────────────────────────────────────────────
 const KYC_BADGE_CONFIG: Record<string, { label: string; bg: string; text: string }> = {
+  COMPLETED: { label: 'KYC Verified', bg: 'bg-green-100', text: 'text-green-700' },
   VERIFIED: { label: 'KYC Verified', bg: 'bg-green-100', text: 'text-green-700' },
   PENDING: { label: 'KYC Pending', bg: 'bg-amber-100', text: 'text-amber-700' },
+  IN_PROGRESS: { label: 'KYC In Progress', bg: 'bg-blue-100', text: 'text-blue-700' },
+  FAILED: { label: 'KYC Failed', bg: 'bg-red-100', text: 'text-red-700' },
+  RETRY_REQUIRED: { label: 'Retry Required', bg: 'bg-red-100', text: 'text-red-700' },
   REJECTED: { label: 'KYC Failed', bg: 'bg-red-100', text: 'text-red-700' },
   NOT_STARTED: { label: 'Not Started', bg: 'bg-slate-100', text: 'text-slate-500' }
 };
@@ -110,20 +113,22 @@ function KycDocumentUpload({
 
     try {
       setUploading(true);
-      const response = await axios.put(apiUrl(`/investors/${investorId}/documents`), formData, {
-        withCredentials: true,
-        onUploadProgress: event => {
-          const total = event.total || file.size;
-          setProgress(Math.round((event.loaded * 100) / total));
-        },
+      setProgress(25);
+      const response = await apiFetch(`/investors/${investorId}/documents`, {
+        method: 'PUT',
+        body: formData,
       });
+      const data = await response.json().catch(() => null);
+      if (!response.ok) {
+        throw new Error(data?.message || `KYC document upload failed with HTTP ${response.status}.`);
+      }
 
       setProgress(100);
       setSuccess('KYC document uploaded successfully.');
-      onUploaded?.(response.data?.data || response.data?.investor || response.data);
-    } catch (err: any) {
+      onUploaded?.(data?.data || data?.investor || data);
+    } catch (err) {
       console.error('KYC document upload failed:', err);
-      setError(err?.response?.data?.message || err?.message || 'KYC document upload failed.');
+      setError(err instanceof Error ? err.message : 'KYC document upload failed.');
     } finally {
       setUploading(false);
     }
@@ -267,7 +272,7 @@ export default function Investors({
     };
   }, [debouncedSearch, distributorId]);
 
-  const KYC_OPTIONS    = ['All', 'VERIFIED', 'PENDING', 'REJECTED', 'NOT_STARTED'];
+  const KYC_OPTIONS    = ['All', 'COMPLETED', 'PENDING', 'IN_PROGRESS', 'FAILED', 'RETRY_REQUIRED', 'NOT_STARTED'];
   const STATUS_OPTIONS = ['All', 'ACTIVE', 'READY_FOR_TRANSACTIONS', 'ONBOARDING', 'DRAFT', 'BLOCKED', 'ARCHIVED'];
 
   const filtered = investors.filter(inv => {
@@ -371,7 +376,7 @@ export default function Investors({
                   const stCls  = statusConfig[inv.investorStatus] || 'bg-slate-100 text-slate-500';
                   const riskCls = riskConfig[inv.riskProfile] || 'bg-slate-50 text-slate-500';
                   const initials = (inv.fullName || 'IN').split(' ').map((n: string) => n[0]).join('').substring(0, 2).toUpperCase();
-                  const isKycDone = inv.kycStatus === 'VERIFIED';
+                  const isKycDone = inv.kycStatus === 'COMPLETED' || inv.kycStatus === 'VERIFIED';
 
                   return (
                     <tr key={inv.id} className="group hover:bg-slate-50 transition-colors">
@@ -445,6 +450,10 @@ function InvestorDetail({
 }) {
   const [activeTab, setActiveTab] = useState('overview');
   const [currentInvestor, setCurrentInvestor] = useState(investor);
+  const [kycActionLoading, setKycActionLoading] = useState('');
+  const [kycActionError, setKycActionError] = useState('');
+  const [kycActionMessage, setKycActionMessage] = useState('');
+  const [identityRedirectUrl, setIdentityRedirectUrl] = useState('');
   // Pre-fill so the chart renders a flat baseline immediately rather than being empty.
   const ZERO_MONTHS = [
     { month: 'Jan', value: 0 }, { month: 'Feb', value: 0 },
@@ -487,8 +496,99 @@ function InvestorDetail({
 
   const kyc = KYC_BADGE_CONFIG[currentInvestor.kycStatus] || KYC_BADGE_CONFIG['NOT_STARTED'];
   const stCls = statusConfig[currentInvestor.investorStatus] || 'bg-slate-100 text-slate-500';
-  const isKycDone = currentInvestor.kycStatus === 'VERIFIED';
+  const isKycDone = currentInvestor.kycStatus === 'COMPLETED' || currentInvestor.kycStatus === 'VERIFIED';
   const initials = (currentInvestor.fullName || 'IN').split(' ').map((n: string) => n[0]).join('').substring(0, 2).toUpperCase();
+
+  const runKycAction = async (
+    key: string,
+    request: () => Promise<Response>,
+    successMessage: string,
+  ) => {
+    setKycActionLoading(key);
+    setKycActionError('');
+    setKycActionMessage('');
+    try {
+      const response = await request();
+      const data = await response.json().catch(() => null);
+      if (!response.ok) {
+        throw new Error(data?.message || `KYC action failed with HTTP ${response.status}.`);
+      }
+      if (data?.investor) {
+        setCurrentInvestor((prev: any) => ({ ...prev, ...data.investor }));
+      }
+      const redirectUrl = data?.externalResponse?.fetch?.redirect_url;
+      if (redirectUrl) setIdentityRedirectUrl(redirectUrl);
+      setKycActionMessage(successMessage);
+    } catch (err) {
+      console.error('KYC action failed:', err);
+      setKycActionError(err instanceof Error ? err.message : 'KYC action failed.');
+    } finally {
+      setKycActionLoading('');
+    }
+  };
+
+  const createKycCheck = () => runKycAction(
+    'kyc-check',
+    () => apiFetch(`/investors/${currentInvestor.id}/kyc-checks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ dateOfBirth: currentInvestor.dateOfBirth || null }),
+    }),
+    'KYC status check completed.',
+  );
+
+  const createKycRequest = () => runKycAction(
+    'kyc-request',
+    () => apiFetch(`/investors/${currentInvestor.id}/kyc-requests`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fields: {} }),
+    }),
+    'KYC request created.',
+  );
+
+  const fetchKycRequest = () => {
+    const requestId = currentInvestor.externalKycRequestId;
+    if (!requestId) {
+      setKycActionError('Create a KYC request before fetching it.');
+      return;
+    }
+    runKycAction(
+      'kyc-request-fetch',
+      () => apiFetch(`/investors/${currentInvestor.id}/kyc-requests/${requestId}`),
+      'KYC request refreshed.',
+    );
+  };
+
+  const simulateKycRequest = () => {
+    const requestId = currentInvestor.externalKycRequestId;
+    if (!requestId) {
+      setKycActionError('Create a KYC request before simulating it.');
+      return;
+    }
+    runKycAction(
+      'kyc-request-simulate',
+      () => apiFetch(`/investors/${currentInvestor.id}/kyc-requests/${requestId}/simulate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: 'successful' }),
+      }),
+      'Sandbox KYC request simulation completed.',
+    );
+  };
+
+  const createIdentityDocument = () => runKycAction(
+    'identity-document',
+    () => apiFetch(`/investors/${currentInvestor.id}/identity-documents`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        type: 'aadhaar',
+        postbackUrl: `${window.location.origin}/distributor/investors`,
+      }),
+    }),
+    'Aadhaar identity document flow created.',
+  );
 
   const tabs = [
     { id: 'overview',   label: 'Overview'   },
@@ -562,6 +662,8 @@ function InvestorDetail({
                 { label: 'Email',        value: currentInvestor.email },
                 { label: 'Mobile',       value: currentInvestor.mobileNumber },
                 { label: 'Date of Birth',value: formatDate(currentInvestor.dateOfBirth) },
+                { label: 'Anniversary',  value: formatDate(currentInvestor.anniversaryDate) },
+                { label: 'Goal Maturity', value: formatDate(currentInvestor.goalMaturityDate) },
                 { label: 'City',         value: currentInvestor.city || '—' },
                 { label: 'State',        value: currentInvestor.state || '—' },
                 { label: 'Risk Profile', value: (currentInvestor.riskProfile || 'UNASSESSED').replace(/_/g, ' ') },
@@ -620,6 +722,9 @@ function InvestorDetail({
               { label: 'Bank Verification',   value: (currentInvestor.bankVerificationStatus || 'NOT_CAPTURED').replace(/_/g, ' ') },
               { label: 'Investor Status',     value: (currentInvestor.investorStatus || 'DRAFT').replace(/_/g, ' ') },
               { label: 'Risk Profile',        value: (currentInvestor.riskProfile || 'UNASSESSED').replace(/_/g, ' ') },
+              { label: 'External KYC Status', value: currentInvestor.externalKycStatus || 'Not synced' },
+              { label: 'KYC Check ID',        value: currentInvestor.externalKycCheckId || 'None' },
+              { label: 'KYC Request ID',      value: currentInvestor.externalKycRequestId || 'None' },
               { label: 'Onboarding Notes',    value: currentInvestor.onboardingNotes || 'None' },
             ].map(({ label, value }) => (
               <div key={label} className="bg-white rounded-xl p-4 border border-slate-200 shadow-sm flex justify-between items-center">
@@ -627,6 +732,80 @@ function InvestorDetail({
                 <p className="text-sm font-semibold text-slate-800">{value}</p>
               </div>
             ))}
+
+            <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <p className="text-sm font-semibold text-slate-800 flex items-center gap-2">
+                    <ShieldCheck className="h-4 w-4 text-blue-600" /> Fintech Primitives KYC
+                  </p>
+                  <p className="mt-0.5 text-xs text-slate-500">
+                    Check KRA status and manage the digital KYC application.
+                  </p>
+                </div>
+                <button
+                  onClick={createKycCheck}
+                  disabled={Boolean(kycActionLoading)}
+                  className="inline-flex items-center justify-center gap-2 rounded-lg bg-[#0B1B3E] px-4 py-2 text-xs font-semibold text-white transition-colors hover:bg-[#1A3066] disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {kycActionLoading === 'kyc-check' ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <ShieldCheck className="h-3.5 w-3.5" />}
+                  Run check
+                </button>
+              </div>
+
+              <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4">
+                <button
+                  onClick={createKycRequest}
+                  disabled={Boolean(kycActionLoading)}
+                  className="rounded-lg border border-blue-200 px-3 py-2 text-xs font-semibold text-blue-700 transition-colors hover:bg-blue-50 disabled:opacity-50"
+                >
+                  Create KYC request
+                </button>
+                <button
+                  onClick={fetchKycRequest}
+                  disabled={Boolean(kycActionLoading)}
+                  className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-50 disabled:opacity-50"
+                >
+                  Fetch request
+                </button>
+                <button
+                  onClick={simulateKycRequest}
+                  disabled={Boolean(kycActionLoading)}
+                  className="rounded-lg border border-amber-200 px-3 py-2 text-xs font-semibold text-amber-700 transition-colors hover:bg-amber-50 disabled:opacity-50"
+                >
+                  Simulate success
+                </button>
+                <button
+                  onClick={createIdentityDocument}
+                  disabled={Boolean(kycActionLoading)}
+                  className="rounded-lg border border-emerald-200 px-3 py-2 text-xs font-semibold text-emerald-700 transition-colors hover:bg-emerald-50 disabled:opacity-50"
+                >
+                  Aadhaar document
+                </button>
+              </div>
+
+              {kycActionError && (
+                <p className="mt-3 flex items-center gap-1.5 text-xs font-medium text-red-600">
+                  <AlertCircle className="h-3.5 w-3.5" /> {kycActionError}
+                </p>
+              )}
+              {kycActionMessage && (
+                <p className="mt-3 flex items-center gap-1.5 text-xs font-medium text-green-600">
+                  <CheckCircle2 className="h-3.5 w-3.5" /> {kycActionMessage}
+                </p>
+              )}
+              {identityRedirectUrl && (
+                <a
+                  href={identityRedirectUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="mt-3 inline-flex items-center gap-1.5 text-xs font-semibold text-blue-700 hover:text-blue-800"
+                >
+                  Open Aadhaar fetch link <ExternalLink className="h-3.5 w-3.5" />
+                </a>
+              )}
+            </div>
+
             <KycDocumentUpload
               investorId={currentInvestor.id}
               onUploaded={updatedInvestor => {

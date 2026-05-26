@@ -4,7 +4,7 @@ import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts';
 import {
   ArrowUpRight, Users, AlertCircle, Clock,
   TrendingUp, TrendingDown, ChevronRight,
-  Briefcase, Activity, Target,
+  Briefcase, Activity, Target, Gift,
 } from 'lucide-react';
 import { apiFetch } from '../config/api';
 
@@ -29,6 +29,15 @@ interface OnboardingPipeline {
   readyToInvest: OnboardingCardItem[];
 }
 
+interface DashboardAction {
+  id: string;
+  category: string;
+  priority: string;
+  investor: string;
+  desc: string;
+  age: string;
+}
+
 export default function Dashboard({ onNavigate, userData }: DashboardProps) {
   const [metrics, setMetrics] = React.useState({
     totalAum: 0,
@@ -42,6 +51,7 @@ export default function Dashboard({ onNavigate, userData }: DashboardProps) {
     leadSub: [] as any[],
     donutData: [] as any[],
     recentActivity: [] as any[],
+    lifeEventReminders: [] as DashboardAction[],
     onboarding: {
       kycPending: [] as OnboardingCardItem[],
       bankPending: [] as OnboardingCardItem[],
@@ -55,21 +65,24 @@ export default function Dashboard({ onNavigate, userData }: DashboardProps) {
 
     const fetchDashboard = async () => {
       try {
-        const [ordersRes, investorsRes, schemesRes, leadsRes, onboardingRes] = await Promise.all([
+        const [ordersRes, investorsRes, schemesRes, leadsRes, onboardingRes, actionsRes] = await Promise.all([
           apiFetch(`/orders/by-distributor/${userData.id}`, { headers }),
           apiFetch(`/investors/by-distributor/${userData.id}`, { headers }),
           apiFetch('/products/schemes', { headers }),
           apiFetch(`/leads/distributor/${userData.id}`, { headers }),
-          apiFetch(`/dashboard/distributor/${userData.id}/onboarding`, { headers })
+          apiFetch(`/dashboard/distributor/${userData.id}/onboarding`, { headers }),
+          apiFetch(`/dashboard/distributor/${userData.id}/actions`, { headers })
         ]);
 
         let orders: any[] = [], investors: any[] = [], schemes: any[] = [], leads: any[] = [];
+        let actions: DashboardAction[] = [];
         let onboarding: OnboardingPipeline = { kycPending: [], bankPending: [], readyToInvest: [] };
         if (ordersRes.ok) orders = await ordersRes.json();
         if (investorsRes.ok) investors = await investorsRes.json();
         if (schemesRes.ok) schemes = await schemesRes.json();
         if (leadsRes.ok) leads = await leadsRes.json();
         if (onboardingRes.ok) onboarding = await onboardingRes.json();
+        if (actionsRes.ok) actions = await actionsRes.json();
 
         let totalAum = 0;
         let sipAmount = 0;
@@ -175,6 +188,9 @@ export default function Dashboard({ onNavigate, userData }: DashboardProps) {
         const recentActivity = activities.slice(0, 5).map(a => ({
           ...a, time: formatTime(a.date)
         }));
+        const allLifeEventReminders = actions
+          .filter(a => a.category === 'Life Event' || a.category === 'Maturing');
+        const lifeEventReminders = allLifeEventReminders.slice(0, 5);
 
         setMetrics({
           totalAum,
@@ -192,6 +208,7 @@ export default function Dashboard({ onNavigate, userData }: DashboardProps) {
             { label: 'Bank Link Pending', value: bankPending },
             { label: 'Txn Failed', value: failedOrders },
             { label: 'SIP Failed', value: failedSips },
+            { label: 'Life Events', value: allLifeEventReminders.length },
           ],
           leadSub: [
             { label: 'New Leads', value: newLeads, color: 'bg-blue-400' },
@@ -206,6 +223,7 @@ export default function Dashboard({ onNavigate, userData }: DashboardProps) {
             { name: 'Failed', value: todayFailed, color: '#ef4444' },
           ],
           recentActivity,
+          lifeEventReminders,
           onboarding
         });
       } catch (err) {
@@ -400,6 +418,46 @@ export default function Dashboard({ onNavigate, userData }: DashboardProps) {
               </div>
             ))}
           </div>
+        </div>
+      </div>
+
+      <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+        <div className="p-5 border-b border-slate-100 flex justify-between items-center">
+          <div className="flex items-center gap-2">
+            <div className="w-8 h-8 rounded-xl bg-pink-50 text-pink-600 flex items-center justify-center">
+              <Gift className="w-4 h-4" />
+            </div>
+            <h2 className="font-semibold text-slate-800">Life Event Reminders</h2>
+          </div>
+          <button
+            onClick={() => onNavigate('action-center')}
+            className="text-[#0B1B3E] text-xs font-semibold flex items-center gap-1 hover:underline"
+          >
+            View Tasks <ArrowUpRight className="w-3 h-3" />
+          </button>
+        </div>
+        <div className="divide-y divide-slate-100">
+          {metrics.lifeEventReminders.length > 0 ? (
+            metrics.lifeEventReminders.map(item => (
+              <div key={item.id} className="px-5 py-3.5 flex items-start gap-3">
+                <div className="mt-0.5 w-2 h-2 rounded-full bg-pink-500 flex-shrink-0" />
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <p className="text-sm font-semibold text-slate-800">{item.investor}</p>
+                    <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-pink-50 text-pink-700">
+                      {item.category}
+                    </span>
+                    <span className="ml-auto text-[10px] text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded">
+                      {item.age}
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-500 mt-1 leading-relaxed">{item.desc}</p>
+                </div>
+              </div>
+            ))
+          ) : (
+            <div className="p-5 text-center text-sm text-slate-400">No upcoming birthdays, anniversaries, or goal maturities in the next 7 days.</div>
+          )}
         </div>
       </div>
 
