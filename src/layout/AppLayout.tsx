@@ -299,7 +299,7 @@ export default function AppLayout({ userData, onSignOut }: { userData: any, onSi
               onClick={() => setSidebarOpen(prev => !prev)}
               aria-label="Toggle sidebar"
             >
-              <Menu className="w-5 h-5" />
+              <Menu className="w-5 h-5" aria-hidden="true" />
             </button>
 
             {/* Search bar — desktop only */}
@@ -363,17 +363,19 @@ export default function AppLayout({ userData, onSignOut }: { userData: any, onSi
               {mode === 'distributor' ? (
                 <button
                   onClick={() => navigate('/distributor/investor-onboarding')}
+                  aria-label="New Onboarding"
                   className="flex items-center gap-1 px-3 md:px-4 py-2 text-sm font-medium bg-[#0B1B3E] text-white rounded-lg shadow-sm hover:bg-[#1A3066] transition-colors"
                 >
-                  <span className="font-bold text-base leading-none">+</span>
+                  <span aria-hidden="true" className="font-bold text-base leading-none">+</span>
                   <span className="hidden md:inline"> New Onboarding</span>
                 </button>
               ) : (
                 <button
                   onClick={() => navigate('/admin/distributor-mgmt')}
+                  aria-label="Add Distributor"
                   className="flex items-center gap-1 px-3 md:px-4 py-2 text-sm font-medium bg-violet-700 text-white rounded-lg shadow-sm hover:bg-violet-800 transition-colors"
                 >
-                  <span className="font-bold text-base leading-none">+</span>
+                  <span aria-hidden="true" className="font-bold text-base leading-none">+</span>
                   <span className="hidden md:inline"> Add Distributor</span>
                 </button>
               )}
