@@ -17,7 +17,6 @@ import java.security.Principal;
 import java.util.Map;
 import java.util.UUID;
 import org.springframework.security.authentication.BadCredentialsException;
-import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.web.bind.annotation.*;
 
 @RestController
@@ -83,10 +82,5 @@ public class AuthController {
         authCookieService.clearAccessToken(response);
         authCookieService.clearRefreshToken(response);
         return Map.of("status", "logged_out");
-    }
-
-    @Scheduled(fixedDelayString = "${app.auth.blocked-token-purge-interval-ms:3600000}")
-    public void purgeExpiredBlockedTokens() {
-        authService.purgeExpiredBlockedTokens();
     }
 }

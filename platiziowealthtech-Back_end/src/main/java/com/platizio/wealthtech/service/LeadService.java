@@ -43,6 +43,7 @@ public class LeadService {
         return investorLeadRepository.findAll();
     }
 
+    @Transactional(readOnly = true)
     public InvestorLead getById(UUID leadId) {
         return investorLeadRepository.findById(leadId)
                 .orElseThrow(() -> new EntityNotFoundException("Lead not found"));

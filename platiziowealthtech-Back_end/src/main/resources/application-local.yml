@@ -1,10 +1,24 @@
 spring:
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/postgres}
+    username: ${DB_USERNAME:postgres}
+    password: ${DB_PASSWORD:1234}
   flyway:
     clean-disabled: false
+  jpa:
+    properties:
+      hibernate.session.events.log.LOG_QUERIES_SLOWER_THAN_MS: ${HIBERNATE_SLOW_QUERY_MS:250}
 
 jwt:
-  secret: local-dev-jwt-secret-32-bytes-minimum-not-for-prod
+  secret: ${JWT_SECRET:local-dev-jwt-secret-32-bytes-minimum-not-for-prod}
 
 app:
   auth:
-    cookie-secure: false
+    cookie-secure: ${AUTH_COOKIE_SECURE:false}
+
+logging:
+  level:
+    org.hibernate.SQL: ${HIBERNATE_SQL_LOG_LEVEL:WARN}
+    org.hibernate.SQL_SLOW: INFO
+    org.hibernate.type.descriptor.sql.BasicBinder: ${HIBERNATE_BIND_LOG_LEVEL:WARN}
+    org.hibernate.orm.jdbc.bind: ${HIBERNATE_BIND_LOG_LEVEL:WARN}

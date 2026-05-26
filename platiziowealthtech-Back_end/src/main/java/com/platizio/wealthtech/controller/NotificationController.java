@@ -40,6 +40,13 @@ public class NotificationController {
         return notificationService.listByDistributor(callerDistributorId);
     }
 
+    @PreAuthorize("#distributorId == principal.distributorId")
+    @GetMapping("/distributor/{distributorId}/unread-count")
+    public UnreadNotificationCountResponse unreadCount(@PathVariable UUID distributorId, Authentication auth) {
+        UUID callerDistributorId = callerDistributorId(auth);
+        return new UnreadNotificationCountResponse(notificationService.countUnreadByDistributor(callerDistributorId));
+    }
+
     @PreAuthorize("isAuthenticated()")
     @PatchMapping("/{notificationId}/read")
     public Notification markRead(@PathVariable UUID notificationId, Authentication auth) {
@@ -56,5 +63,8 @@ public class NotificationController {
             throw new AccessDeniedException("Authenticated distributor principal is required");
         }
         return ((JwtAuthPrincipal) auth.getPrincipal()).getDistributorId();
+    }
+
+    public record UnreadNotificationCountResponse(long unreadCount) {
     }
 }

@@ -35,7 +35,7 @@ class AuditActorControllerTest {
     @Test
     void investorAuditEndpointsUseAuthenticatedActor() {
         RecordingInvestorService investorService = new RecordingInvestorService();
-        InvestorController controller = new InvestorController(investorService);
+        InvestorController controller = new InvestorController(investorService, null, null);
         UUID actorId = UUID.randomUUID();
         Authentication auth = auth(actorId);
 
@@ -63,7 +63,7 @@ class AuditActorControllerTest {
     @Test
     void orderAuditEndpointsUseAuthenticatedActor() {
         RecordingOrderService orderService = new RecordingOrderService();
-        OrderController controller = new OrderController(orderService);
+        OrderController controller = new OrderController(orderService, null);
         UUID actorId = UUID.randomUUID();
         Authentication auth = auth(actorId);
 
@@ -166,7 +166,7 @@ class AuditActorControllerTest {
         private final java.util.ArrayList<UUID> actorIds = new java.util.ArrayList<>();
 
         RecordingOrderService() {
-            super(null, null, null, null, null, null);
+            super(null, null, null, null, null, null, null);
         }
 
         @Override

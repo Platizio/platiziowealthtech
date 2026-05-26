@@ -5,9 +5,19 @@ import com.platizio.wealthtech.domain.InvestorBankAccount;
 import com.platizio.wealthtech.domain.KycStatus;
 import com.platizio.wealthtech.dto.InvestorBankRequest;
 import com.platizio.wealthtech.dto.InvestorCreateRequest;
+import com.platizio.wealthtech.dto.InvestorDocumentUploadResponse;
+import com.platizio.wealthtech.dto.InvestorExternalKycResponse;
+import com.platizio.wealthtech.dto.InvestorKycCheckRequest;
+import com.platizio.wealthtech.dto.InvestorKycRequestCreateRequest;
+import com.platizio.wealthtech.dto.InvestorKycRequestUpdateRequest;
+import com.platizio.wealthtech.dto.InvestorKycSimulationRequest;
+import com.platizio.wealthtech.dto.IdentityDocumentCreateRequest;
 import com.platizio.wealthtech.dto.InvestorUpdateRequest;
 import com.platizio.wealthtech.security.JwtAuthPrincipal;
+import com.platizio.wealthtech.service.InvestorDocumentService;
+import com.platizio.wealthtech.service.InvestorKycService;
 import com.platizio.wealthtech.service.InvestorService;
+import com.fasterxml.jackson.databind.JsonNode;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.media.ArraySchema;
 import io.swagger.v3.oas.annotations.media.Content;
@@ -21,7 +31,9 @@ import org.springframework.data.domain.Page;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
 
 @RestController
 @RequestMapping("/api/v1/investors")
@@ -29,9 +41,17 @@ import org.springframework.web.bind.annotation.*;
 public class InvestorController {
 
     private final InvestorService investorService;
+    private final InvestorDocumentService investorDocumentService;
+    private final InvestorKycService investorKycService;
 
-    public InvestorController(InvestorService investorService) {
+    public InvestorController(
+            InvestorService investorService,
+            InvestorDocumentService investorDocumentService,
+            InvestorKycService investorKycService
+    ) {
         this.investorService = investorService;
+        this.investorDocumentService = investorDocumentService;
+        this.investorKycService = investorKycService;
     }
 
     @Operation(summary = "List investors", description = "Returns paginated investors visible to the authenticated distributor.")
@@ -96,6 +116,16 @@ public class InvestorController {
         return investorService.listVisibleToDistributor(requesterId, distributorId);
     }
 
+    @PreAuthorize("hasAnyRole('ADMIN','MASTER_DISTRIBUTOR','SUB_DISTRIBUTOR')")
+    @GetMapping("/households/{householdId}")
+    public List<Investor> listHousehold(
+            @PathVariable UUID householdId,
+            @RequestParam UUID distributorId,
+            Authentication auth
+    ) {
+        return investorService.listHousehold(actorId(auth), distributorId, householdId);
+    }
+
     @GetMapping("/visible-to/{requesterId}")
     public List<Investor> listVisibleToRequester(@PathVariable UUID requesterId) {
         return investorService.listVisibleToMaster(requesterId);
@@ -109,6 +139,108 @@ public class InvestorController {
             Authentication auth
     ) {
         return investorService.updateKycStatus(investorId, status, actorId(auth));
+    }
+
+    @PostMapping("/{investorId}/kyc-checks")
+    public InvestorExternalKycResponse createKycCheck(
+            @PathVariable UUID investorId,
+            @Valid @RequestBody(required = false) InvestorKycCheckRequest request,
+            Authentication auth
+    ) {
+        return investorKycService.createKycCheck(investorId, request, actorId(auth));
+    }
+
+    @GetMapping("/{investorId}/kyc-checks/{kycCheckId}")
+    public InvestorExternalKycResponse fetchKycCheck(
+            @PathVariable UUID investorId,
+            @PathVariable String kycCheckId,
+            Authentication auth
+    ) {
+        return investorKycService.fetchKycCheck(investorId, kycCheckId, actorId(auth));
+    }
+
+    @PutMapping("/{investorId}/kyc-checks/{kycCheckId}/refetch")
+    public InvestorExternalKycResponse refetchKycCheck(
+            @PathVariable UUID investorId,
+            @PathVariable String kycCheckId,
+            Authentication auth
+    ) {
+        return investorKycService.refetchKycCheck(investorId, kycCheckId, actorId(auth));
+    }
+
+    @GetMapping("/{investorId}/kyc-requests")
+    public JsonNode listKycRequests(
+            @PathVariable UUID investorId,
+            @RequestParam(required = false) String status,
+            Authentication auth
+    ) {
+        return investorKycService.listKycRequests(investorId, status, actorId(auth));
+    }
+
+    @PostMapping("/{investorId}/kyc-requests")
+    public InvestorExternalKycResponse createKycRequest(
+            @PathVariable UUID investorId,
+            @Valid @RequestBody(required = false) InvestorKycRequestCreateRequest request,
+            Authentication auth
+    ) {
+        return investorKycService.createKycRequest(investorId, request, actorId(auth));
+    }
+
+    @GetMapping("/{investorId}/kyc-requests/{kycRequestId}")
+    public InvestorExternalKycResponse fetchKycRequest(
+            @PathVariable UUID investorId,
+            @PathVariable String kycRequestId,
+            Authentication auth
+    ) {
+        return investorKycService.fetchKycRequest(investorId, kycRequestId, actorId(auth));
+    }
+
+    @PatchMapping("/{investorId}/kyc-requests/{kycRequestId}")
+    public InvestorExternalKycResponse updateKycRequest(
+            @PathVariable UUID investorId,
+            @PathVariable String kycRequestId,
+            @Valid @RequestBody InvestorKycRequestUpdateRequest request,
+            Authentication auth
+    ) {
+        return investorKycService.updateKycRequest(investorId, kycRequestId, request, actorId(auth));
+    }
+
+    @PostMapping("/{investorId}/kyc-requests/{kycRequestId}/simulate")
+    public InvestorExternalKycResponse simulateKycRequest(
+            @PathVariable UUID investorId,
+            @PathVariable String kycRequestId,
+            @Valid @RequestBody InvestorKycSimulationRequest request,
+            Authentication auth
+    ) {
+        return investorKycService.simulateKycRequest(investorId, kycRequestId, request.status(), actorId(auth));
+    }
+
+    @PostMapping("/{investorId}/identity-documents")
+    public InvestorExternalKycResponse createIdentityDocument(
+            @PathVariable UUID investorId,
+            @Valid @RequestBody IdentityDocumentCreateRequest request,
+            Authentication auth
+    ) {
+        return investorKycService.createIdentityDocument(investorId, request, actorId(auth));
+    }
+
+    @GetMapping("/{investorId}/identity-documents/{identityDocumentId}")
+    public JsonNode fetchIdentityDocument(
+            @PathVariable UUID investorId,
+            @PathVariable String identityDocumentId,
+            Authentication auth
+    ) {
+        return investorKycService.fetchIdentityDocument(investorId, identityDocumentId, actorId(auth));
+    }
+
+    @GetMapping("/{investorId}/identity-documents")
+    public JsonNode listIdentityDocuments(
+            @PathVariable UUID investorId,
+            @RequestParam(required = false) String kycRequestId,
+            @RequestParam(required = false) String fetchStatus,
+            Authentication auth
+    ) {
+        return investorKycService.listIdentityDocuments(investorId, kycRequestId, fetchStatus, actorId(auth));
     }
 
     @PostMapping("/{investorId}/bank-accounts")
@@ -137,6 +269,16 @@ public class InvestorController {
             @Valid @RequestBody InvestorUpdateRequest request
     ) {
         return investorService.updateInvestor(investorId, request);
+    }
+
+    @PutMapping(value = "/{investorId}/documents", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public InvestorDocumentUploadResponse uploadDocument(
+            @PathVariable UUID investorId,
+            @RequestParam("documentType") String documentType,
+            @RequestParam("file") MultipartFile file,
+            Authentication auth
+    ) {
+        return investorDocumentService.uploadDocument(investorId, documentType, file, actorId(auth));
     }
 
     @GetMapping("/by-postal-code/{postalCode}")

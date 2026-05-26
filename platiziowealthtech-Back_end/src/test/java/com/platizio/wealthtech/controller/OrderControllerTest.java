@@ -20,7 +20,7 @@ class OrderControllerTest {
     @Test
     void createOrderUsesAuthenticatedDistributorId() {
         RecordingOrderService orderService = new RecordingOrderService();
-        OrderController controller = new OrderController(orderService);
+        OrderController controller = new OrderController(orderService, null);
         UUID distributorId = UUID.randomUUID();
         OrderCreateRequest request = new OrderCreateRequest(
                 UUID.randomUUID(),
@@ -44,7 +44,7 @@ class OrderControllerTest {
     @Test
     void createBulkOrdersUsesAuthenticatedDistributorId() {
         RecordingOrderService orderService = new RecordingOrderService();
-        OrderController controller = new OrderController(orderService);
+        OrderController controller = new OrderController(orderService, null);
         UUID distributorId = UUID.randomUUID();
         BulkOrderCreateRequest request = new BulkOrderCreateRequest(
                 List.of(UUID.randomUUID(), UUID.randomUUID()),
@@ -77,7 +77,7 @@ class OrderControllerTest {
         private UUID createOrdersDistributorId;
 
         RecordingOrderService() {
-            super(null, null, null, null, null, null);
+            super(null, null, null, null, null, null, null);
         }
 
         @Override

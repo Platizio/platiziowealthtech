@@ -81,6 +81,13 @@ class InvestorCreateRequestValidationTest {
                 null,
                 null,
                 null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
                 null
         );
     }

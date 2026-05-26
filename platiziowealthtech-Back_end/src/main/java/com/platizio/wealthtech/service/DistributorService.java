@@ -54,6 +54,7 @@ public class DistributorService {
         throw new IllegalStateException("Only an admin or master distributor can search distributors");
     }
 
+    @Transactional(readOnly = true)
     public List<Distributor> findSubDistributors(UUID requesterId) {
         Distributor requester = getDistributor(requesterId);
         if (requester.getRole() == DistributorRole.ADMIN) {

@@ -7,4 +7,6 @@ import org.springframework.data.jpa.repository.JpaRepository;
 
 public interface NotificationRepository extends JpaRepository<Notification, UUID> {
     List<Notification> findByDistributorIdOrderByCreatedAtDesc(UUID distributorId);
+
+    long countByDistributorIdAndReadFlagFalse(UUID distributorId);
 }

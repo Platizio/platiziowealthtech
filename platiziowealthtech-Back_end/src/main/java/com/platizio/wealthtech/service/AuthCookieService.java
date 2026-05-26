@@ -25,7 +25,7 @@ public class AuthCookieService {
     public AuthCookieService(
             @Value("${app.auth.cookie-name:access_token}") String cookieName,
             @Value("${app.auth.refresh-cookie-name:refresh_token}") String refreshCookieName,
-            @Value("${app.auth.cookie-secure:false}") boolean secure,
+            @Value("${app.auth.cookie-secure}") boolean secure,
             @Value("${app.auth.cookie-same-site:Lax}") String sameSite,
             @Value("${jwt.expiration-ms}") long expirationMs,
             @Value("${app.auth.refresh-token-expiration-ms}") long refreshExpirationMs

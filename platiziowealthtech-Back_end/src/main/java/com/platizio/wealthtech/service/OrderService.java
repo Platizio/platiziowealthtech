@@ -25,7 +25,10 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 
 @Service
@@ -38,6 +41,7 @@ public class OrderService {
     private final NotificationService notificationService;
     private static final Logger logger = LoggerFactory.getLogger(OrderService.class);
     private final CybrillaClient cybrillaClient;
+    private final TransactionTemplate transactionTemplate;
 
     public OrderService(
             TransactionOrderRepository transactionOrderRepository,
@@ -45,7 +49,8 @@ public class OrderService {
             InvestorService investorService,
             AuditService auditService,
             NotificationService notificationService,
-            CybrillaClient cybrillaClient
+            CybrillaClient cybrillaClient,
+            PlatformTransactionManager transactionManager
     ) {
         this.transactionOrderRepository = transactionOrderRepository;
         this.redemptionRecordRepository = redemptionRecordRepository;
@@ -53,6 +58,7 @@ public class OrderService {
         this.auditService = auditService;
         this.notificationService = notificationService;
         this.cybrillaClient = cybrillaClient;
+        this.transactionTemplate = transactionManager == null ? null : perOrderTransactionTemplate(transactionManager);
     }
 
     public List<TransactionOrder> listOrdersByInvestor(UUID investorId) {
@@ -98,7 +104,7 @@ public class OrderService {
         return transactionOrderRepository.findAll(spec, pageRequest);
     }
 
-@Transactional(readOnly = true)
+    @Transactional(readOnly = true)
     public List<TransactionOrder> listOrdersByDistributor(UUID distributorId) {
         logger.info("Fetching orders for distributor {}", distributorId);
         List<TransactionOrder> orders = transactionOrderRepository.findByDistributorId(distributorId);
@@ -115,24 +121,33 @@ public class OrderService {
         return redemptionRecordRepository.findByOrderId(orderId);
     }
 
-    @Transactional
     public List<TransactionOrder> createOrders(BulkOrderCreateRequest request, UUID distributorId) {
-        return request.investorIds().stream()
-                .distinct()
-                .map(investorId -> createOrder(new OrderCreateRequest(
-                        investorId,
-                        request.productSchemeId(),
-                        null,
-                        request.transactionType(),
-                        request.amount(),
-                        request.units(),
-                        request.paymentMode(),
-                        request.mandateMode(),
-                        null,
-                        null,
-                        null
-                ), distributorId))
-                .toList();
+        if (transactionTemplate == null) {
+            throw new IllegalStateException("Bulk order transaction template is not configured");
+        }
+        List<TransactionOrder> createdOrders = new ArrayList<>();
+        for (UUID investorId : request.investorIds().stream().distinct().toList()) {
+            transactionTemplate.executeWithoutResult(status -> createdOrders.add(createOrder(new OrderCreateRequest(
+                    investorId,
+                    request.productSchemeId(),
+                    null,
+                    request.transactionType(),
+                    request.amount(),
+                    request.units(),
+                    request.paymentMode(),
+                    request.mandateMode(),
+                    null,
+                    null,
+                    null
+            ), distributorId)));
+        }
+        return createdOrders;
+    }
+
+    private TransactionTemplate perOrderTransactionTemplate(PlatformTransactionManager transactionManager) {
+        TransactionTemplate template = new TransactionTemplate(transactionManager);
+        template.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        return template;
     }
 
     @Transactional

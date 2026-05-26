@@ -82,16 +82,6 @@ class AuthControllerRefreshTest {
                 .anySatisfy(cookie -> assertThat(cookie).contains("refresh_token=").contains("Max-Age=0"));
     }
 
-    @Test
-    void scheduledPurgeDelegatesToAuthService() {
-        RecordingAuthService authService = new RecordingAuthService(UUID.randomUUID());
-        AuthController controller = new AuthController(authService, cookieService());
-
-        controller.purgeExpiredBlockedTokens();
-
-        assertThat(authService.purgeCalled).isTrue();
-    }
-
     private AuthCookieService cookieService() {
         return new AuthCookieService(
                 "access_token",
@@ -110,7 +100,6 @@ class AuthControllerRefreshTest {
         private String refreshedToken;
         private String revokedToken;
         private String blockedAccessToken;
-        private boolean purgeCalled;
 
         RecordingAuthService(UUID refreshToken) {
             this(refreshToken, UUID.randomUUID());
@@ -146,12 +135,6 @@ class AuthControllerRefreshTest {
         @Override
         public void blockAccessToken(String accessToken) {
             blockedAccessToken = accessToken;
-        }
-
-        @Override
-        public long purgeExpiredBlockedTokens() {
-            purgeCalled = true;
-            return 0;
         }
 
         private AuthResponse response(String token, String message) {

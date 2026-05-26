@@ -1,0 +1,97 @@
+[INFO] Scanning for projects...
+[INFO] 
+[INFO] ------------------< com.platizio:wealthtech-backend >-------------------
+[INFO] Building wealthtech-backend 0.0.1-SNAPSHOT
+[INFO]   from pom.xml
+[INFO] --------------------------------[ jar ]---------------------------------
+[INFO] 
+[INFO] >>> spring-boot:3.3.5:run (default-cli) > test-compile @ wealthtech-backend >>>
+[INFO] 
+[INFO] --- resources:3.3.1:resources (default-resources) @ wealthtech-backend ---
+[INFO] Copying 2 resources from src\main\resources to target\classes
+[INFO] Copying 27 resources from src\main\resources to target\classes
+[INFO] 
+[INFO] --- compiler:3.13.0:compile (default-compile) @ wealthtech-backend ---
+[INFO] Nothing to compile - all classes are up to date.
+[INFO] 
+[INFO] --- resources:3.3.1:testResources (default-testResources) @ wealthtech-backend ---
+[INFO] skip non existing resourceDirectory C:\Users\HP\Downloads\platiziowealthtech-Back_end\platiziowealthtech-Back_end\src\test\resources
+[INFO] 
+[INFO] --- compiler:3.13.0:testCompile (default-testCompile) @ wealthtech-backend ---
+[INFO] Nothing to compile - all classes are up to date.
+[INFO] 
+[INFO] <<< spring-boot:3.3.5:run (default-cli) < test-compile @ wealthtech-backend <<<
+[INFO] 
+[INFO] 
+[INFO] --- spring-boot:3.3.5:run (default-cli) @ wealthtech-backend ---
+[INFO] Attaching agents: []
+
+  .   ____          _            __ _ _
+ /\\ / ___'_ __ _ _(_)_ __  __ _ \ \ \ \
+( ( )\___ | '_ | '_| | '_ \/ _` | \ \ \ \
+ \\/  ___)| |_)| | | | | || (_| |  ) ) ) )
+  '  |____| .__|_| |_|_| |_\__, | / / / /
+ =========|_|==============|___/=/_/_/_/
+
+ :: Spring Boot ::                (v3.3.5)
+
+2026-05-26T15:18:08.883+05:30  INFO [requestId:] 3076 --- [wealthtech-backend] [           main] c.p.w.WealthtechBackendApplication       : Starting WealthtechBackendApplication using Java 26.0.1 with PID 3076 (C:\Users\HP\Downloads\platiziowealthtech-Back_end\platiziowealthtech-Back_end\target\classes started by HP in C:\Users\HP\Downloads\platiziowealthtech-Back_end\platiziowealthtech-Back_end)
+2026-05-26T15:18:08.885+05:30  INFO [requestId:] 3076 --- [wealthtech-backend] [           main] c.p.w.WealthtechBackendApplication       : The following 1 profile is active: "local"
+2026-05-26T15:18:09.869+05:30  INFO [requestId:] 3076 --- [wealthtech-backend] [           main] .s.d.r.c.RepositoryConfigurationDelegate : Bootstrapping Spring Data JPA repositories in DEFAULT mode.
+2026-05-26T15:18:09.956+05:30  INFO [requestId:] 3076 --- [wealthtech-backend] [           main] .s.d.r.c.RepositoryConfigurationDelegate : Finished Spring Data repository scanning in 82 ms. Found 14 JPA repository interfaces.
+WARNING: A restricted method in java.lang.System has been called
+WARNING: java.lang.System::load has been called by org.apache.tomcat.jni.Library in an unnamed module (file:/C:/Users/HP/.m2/repository/org/apache/tomcat/embed/tomcat-embed-core/10.1.31/tomcat-embed-core-10.1.31.jar)
+WARNING: Use --enable-native-access=ALL-UNNAMED to avoid a warning for callers in this module
+WARNING: Restricted methods will be blocked in a future release unless native access is enabled
+
+2026-05-26T15:18:10.718+05:30  INFO [requestId:] 3076 --- [wealthtech-backend] [           main] o.s.b.w.embedded.tomcat.TomcatWebServer  : Tomcat initialized with port 8081 (http)
+2026-05-26T15:18:10.743+05:30  INFO [requestId:] 3076 --- [wealthtech-backend] [           main] o.apache.catalina.core.StandardService   : Starting service [Tomcat]
+2026-05-26T15:18:10.746+05:30  INFO [requestId:] 3076 --- [wealthtech-backend] [           main] o.apache.catalina.core.StandardEngine    : Starting Servlet engine: [Apache Tomcat/10.1.31]
+2026-05-26T15:18:10.855+05:30  INFO [requestId:] 3076 --- [wealthtech-backend] [           main] o.a.c.c.C.[Tomcat].[localhost].[/]       : Initializing Spring embedded WebApplicationContext
+2026-05-26T15:18:10.857+05:30  INFO [requestId:] 3076 --- [wealthtech-backend] [           main] w.s.c.ServletWebServerApplicationContext : Root WebApplicationContext: initialization completed in 1937 ms
+2026-05-26T15:18:11.566+05:30  INFO [requestId:] 3076 --- [wealthtech-backend] [           main] com.zaxxer.hikari.HikariDataSource       : HikariPool-1 - Starting...
+2026-05-26T15:18:11.707+05:30  INFO [requestId:] 3076 --- [wealthtech-backend] [           main] com.zaxxer.hikari.pool.HikariPool        : HikariPool-1 - Added connection org.postgresql.jdbc.PgConnection@64665781
+2026-05-26T15:18:11.708+05:30  INFO [requestId:] 3076 --- [wealthtech-backend] [           main] com.zaxxer.hikari.HikariDataSource       : HikariPool-1 - Start completed.
+2026-05-26T15:18:11.735+05:30  INFO [requestId:] 3076 --- [wealthtech-backend] [           main] org.flywaydb.core.FlywayExecutor         : Database: jdbc:postgresql://localhost:5432/postgres (PostgreSQL 18.3)
+2026-05-26T15:18:11.742+05:30  WARN [requestId:] 3076 --- [wealthtech-backend] [           main] o.f.c.internal.database.base.Database    : Flyway upgrade recommended: PostgreSQL 18.3 is newer than this version of Flyway and support has not been tested. The latest supported version of PostgreSQL is 16.
+2026-05-26T15:18:11.808+05:30  INFO [requestId:] 3076 --- [wealthtech-backend] [           main] o.f.core.internal.command.DbValidate     : Successfully validated 27 migrations (execution time 00:00.057s)
+2026-05-26T15:18:11.854+05:30  INFO [requestId:] 3076 --- [wealthtech-backend] [           main] o.f.core.internal.command.DbMigrate      : Current version of schema "public": 26
+2026-05-26T15:18:11.867+05:30  INFO [requestId:] 3076 --- [wealthtech-backend] [           main] o.f.core.internal.command.DbMigrate      : Migrating schema "public" to version "27 - add investor documents"
+2026-05-26T15:18:12.019+05:30  INFO [requestId:] 3076 --- [wealthtech-backend] [           main] o.f.core.internal.command.DbMigrate      : Migrating schema "public" to version "28 - add investor external kyc fields"
+2026-05-26T15:18:12.033+05:30  INFO [requestId:] 3076 --- [wealthtech-backend] [           main] o.f.core.internal.command.DbMigrate      : Successfully applied 2 migrations to schema "public", now at version v28 (execution time 00:00.146s)
+2026-05-26T15:18:12.131+05:30  INFO [requestId:] 3076 --- [wealthtech-backend] [           main] o.hibernate.jpa.internal.util.LogHelper  : HHH000204: Processing PersistenceUnitInfo [name: default]
+2026-05-26T15:18:12.179+05:30  INFO [requestId:] 3076 --- [wealthtech-backend] [           main] org.hibernate.Version                    : HHH000412: Hibernate ORM core version 6.5.3.Final
+2026-05-26T15:18:12.211+05:30  INFO [requestId:] 3076 --- [wealthtech-backend] [           main] o.h.c.internal.RegionFactoryInitiator    : HHH000026: Second-level cache disabled
+2026-05-26T15:18:12.429+05:30  INFO [requestId:] 3076 --- [wealthtech-backend] [           main] o.s.o.j.p.SpringPersistenceUnitInfo      : No LoadTimeWeaver setup: ignoring JPA class transformer
+2026-05-26T15:18:13.315+05:30  INFO [requestId:] 3076 --- [wealthtech-backend] [           main] o.h.e.t.j.p.i.JtaPlatformInitiator       : HHH000489: No JTA platform available (set 'hibernate.transaction.jta.platform' to enable JTA platform integration)
+2026-05-26T15:18:13.373+05:30  INFO [requestId:] 3076 --- [wealthtech-backend] [           main] j.LocalContainerEntityManagerFactoryBean : Initialized JPA EntityManagerFactory for persistence unit 'default'
+2026-05-26T15:18:13.727+05:30  INFO [requestId:] 3076 --- [wealthtech-backend] [           main] o.s.d.j.r.query.QueryEnhancerFactory     : Hibernate is in classpath; If applicable, HQL parser will be used.
+2026-05-26T15:18:14.259+05:30  INFO [requestId:] 3076 --- [wealthtech-backend] [           main] c.p.w.integration.RealCybrillaClient     : cybrilla_client mode='real' base_url='https://s.finprim.com' tenant_header_configured='true'
+2026-05-26T15:18:14.611+05:30  INFO [requestId:] 3076 --- [wealthtech-backend] [           main] eAuthenticationProviderManagerConfigurer : Global AuthenticationManager configured with AuthenticationProvider bean with name authenticationProvider
+2026-05-26T15:18:14.612+05:30  WARN [requestId:] 3076 --- [wealthtech-backend] [           main] r$InitializeUserDetailsManagerConfigurer : Global AuthenticationManager configured with an AuthenticationProvider bean. UserDetailsService beans will not be used for username/password login. Consider removing the AuthenticationProvider bean. Alternatively, consider using the UserDetailsService in a manually instantiated DaoAuthenticationProvider.
+2026-05-26T15:18:14.866+05:30  INFO [requestId:] 3076 --- [wealthtech-backend] [           main] o.s.b.a.e.web.EndpointLinksResolver      : Exposing 3 endpoints beneath base path '/actuator'
+2026-05-26T15:18:15.351+05:30  INFO [requestId:] 3076 --- [wealthtech-backend] [           main] o.s.b.w.embedded.tomcat.TomcatWebServer  : Tomcat started on port 8081 (http) with context path '/'
+2026-05-26T15:18:15.363+05:30  INFO [requestId:] 3076 --- [wealthtech-backend] [           main] c.p.w.WealthtechBackendApplication       : Started WealthtechBackendApplication in 6.805 seconds (process running for 7.06)
+2026-05-26T15:18:15.494+05:30  INFO [requestId:] 3076 --- [wealthtech-backend] [           main] .a.ExternalAuthTokenAutoRefreshScheduler : external_auth_auto_refresh trigger='startup' provider='Cybrilla pre-verification'
+2026-05-26T15:18:15.505+05:30  INFO [requestId:] 3076 --- [wealthtech-backend] [           main] c.p.w.i.a.ExternalAuthTokenCacheStore    : external_auth_cache status='loaded' key='CYBRILLA_PRE_VERIFICATION' file='C:\Users\HP\.platizio-wealthtech\external-auth-token-cache.json' refresh_at='2026-05-26T10:02:56.376897800Z' expires_at='2026-05-26T10:04:56.376897800Z'
+2026-05-26T15:18:15.506+05:30  INFO [requestId:] 3076 --- [wealthtech-backend] [           main] c.p.w.i.auth.ExternalBearerTokenService  : external_auth provider='Cybrilla pre-verification' status='cached_after_restart' token='sha256:0fc613257f64' new_token_in='15 mins' expires_in='17 mins'
+2026-05-26T15:18:15.506+05:30  INFO [requestId:] 3076 --- [wealthtech-backend] [           main] .a.ExternalAuthTokenAutoRefreshScheduler : external_auth_auto_refresh trigger='startup' provider='Fintech Primitives tenant'
+2026-05-26T15:18:15.510+05:30  INFO [requestId:] 3076 --- [wealthtech-backend] [           main] c.p.w.i.a.ExternalAuthTokenCacheStore    : external_auth_cache status='loaded' key='FINPRIM_TENANT' file='C:\Users\HP\.platizio-wealthtech\external-auth-token-cache.json' refresh_at='2026-05-26T10:02:56.466624900Z' expires_at='2026-05-26T10:04:56.466624900Z'
+2026-05-26T15:18:15.511+05:30  INFO [requestId:] 3076 --- [wealthtech-backend] [           main] c.p.w.i.auth.ExternalBearerTokenService  : external_auth provider='Fintech Primitives tenant' status='cached_after_restart' token='sha256:1d296b0ceb8d' new_token_in='15 mins' expires_in='17 mins'
+2026-05-26T15:19:08.806+05:30  INFO [requestId:] 3076 --- [wealthtech-backend] [nio-8081-exec-1] o.a.c.c.C.[Tomcat].[localhost].[/]       : Initializing Spring DispatcherServlet 'dispatcherServlet'
+2026-05-26T15:19:08.806+05:30  INFO [requestId:] 3076 --- [wealthtech-backend] [nio-8081-exec-1] o.s.web.servlet.DispatcherServlet        : Initializing Servlet 'dispatcherServlet'
+2026-05-26T15:19:08.808+05:30  INFO [requestId:] 3076 --- [wealthtech-backend] [nio-8081-exec-1] o.s.web.servlet.DispatcherServlet        : Completed initialization in 1 ms
+2026-05-26T15:43:30.629+05:30  WARN [requestId:8c372ae1-439b-44ee-ae85-3af362da94c7] 3076 --- [wealthtech-backend] [nio-8081-exec-8] c.p.wealthtech.config.JwtAuthFilter      : Invalid token received for request to /api/v1/auth/me
+2026-05-26T15:43:30.632+05:30  WARN [requestId:8c372ae1-439b-44ee-ae85-3af362da94c7] 3076 --- [wealthtech-backend] [nio-8081-exec-8] c.p.w.controller.GlobalExceptionHandler  : Unauthorized access attempt: Not authenticated at /api/v1/auth/me
+2026-05-26T15:48:15.363+05:30  INFO [requestId:] 3076 --- [wealthtech-backend] [   scheduling-1] .a.ExternalAuthTokenAutoRefreshScheduler : external_auth_auto_refresh trigger='scheduled_check' provider='Cybrilla pre-verification'
+2026-05-26T15:48:15.368+05:30  INFO [requestId:] 3076 --- [wealthtech-backend] [   scheduling-1] c.p.w.i.a.ExternalAuthTokenCacheStore    : external_auth_cache status='loaded' key='CYBRILLA_PRE_VERIFICATION' file='C:\Users\HP\.platizio-wealthtech\external-auth-token-cache.json' refresh_at='2026-05-26T10:02:56.376897800Z' expires_at='2026-05-26T10:04:56.376897800Z'
+2026-05-26T15:48:15.368+05:30  INFO [requestId:] 3076 --- [wealthtech-backend] [   scheduling-1] c.p.w.i.auth.ExternalBearerTokenService  : external_auth_cache status='expired_or_refresh_due' provider='Cybrilla pre-verification' new_token_in='0 mins'
+2026-05-26T15:48:15.369+05:30  INFO [requestId:] 3076 --- [wealthtech-backend] [   scheduling-1] c.p.w.i.auth.ExternalBearerTokenService  : external_auth_request provider='Cybrilla pre-verification' token_url='https://s.finprim.com/v2/auth/cybrillarta/token' client_id='mfdp...8a31' client_secret_configured='true'
+2026-05-26T15:48:16.193+05:30  INFO [requestId:] 3076 --- [wealthtech-backend] [   scheduling-1] c.p.w.i.a.ExternalAuthTokenCacheStore    : external_auth_cache status='saved' key='CYBRILLA_PRE_VERIFICATION' file='C:\Users\HP\.platizio-wealthtech\external-auth-token-cache.json'
+2026-05-26T15:48:16.194+05:30  INFO [requestId:] 3076 --- [wealthtech-backend] [   scheduling-1] c.p.w.i.auth.ExternalBearerTokenService  : external_auth provider='Cybrilla pre-verification' status='refreshed' token='sha256:8b72cff8edd7' new_token_in='28 mins' expires_in='30 mins'
+2026-05-26T15:48:16.195+05:30  INFO [requestId:] 3076 --- [wealthtech-backend] [   scheduling-1] .a.ExternalAuthTokenAutoRefreshScheduler : external_auth_auto_refresh trigger='scheduled_check' provider='Fintech Primitives tenant'
+2026-05-26T15:48:16.196+05:30  INFO [requestId:] 3076 --- [wealthtech-backend] [   scheduling-1] c.p.w.i.a.ExternalAuthTokenCacheStore    : external_auth_cache status='loaded' key='FINPRIM_TENANT' file='C:\Users\HP\.platizio-wealthtech\external-auth-token-cache.json' refresh_at='2026-05-26T10:02:56.466624900Z' expires_at='2026-05-26T10:04:56.466624900Z'
+2026-05-26T15:48:16.196+05:30  INFO [requestId:] 3076 --- [wealthtech-backend] [   scheduling-1] c.p.w.i.auth.ExternalBearerTokenService  : external_auth_cache status='expired_or_refresh_due' provider='Fintech Primitives tenant' new_token_in='0 mins'
+2026-05-26T15:48:16.197+05:30  INFO [requestId:] 3076 --- [wealthtech-backend] [   scheduling-1] c.p.w.i.auth.ExternalBearerTokenService  : external_auth_request provider='Fintech Primitives tenant' token_url='https://s.finprim.com/v2/auth/platizio/token' client_id='plat...4554' client_secret_configured='true'
+2026-05-26T15:48:16.322+05:30  INFO [requestId:] 3076 --- [wealthtech-backend] [   scheduling-1] c.p.w.i.a.ExternalAuthTokenCacheStore    : external_auth_cache status='saved' key='FINPRIM_TENANT' file='C:\Users\HP\.platizio-wealthtech\external-auth-token-cache.json'
+2026-05-26T15:48:16.323+05:30  INFO [requestId:] 3076 --- [wealthtech-backend] [   scheduling-1] c.p.w.i.auth.ExternalBearerTokenService  : external_auth provider='Fintech Primitives tenant' status='refreshed' token='sha256:c28f28b2a53a' new_token_in='28 mins' expires_in='30 mins'

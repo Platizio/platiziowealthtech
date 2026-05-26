@@ -2,27 +2,31 @@ package com.platizio.wealthtech.service;
 
 import com.platizio.wealthtech.common.DuplicateResourceException;
 import com.platizio.wealthtech.domain.*;
-import com.platizio.wealthtech.common.ConflictException;
 import com.platizio.wealthtech.dto.InvestorBankRequest;
 import com.platizio.wealthtech.dto.InvestorCreateRequest;
 import com.platizio.wealthtech.dto.InvestorUpdateRequest;
 import com.platizio.wealthtech.integration.CybrillaClient;
+import com.platizio.wealthtech.integration.CybrillaApiException;
 import com.platizio.wealthtech.repository.InvestorBankAccountRepository;
 import com.platizio.wealthtech.repository.InvestorRepository;
 import jakarta.persistence.EntityNotFoundException;
 import java.time.LocalDateTime;
+import java.util.Locale;
 import java.util.List;
 import java.util.UUID;
 import org.springframework.data.domain.Page;
-import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 @Service
 public class InvestorService {
+
+    private static final Logger logger = LoggerFactory.getLogger(InvestorService.class);
 
     private final InvestorRepository investorRepository;
     private final InvestorBankAccountRepository investorBankAccountRepository;
@@ -48,10 +52,17 @@ public class InvestorService {
         return investorRepository.findByDistributorId(distributorId);
     }
 
+    @Transactional(readOnly = true)
+    public List<Investor> listHousehold(UUID requesterId, UUID distributorId, UUID householdId) {
+        listVisibleToDistributor(requesterId, distributorId);
+        return investorRepository.findByHouseholdIdAndDistributorId(householdId, distributorId);
+    }
+
     public List<Investor> listAll() {
         return investorRepository.findAll();
     }
 
+    @Transactional(readOnly = true)
     public Page<Investor> listVisibleToRequesterPage(UUID requesterId, UUID distributorId, int page, int size) {
         Distributor requester = distributorService.getDistributor(requesterId);
         PageRequest pageRequest = PageRequest.of(
@@ -172,14 +183,16 @@ public class InvestorService {
 
     @Transactional
     public Investor createInvestor(InvestorCreateRequest request) {
-        // ΓöÇΓöÇ Explicit uniqueness guards (fast, friendly 409 before touching the DB) ΓöÇΓöÇ
-        investorRepository.findByPan(request.pan()).ifPresent(existing -> {
-            throw new IllegalArgumentException("Investor with same PAN already exists");
+        String pan = normalizePan(request.pan());
+        String email = cleanText(request.email());
+
+        investorRepository.findByPan(pan).ifPresent(existing -> {
+            throw new DuplicateResourceException("An investor with this PAN already exists");
         });
         // B-18: investors.email had no UNIQUE constraint; check here so the caller
         // receives a clear 409 rather than a raw DataIntegrityViolationException.
-        if (request.email() != null) {
-            investorRepository.findByEmail(request.email()).ifPresent(existing -> {
+        if (email != null) {
+            investorRepository.findByEmail(email).ifPresent(existing -> {
                 throw new DuplicateResourceException("An investor with this email address already exists");
             });
         }
@@ -187,33 +200,61 @@ public class InvestorService {
 
         Investor investor = new Investor();
         investor.setDistributorId(request.distributorId());
-        investor.setFullName(request.fullName());
-        investor.setMobileNumber(request.mobileNumber());
-        investor.setEmail(request.email());
-        investor.setPan(request.pan());
+        investor.setFullName(cleanText(request.fullName()));
+        investor.setMobileNumber(cleanText(request.mobileNumber()));
+        investor.setEmail(email);
+        investor.setPan(pan);
         investor.setDateOfBirth(request.dateOfBirth());
-        investor.setAddressLine1(request.addressLine1());
-        investor.setAddressLine2(request.addressLine2());
-        investor.setCity(request.city());
-        investor.setState(request.state());
-        investor.setPostalCode(request.postalCode());
-        investor.setOnboardingNotes(request.onboardingNotes());
+        investor.setAnniversaryDate(request.anniversaryDate());
+        investor.setGoalMaturityDate(request.goalMaturityDate());
+        investor.setAddressLine1(cleanText(request.addressLine1()));
+        investor.setAddressLine2(cleanText(request.addressLine2()));
+        investor.setCity(cleanText(request.city()));
+        investor.setState(cleanText(request.state()));
+        investor.setPostalCode(cleanText(request.postalCode()));
+        investor.setOnboardingNotes(cleanText(request.onboardingNotes()));
         investor.setInvestorStatus(InvestorStatus.ONBOARDING);
+        investor.setKycStatus(KycStatus.PENDING);
+        applyFamilyStructure(
+                investor,
+                request.relationshipType(),
+                request.householdId(),
+                request.householdName(),
+                request.guardianInvestorId(),
+                request.guardianPan(),
+                request.distributorId()
+        );
 
-        // Safety net: if a concurrent request slips through the guard above and
-        // the DB constraint fires, convert the low-level exception into the same
-        // friendly 409 the explicit check would have thrown.
-        Investor saved;
-        try {
-            saved = investorRepository.save(investor);
-        } catch (DataIntegrityViolationException ex) {
-            throw new DuplicateResourceException("An investor with this email address already exists");
+        Investor saved = investorRepository.save(investor);
+        if (saved.getHouseholdId() == null && saved.getId() != null) {
+            saved.setHouseholdId(saved.getId());
+            saved = investorRepository.save(saved);
         }
+        investorRepository.flush();
 
         auditService.log("INVESTOR", saved.getId(), "CREATED", request.distributorId(), "{\"pan_provided\":true}");
 
-        String externalInvestorId = cybrillaClient.createInvestorProfile(saved);
-        saved.setCybrillaInvestorId(externalInvestorId);
+        try {
+            String externalInvestorId = cybrillaClient.createInvestorProfile(saved);
+            saved.setCybrillaInvestorId(externalInvestorId);
+        } catch (CybrillaApiException ex) {
+            String externalMessage = investorExternalSyncMessage(ex);
+            logger.warn(
+                    "Investor {} saved locally with KYC pending because external profile creation failed: {}",
+                    saved.getId(),
+                    ex.getMessage()
+            );
+            saved.setKycStatus(KycStatus.PENDING);
+            saved.setExternalSyncPending(true);
+            saved.setExternalSyncMessage(externalMessage);
+            auditService.log(
+                    "INVESTOR",
+                    saved.getId(),
+                    "EXTERNAL_PROFILE_PENDING",
+                    request.distributorId(),
+                    "{\"kycStatus\":\"PENDING\",\"externalProfilePending\":true}"
+            );
+        }
         return investorRepository.save(saved);
     }
 
@@ -235,18 +276,37 @@ public class InvestorService {
 
         InvestorBankAccount bankAccount = new InvestorBankAccount();
         bankAccount.setInvestorId(investorId);
-        bankAccount.setAccountHolderName(request.accountHolderName());
-        bankAccount.setAccountNumber(request.accountNumber());
-        bankAccount.setIfscCode(request.ifscCode());
-        bankAccount.setBankName(request.bankName());
-        bankAccount.setBranchName(request.branchName());
+        bankAccount.setAccountHolderName(cleanText(request.accountHolderName()));
+        bankAccount.setAccountNumber(cleanText(request.accountNumber()));
+        bankAccount.setIfscCode(cleanText(request.ifscCode()));
+        bankAccount.setBankName(cleanText(request.bankName()));
+        bankAccount.setBranchName(cleanText(request.branchName()));
         bankAccount.setVerificationStatus(BankVerificationStatus.VERIFICATION_PENDING);
 
         InvestorBankAccount savedBank = investorBankAccountRepository.save(bankAccount);
         investor.setBankVerificationStatus(BankVerificationStatus.VERIFICATION_PENDING);
         investorRepository.save(investor);
 
-        cybrillaClient.captureBankAccount(investor, savedBank);
+        try {
+            cybrillaClient.captureBankAccount(investor, savedBank);
+        } catch (CybrillaApiException ex) {
+            String externalMessage = bankExternalSyncMessage(ex);
+            logger.warn(
+                    "Bank account {} saved locally with verification pending because external bank sync failed: {}",
+                    savedBank.getId(),
+                    ex.getMessage()
+            );
+            savedBank.setExternalSyncPending(true);
+            savedBank.setExternalSyncMessage(externalMessage);
+            auditService.log(
+                    "INVESTOR_BANK",
+                    savedBank.getId(),
+                    "EXTERNAL_BANK_SYNC_PENDING",
+                    actorId,
+                    "{\"investorId\":\"" + investorId + "\",\"externalBankSyncPending\":true}"
+            );
+            return savedBank;
+        }
         auditService.log("INVESTOR_BANK", savedBank.getId(), "BANK_ADDED", actorId, "{\"investorId\":\"" + investorId + "\"}");
         return savedBank;
     }
@@ -275,11 +335,25 @@ public class InvestorService {
         if (request.mobileNumber() != null) investor.setMobileNumber(request.mobileNumber());
         if (request.email() != null) investor.setEmail(request.email());
         if (request.dateOfBirth() != null) investor.setDateOfBirth(request.dateOfBirth());
+        if (request.anniversaryDate() != null) investor.setAnniversaryDate(request.anniversaryDate());
+        if (request.goalMaturityDate() != null) investor.setGoalMaturityDate(request.goalMaturityDate());
         if (request.addressLine1() != null) investor.setAddressLine1(request.addressLine1());
         if (request.addressLine2() != null) investor.setAddressLine2(request.addressLine2());
         if (request.city() != null) investor.setCity(request.city());
         if (request.state() != null) investor.setState(request.state());
         if (request.postalCode() != null) investor.setPostalCode(request.postalCode());
+        if (request.relationshipType() != null || request.householdId() != null || request.householdName() != null
+                || request.guardianInvestorId() != null || request.guardianPan() != null) {
+            applyFamilyStructure(
+                    investor,
+                    request.relationshipType(),
+                    request.householdId(),
+                    request.householdName(),
+                    request.guardianInvestorId(),
+                    request.guardianPan(),
+                    investor.getDistributorId()
+            );
+        }
         if (request.onboardingNotes() != null) investor.setOnboardingNotes(request.onboardingNotes());
         return investorRepository.save(investor);
     }
@@ -323,5 +397,98 @@ public class InvestorService {
         investor.setDeletedAt(LocalDateTime.now());
         investorRepository.save(investor);
         auditService.log("INVESTOR", investorId, "DELETED", actorId, "{\"softDeleted\":true}");
+    }
+
+    private void applyFamilyStructure(
+            Investor investor,
+            InvestorRelationshipType requestedRelationshipType,
+            UUID requestedHouseholdId,
+            String requestedHouseholdName,
+            UUID requestedGuardianInvestorId,
+            String requestedGuardianPan,
+            UUID distributorId
+    ) {
+        InvestorRelationshipType relationshipType = requestedRelationshipType == null
+                ? (investor.getRelationshipType() == null ? InvestorRelationshipType.SELF : investor.getRelationshipType())
+                : requestedRelationshipType;
+
+        UUID householdId = requestedHouseholdId != null ? requestedHouseholdId : investor.getHouseholdId();
+        UUID guardianInvestorId = requestedGuardianInvestorId != null ? requestedGuardianInvestorId : investor.getGuardianInvestorId();
+        String guardianPan = normalizePan(requestedGuardianPan != null ? requestedGuardianPan : investor.getGuardianPan());
+
+        if (guardianInvestorId != null) {
+            Investor guardian = getInvestor(guardianInvestorId);
+            if (!distributorId.equals(guardian.getDistributorId())) {
+                throw new AccessDeniedException("Guardian investor must belong to the same distributor");
+            }
+            householdId = guardian.getHouseholdId() != null ? guardian.getHouseholdId() : guardian.getId();
+            if (guardianPan == null || guardianPan.isBlank()) {
+                guardianPan = normalizePan(guardian.getPan());
+            }
+        }
+
+        if (requestedHouseholdId != null
+                && !investorRepository.existsByHouseholdIdAndDistributorId(householdId, distributorId)) {
+            throw new EntityNotFoundException("Household not found for distributor");
+        }
+
+        if (relationshipType == InvestorRelationshipType.MINOR && guardianInvestorId == null && (guardianPan == null || guardianPan.isBlank())) {
+            throw new IllegalArgumentException("Minor folios require guardian PAN or guardian investor link");
+        }
+
+        if (relationshipType != InvestorRelationshipType.MINOR) {
+            guardianInvestorId = null;
+            guardianPan = null;
+        }
+        if (householdId == null) {
+            householdId = investor.getId() == null ? UUID.randomUUID() : investor.getId();
+        }
+
+        investor.setRelationshipType(relationshipType);
+        investor.setHouseholdId(householdId);
+        investor.setHouseholdName(blankToNull(requestedHouseholdName != null ? requestedHouseholdName : investor.getHouseholdName()));
+        investor.setGuardianInvestorId(guardianInvestorId);
+        investor.setGuardianPan(guardianPan);
+    }
+
+    private String normalizePan(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        return cleanText(value).trim().toUpperCase(Locale.ROOT);
+    }
+
+    private String blankToNull(String value) {
+        String cleaned = cleanText(value);
+        if (cleaned == null || cleaned.isBlank()) {
+            return null;
+        }
+        return cleaned.trim();
+    }
+
+    private String investorExternalSyncMessage(CybrillaApiException ex) {
+        String message = ex.getMessage() == null ? "" : ex.getMessage().toLowerCase(Locale.ROOT);
+        if (message.contains("given pan is not valid")) {
+            return "Investor created, but KYC is incomplete. Unable to post investor data to Cybrilla/Fintech Primitives because PAN verification failed.";
+        }
+        if (message.contains("not a valid name")) {
+            return "Investor created, but KYC is incomplete. Unable to post investor data to Cybrilla/Fintech Primitives because the investor name was rejected.";
+        }
+        return "Investor created, but KYC is incomplete. Unable to post investor data to Cybrilla/Fintech Primitives right now.";
+    }
+
+    private String bankExternalSyncMessage(CybrillaApiException ex) {
+        String message = ex.getMessage() == null ? "" : ex.getMessage().toLowerCase(Locale.ROOT);
+        if (message.contains("investor must have")) {
+            return "Unable to post bank data to Cybrilla/Fintech Primitives because the investor profile is still pending. Bank details were saved locally for retry.";
+        }
+        return "Unable to post bank data to Cybrilla/Fintech Primitives right now. Bank details were saved locally for retry.";
+    }
+
+    private String cleanText(String value) {
+        if (value == null) {
+            return null;
+        }
+        return value.replace("\u0000", "");
     }
 }

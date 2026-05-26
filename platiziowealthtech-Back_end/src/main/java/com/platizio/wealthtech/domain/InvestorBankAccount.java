@@ -29,6 +29,12 @@ public class InvestorBankAccount extends BaseEntity {
 
     private String cybrillaBankId;
 
+    @Transient
+    private Boolean externalSyncPending = Boolean.FALSE;
+
+    @Transient
+    private String externalSyncMessage;
+
     public UUID getInvestorId() { return investorId; }
     public void setInvestorId(UUID investorId) { this.investorId = investorId; }
     public String getAccountHolderName() { return accountHolderName; }
@@ -45,4 +51,8 @@ public class InvestorBankAccount extends BaseEntity {
     public void setVerificationStatus(BankVerificationStatus verificationStatus) { this.verificationStatus = verificationStatus; }
     public String getCybrillaBankId() { return cybrillaBankId; }
     public void setCybrillaBankId(String cybrillaBankId) { this.cybrillaBankId = cybrillaBankId; }
+    public Boolean getExternalSyncPending() { return externalSyncPending; }
+    public void setExternalSyncPending(Boolean externalSyncPending) { this.externalSyncPending = externalSyncPending; }
+    public String getExternalSyncMessage() { return externalSyncMessage; }
+    public void setExternalSyncMessage(String externalSyncMessage) { this.externalSyncMessage = externalSyncMessage; }
 }

@@ -1,6 +1,7 @@
 package com.platizio.wealthtech.repository;
 
 import com.platizio.wealthtech.domain.Investor;
+import com.platizio.wealthtech.domain.BankVerificationStatus;
 import com.platizio.wealthtech.domain.KycStatus;
 import java.util.List;
 import java.util.Optional;
@@ -16,11 +17,37 @@ public interface InvestorRepository extends JpaRepository<Investor, UUID> {
     Optional<Investor> findByEmail(String email);
     List<Investor> findByDistributorId(UUID distributorId);
     List<Investor> findByDistributorIdIn(List<UUID> distributorIds);
+    List<Investor> findByHouseholdIdAndDistributorId(UUID householdId, UUID distributorId);
+    boolean existsByHouseholdIdAndDistributorId(UUID householdId, UUID distributorId);
     Page<Investor> findByDistributorId(UUID distributorId, Pageable pageable);
     Page<Investor> findByDistributorIdIn(List<UUID> distributorIds, Pageable pageable);
+    List<Investor> findByDistributorIdAndKycStatusNot(UUID distributorId, KycStatus kycStatus, Pageable pageable);
+    List<Investor> findByDistributorIdAndBankVerificationStatusNot(
+            UUID distributorId,
+            BankVerificationStatus bankVerificationStatus,
+            Pageable pageable);
+    List<Investor> findByDistributorIdAndKycStatusAndBankVerificationStatusNot(
+            UUID distributorId,
+            KycStatus kycStatus,
+            BankVerificationStatus bankVerificationStatus,
+            Pageable pageable);
+    List<Investor> findByDistributorIdAndKycStatusAndBankVerificationStatus(
+            UUID distributorId,
+            KycStatus kycStatus,
+            BankVerificationStatus bankVerificationStatus,
+            Pageable pageable);
     List<Investor> findByPostalCode(String postalCode);
     List<Investor> findByKycStatus(KycStatus kycStatus);
     List<Investor> findByDistributorIdAndKycStatus(UUID distributorId, KycStatus kycStatus);
+
+    @Query("""
+            select i
+            from Investor i
+            where i.dateOfBirth is not null
+               or i.anniversaryDate is not null
+               or i.goalMaturityDate is not null
+            """)
+    Page<Investor> findInvestorsWithLifeEventDates(Pageable pageable);
 
     @Query(value = """
             select *
