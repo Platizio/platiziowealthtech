@@ -6,6 +6,7 @@ import {
   Target, Users, BookOpen, PieChart, Activity, Eye,
 } from 'lucide-react';
 import { apiFetch } from '../config/api';
+import BackendFundDetailModal from '../components/BackendFundDetailModal';
 import { useDebounce } from '../hooks/useDebounce';
 import { useFocusTrap } from '../hooks/useFocusTrap';
 
@@ -445,10 +446,10 @@ export default function Ledger({ userData }: { userData?: any }) {
       {/* Fund Detail modal */}
       <AnimatePresence>
         {detailModal && (
-          <FundDetailModal
+          <BackendFundDetailModal
             fund={detailModal}
             onClose={() => setDetailModal(null)}
-            onInvest={() => { setInvestModal(detailModal); setDetailModal(null); }}
+            onInvest={(fundForOrder) => { setInvestModal(fundForOrder); setDetailModal(null); }}
           />
         )}
       </AnimatePresence>
@@ -464,48 +465,120 @@ export default function Ledger({ userData }: { userData?: any }) {
 }
 
 // ─── Fund Detail Modal ────────────────────────────────────────────────────────
-function FundDetailModal({ fund, onClose, onInvest }: { fund: any; onClose: () => void; onInvest: () => void }) {
+function FundDetailModal({ fund, onClose, onInvest }: { fund: any; onClose: () => void; onInvest: (fundForOrder: any) => void }) {
   const dialogRef = useFocusTrap<HTMLDivElement>(true);
   const [activeTab, setActiveTab] = useState<'overview' | 'performance' | 'portfolio' | 'details'>('overview');
+  const [schemeDetail, setSchemeDetail] = useState<any>(fund);
+  const [detailLoading, setDetailLoading] = useState(true);
+  const [detailError, setDetailError] = useState('');
 
-  const meta = (() => { try { return fund.metadataJson ? JSON.parse(fund.metadataJson) : {}; } catch { return {}; } })();
+  useEffect(() => {
+    let cancelled = false;
+    setSchemeDetail(fund);
+    setDetailLoading(true);
+    setDetailError('');
 
-  const category = (fund.category || '').toLowerCase();
+    apiFetch(`/products/schemes/${fund.id}`)
+      .then(async res => {
+        const data = await res.json().catch(() => null);
+        if (!res.ok) throw new Error(data?.message || `HTTP ${res.status}`);
+        if (!cancelled) setSchemeDetail(data || fund);
+      })
+      .catch(err => {
+        console.error('Failed to fetch product scheme detail:', err);
+        if (!cancelled) setDetailError('Currently unavailable');
+      })
+      .finally(() => {
+        if (!cancelled) setDetailLoading(false);
+      });
+
+    return () => { cancelled = true; };
+  }, [fund]);
+
+  const displayFund = schemeDetail || fund;
+  const meta = (() => { try { return displayFund.metadataJson ? JSON.parse(displayFund.metadataJson) : {}; } catch { return {}; } })();
+  const metaPath = (path: string) => path.split('.').reduce((acc: any, key) => acc?.[key], meta);
+  const firstValue = (...values: any[]) => values.find(value => value !== undefined && value !== null && String(value).trim() !== '');
+  const backendValue = (...paths: string[]) => firstValue(...paths.map(path => metaPath(path)));
+  const formatBackendPercent = (value: any, fallback: string) => {
+    const raw = firstValue(value);
+    if (raw === undefined) return fallback;
+    return typeof raw === 'number' ? `${raw}%` : String(raw);
+  };
+  const notAvailable = 'Currently unavailable';
+  const toNumber = (value: any) => {
+    const parsed = typeof value === 'number' ? value : Number(String(value ?? '').replace(/[^0-9.-]/g, ''));
+    return Number.isFinite(parsed) ? parsed : null;
+  };
+  const normalizeTextList = (value: any): string[] => {
+    if (Array.isArray(value)) {
+      return value
+        .map(item => typeof item === 'string' ? item : firstValue(item?.text, item?.label, item?.description, item?.name))
+        .filter(Boolean)
+        .map(String);
+    }
+    if (typeof value === 'string' && value.trim()) {
+      return value.split(/\n|;/).map(item => item.trim()).filter(Boolean);
+    }
+    return [];
+  };
+  const normalizeFundManagers = (value: any) => {
+    if (!Array.isArray(value)) return [];
+    return value.map((manager: any) => ({
+      name: String(firstValue(manager.name, manager.full_name, manager.fund_manager_name) || 'N/A'),
+      role: String(firstValue(manager.role, manager.designation, manager.title) || ''),
+      exp: String(firstValue(manager.experience, manager.years_experience, manager.exp) || ''),
+    })).filter((manager: any) => manager.name !== 'N/A');
+  };
+
+  const category = (displayFund.category || '').toLowerCase();
   const isEquity  = category.includes('equity') || category === 'elss' || category.includes('strategic') || category.includes('multi');
   const isDebt    = category.includes('debt') || category.includes('liquid') || category.includes('bond');
   const isHybrid  = category.includes('hybrid') || category.includes('balanced');
+  const seed       = (displayFund.externalSchemeCode || displayFund.id || 'X').toString().split('').reduce((acc: number, char: string) => acc + char.charCodeAt(0), 0);
+  const pr         = (min: number, max: number, offset = 0) => min + ((seed + offset) % Math.max(1, max - min));
+  const pd         = (offset: number) => ((seed + offset) % 10) / 10;
 
-  // Deterministic mock values from scheme code
-  const seed = (fund.externalSchemeCode || fund.id || 'X').toString()
-    .split('').reduce((a: number, c: string) => a + c.charCodeAt(0), 0);
-  const pr = (min: number, max: number, off = 0): number => min + ((seed + off) % Math.max(1, max - min));
-  const pd = (off: number): number => ((seed + off) % 10) / 10;
-
-  const riskLabel = isDebt ? 'Low to Moderate' : isHybrid ? 'Moderate' : 'Very High';
-  const riskIdx   = isDebt ? 1 : isHybrid ? 2 : 4; // 0-4
+  const riskLabel = String(firstValue(
+    displayFund.riskLevel,
+    backendValue('risk', 'risk_level', 'riskLevel', 'mf_scheme.risk_level'),
+    notAvailable,
+  ));
+  const riskIdx = (() => {
+    if (riskLabel === notAvailable) return -1;
+    const risk = riskLabel.toLowerCase();
+    if (risk.includes('very')) return 4;
+    if (risk.includes('high')) return 3;
+    if (risk.includes('moderate')) return 2;
+    if (risk.includes('low')) return 1;
+    return 2;
+  })();
 
   const returns = {
-    '1M':        `+${(pr(1, 4, 0)  + pd(0)).toFixed(1)}%`,
-    '3M':        `+${(pr(3, 10, 1) + pd(1)).toFixed(1)}%`,
-    '1Y':        `+${((isEquity ? pr(15,35,2) : isDebt ? pr(6,9,2)  : pr(10,20,2)) + pd(2)).toFixed(1)}%`,
-    '3Y':        `+${((isEquity ? pr(12,28,3) : isDebt ? pr(5,8,3)  : pr(8,16,3))  + pd(3)).toFixed(1)}%`,
-    '5Y':        `+${((isEquity ? pr(14,25,4) : isDebt ? pr(5,7,4)  : pr(9,14,4))  + pd(4)).toFixed(1)}%`,
-    'Inception': `+${((isEquity ? pr(14,22,5) : isDebt ? pr(5,8,5)  : pr(9,15,5))  + pd(5)).toFixed(1)}%`,
+    '1M':        formatBackendPercent(backendValue('returns.1m', 'returns.1M', 'one_month_return', 'return_1m'), 'N/A'),
+    '3M':        formatBackendPercent(backendValue('returns.3m', 'returns.3M', 'three_month_return', 'return_3m'), 'N/A'),
+    'YTD':       formatBackendPercent(backendValue('returns.ytd', 'ytd_return', 'return_ytd'), 'N/A'),
+    '1Y':        formatBackendPercent(backendValue('returns.1y', 'returns.1Y', 'one_year_return', 'return_1y'), 'N/A'),
+    '3Y':        formatBackendPercent(backendValue('returns.3y', 'returns.3Y', 'three_year_return', 'return_3y'), 'N/A'),
+    '5Y':        formatBackendPercent(backendValue('returns.5y', 'returns.5Y', 'five_year_return', 'return_5y'), 'N/A'),
+    'Inception': formatBackendPercent(backendValue('returns.inception', 'since_inception_return', 'inception_return'), 'N/A'),
   };
+  const returnEntries = (Object.entries(returns) as [string, string][])
+    .filter(([, value]) => value !== 'N/A' && toNumber(value) !== null);
 
-  const nav            = meta.nav            || `₹${pr(isDebt?500:50, isDebt?3500:500, 6)}.${pr(10,99,40)}`;
-  const aum            = meta.aum            || `₹${pr(1000, 25000, 7).toLocaleString('en-IN')} Cr`;
-  const ter            = meta.ter            || `${(isDebt ? pr(20,50,8) : pr(80,180,8)) / 100}.${pr(10,99,41)}`;
-  const sharpe         = meta.sharpe         || `${(isEquity ? pr(80,150,9) : pr(40,100,9)) / 100}.${pr(10,99,42)}`;
-  const stdDev         = meta.stdDev         || `${pr(isDebt?1:10, isDebt?8:22, 10)}.${pr(0,9,43)}%`;
-  const beta           = meta.beta           || (isEquity ? `${(pr(80,115,11)/100).toFixed(2)}` : 'N/A');
-  const minSIP         = meta.minSip         || (isDebt ? '₹500' : '₹100');
-  const minLump        = meta.minLumpsum     || (getAssetClass(fund) === 'SIF' ? '₹10,00,000' : '₹500');
-  const exitLoad       = meta.exitLoad       || (isDebt ? 'NIL' : '1% if redeemed within 1 year');
-  const horizon        = isDebt ? '3 months – 2 years' : isHybrid ? '2–5 years' : '5+ years';
+  const nav            = firstValue(backendValue('nav', 'latest_nav', 'current_nav', 'mf_scheme.latest_nav'), meta.nav) || `₹${pr(isDebt?500:50, isDebt?3500:500, 6)}.${pr(10,99,40)}`;
+  const aum            = firstValue(backendValue('aum', 'assets_under_management', 'asset_under_management', 'mf_scheme.aum'), meta.aum) || `₹${pr(1000, 25000, 7).toLocaleString('en-IN')} Cr`;
+  const ter            = firstValue(backendValue('ter', 'expense_ratio', 'total_expense_ratio'), meta.ter) || `${(isDebt ? pr(20,50,8) : pr(80,180,8)) / 100}.${pr(10,99,41)}`;
+  const sharpe         = firstValue(backendValue('sharpe', 'sharpe_ratio'), meta.sharpe) || `${(isEquity ? pr(80,150,9) : pr(40,100,9)) / 100}.${pr(10,99,42)}`;
+  const stdDev         = firstValue(backendValue('stdDev', 'std_dev', 'standard_deviation'), meta.stdDev) || `${pr(isDebt?1:10, isDebt?8:22, 10)}.${pr(0,9,43)}%`;
+  const beta           = firstValue(backendValue('beta', 'beta_ratio'), meta.beta) || (isEquity ? `${(pr(80,115,11)/100).toFixed(2)}` : 'N/A');
+  const minSIP         = firstValue(displayFund.minSip, backendValue('minSip', 'min_sip', 'minimum_sip_amount'), meta.minSip) || (isDebt ? '₹500' : '₹100');
+  const minLump        = firstValue(displayFund.minInvestment, backendValue('minLumpsum', 'min_lumpsum', 'minimum_purchase_amount'), meta.minLumpsum) || (getAssetClass(displayFund) === 'SIF' ? '₹10,00,000' : '₹500');
+  const exitLoad       = firstValue(backendValue('exitLoad', 'exit_load'), meta.exitLoad) || (isDebt ? 'NIL' : '1% if redeemed within 1 year');
+  const horizon        = firstValue(backendValue('investment_horizon', 'horizon'), meta.horizon) || (isDebt ? '3 months – 2 years' : isHybrid ? '2–5 years' : '5+ years');
   const inceptionYear  = 2015 + pr(0, 7, 12);
   const months         = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-  const inceptionDate  = `${pr(1,28,13)} ${months[pr(0,12,14)]} ${inceptionYear}`;
+  const inceptionDate  = firstValue(backendValue('inception_date', 'inceptionDate', 'allotment_date', 'mf_scheme.inception_date'), `${pr(1,28,13)} ${months[pr(0,12,14)]} ${inceptionYear}`);
 
   const holdings = isDebt ? [
     { name: 'Government Securities',  pct: pr(20,40,20) },
@@ -540,6 +613,17 @@ function FundDetailModal({ fund, onClose, onInvest }: { fund: any; onClose: () =
     { name: 'Healthcare',         pct: pr(4,10,39)  },
     { name: 'Others',             pct: pr(10,20,40) },
   ];
+
+  const normalizeAllocation = (items: any) => Array.isArray(items)
+    ? items.map((item: any) => ({
+        name: String(firstValue(item.name, item.security_name, item.instrument, item.holding_name, item.sector, item.asset) || 'N/A'),
+        pct: Number(firstValue(item.pct, item.percentage, item.percent, item.allocation, item.net_assets_percentage) || 0),
+      })).filter((item: any) => item.name !== 'N/A' || item.pct > 0)
+    : [];
+  const backendHoldings = normalizeAllocation(backendValue('holdings', 'top_holdings', 'portfolio.holdings', 'securities'));
+  const backendSectors = normalizeAllocation(backendValue('sectors', 'sector_allocation', 'portfolio.sectors', 'asset_allocation'));
+  const displayedHoldings = backendHoldings.length > 0 ? backendHoldings : holdings;
+  const displayedSectors = backendSectors.length > 0 ? backendSectors : sectors;
 
   const TABS = [
     { id: 'overview'     as const, label: 'Overview',     Icon: BookOpen    },
@@ -599,12 +683,12 @@ function FundDetailModal({ fund, onClose, onInvest }: { fund: any; onClose: () =
         <div className="bg-[#0B1B3E] px-8 pt-7 pb-0 flex-shrink-0">
           <div className="flex justify-between items-start mb-4">
             <div className="flex gap-2 flex-wrap">
-              <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${productTypeStyle[getAssetClass(fund)] || productTypeStyle['OTHER']}`}>
-                {getAssetClass(fund)}
+              <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${productTypeStyle[getAssetClass(displayFund)] || productTypeStyle['OTHER']}`}>
+                {getAssetClass(displayFund)}
               </span>
-              {fund.category && (
+              {displayFund.category && (
                 <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-white/15 text-white/80">
-                  {fund.category}
+                  {displayFund.category}
                 </span>
               )}
             </div>
@@ -613,8 +697,13 @@ function FundDetailModal({ fund, onClose, onInvest }: { fund: any; onClose: () =
             </button>
           </div>
 
-          <h2 id="fund-detail-title" className="text-xl font-bold text-white leading-snug mb-1">{fund.schemeName}</h2>
-          <p className="text-white/55 text-sm mb-5">{fund.amcName}</p>
+          <h2 id="fund-detail-title" className="text-xl font-bold text-white leading-snug mb-1">{displayFund.schemeName}</h2>
+          <p className="text-white/55 text-sm mb-5">{displayFund.amcName}</p>
+          {(detailLoading || detailError) && (
+            <div className={`mb-4 rounded-xl px-4 py-2 text-xs font-semibold ${detailError ? 'bg-amber-100 text-amber-800' : 'bg-white/10 text-white/70'}`}>
+              {detailError || 'Fetching latest fund details...'}
+            </div>
+          )}
 
           {/* Key stats */}
           <div className="grid grid-cols-4 gap-3 mb-5">
@@ -838,7 +927,7 @@ function FundDetailModal({ fund, onClose, onInvest }: { fund: any; onClose: () =
                       <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Security / Instrument</p>
                       <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider text-right">% Net Assets</p>
                     </div>
-                    {holdings.map((h, i) => (
+                    {displayedHoldings.map((h, i) => (
                       <div key={i} className="grid grid-cols-[1fr,90px] px-4 py-3 border-b border-slate-100 last:border-0 hover:bg-slate-50 transition-colors">
                         <div className="flex items-center gap-2.5">
                           <div className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: `hsl(${200 + i * 22}, 65%, 52%)` }} />
@@ -860,7 +949,7 @@ function FundDetailModal({ fund, onClose, onInvest }: { fund: any; onClose: () =
                     <PieChart className="w-4 h-4 text-purple-500" /> Sector / Asset Holdings
                   </h3>
                   <div className="space-y-3">
-                    {sectors.map((s, i) => (
+                    {displayedSectors.map((s, i) => (
                       <div key={s.name} className="flex items-center gap-3">
                         <p className="text-xs font-medium text-slate-600 w-36 flex-shrink-0">{s.name}</p>
                         <div className="flex-1 bg-slate-100 rounded-full h-5 overflow-hidden">
@@ -900,8 +989,8 @@ function FundDetailModal({ fund, onClose, onInvest }: { fund: any; onClose: () =
                       { label: 'Min Lumpsum Amount',       value: minLump,             Icon: Target      },
                       { label: 'Entry Load',               value: 'NIL',               Icon: FileText    },
                       { label: 'Exit Load',                value: exitLoad,            Icon: FileText    },
-                      { label: 'ISIN',                     value: fund.externalIsin || 'N/A', Icon: FileText },
-                      { label: 'Scheme Code',              value: fund.externalSchemeCode || 'N/A', Icon: FileText },
+                      { label: 'ISIN',                     value: displayFund.externalIsin || 'N/A', Icon: FileText },
+                      { label: 'Scheme Code',              value: displayFund.externalSchemeCode || 'N/A', Icon: FileText },
                     ].map(({ label, value, Icon: Ic }) => (
                       <div key={label} className="bg-slate-50 rounded-xl p-4 border border-slate-100">
                         <div className="flex items-center gap-1.5 mb-2">
@@ -976,7 +1065,7 @@ function FundDetailModal({ fund, onClose, onInvest }: { fund: any; onClose: () =
             Close
           </button>
           <button
-            onClick={onInvest}
+            onClick={() => onInvest(displayFund)}
             className="flex-1 py-2.5 bg-[#0B1B3E] text-white text-sm font-semibold rounded-xl hover:bg-[#1A3066] transition-colors"
           >
             Invest Now
@@ -989,6 +1078,14 @@ function FundDetailModal({ fund, onClose, onInvest }: { fund: any; onClose: () =
 
 // ─── Transaction Modal ────────────────────────────────────────────────────────
 function TransactionModal({ fund, userData, onClose }: { fund: any; userData?: any; onClose: () => void }) {
+  const tomorrowDate = () => {
+    const date = new Date();
+    date.setDate(date.getDate() + 1);
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  };
   const dialogRef = useFocusTrap<HTMLDivElement>(true);
   const [step, setStep] = useState(1);
   const [type, setType] = useState('SIP');
@@ -996,33 +1093,102 @@ function TransactionModal({ fund, userData, onClose }: { fund: any; userData?: a
   const debouncedInvestorQuery = useDebounce(investorQuery, 300);
   const [investorResults, setInvestorResults] = useState<any[]>([]);
   const [selectedInvestor, setSelectedInvestor] = useState<any | null>(null);
+  const [bankAccounts, setBankAccounts] = useState<any[]>([]);
+  const [selectedBank, setSelectedBank] = useState<any | null>(null);
+  const [bankLoading, setBankLoading] = useState(false);
+  const [bankError, setBankError] = useState('');
   const [investorLoading, setInvestorLoading] = useState(false);
+  const [investorError, setInvestorError] = useState('');
+  const [amount, setAmount] = useState('5000');
+  const [sipFrequency, setSipFrequency] = useState<'MONTHLY' | 'QUARTERLY'>('MONTHLY');
+  const [sipStartDate, setSipStartDate] = useState(tomorrowDate);
+  const [orderSubmitting, setOrderSubmitting] = useState(false);
+  const [orderError, setOrderError] = useState('');
+  const [createdOrder, setCreatedOrder] = useState<any | null>(null);
+
+  const investorName = (investor: any) => investor?.fullName || investor?.name || 'Unnamed Investor';
+  const maskAccountNumber = (value?: string) => {
+    if (!value) return 'Account not captured';
+    const lastFour = value.slice(-4);
+    return `${'*'.repeat(Math.max(value.length - 4, 4))}${lastFour}`;
+  };
+  const bankLabel = (bank: any) =>
+    bank ? `${bank.bankName || 'Bank'} ${maskAccountNumber(bank.accountNumber)}` : 'No verified bank selected';
+  const isVerifiedBank = (bank: any) =>
+    String(bank?.verificationStatus || '').toUpperCase() === 'VERIFIED';
+  const investorSearchText = (investor: any) =>
+    [
+      investorName(investor),
+      investor?.pan,
+      investor?.email,
+      investor?.mobileNumber,
+    ].filter(Boolean).join(' ').toLowerCase();
+  const isTransactionEligible = (investor: any) => {
+    const kyc = String(investor?.kycStatus || investor?.kyc || '').toUpperCase();
+    const bank = String(investor?.bankVerificationStatus || '').toUpperCase();
+    return ['COMPLETED', 'VERIFIED'].includes(kyc) && bank === 'VERIFIED';
+  };
+  const extractInvestors = (payload: any) => {
+    if (Array.isArray(payload)) return payload;
+    if (Array.isArray(payload?.content)) return payload.content;
+    if (Array.isArray(payload?.data?.content)) return payload.data.content;
+    if (Array.isArray(payload?.data)) return payload.data;
+    return [];
+  };
+  const parseMoneyValue = (value: any, fallback: number) => {
+    const parsed = typeof value === 'number'
+      ? value
+      : Number(String(value ?? '').replace(/[^0-9.]/g, ''));
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+  };
+  const minAmount = type === 'SIP'
+    ? 500
+    : parseMoneyValue(fund.minInvestment || fund.minimumInvestment || fund.minLumpsum, 1000);
+  const amountNumber = Number(amount);
+  const amountValid = Number.isFinite(amountNumber) && amountNumber >= minAmount;
+  const sipStartDateValid = type !== 'SIP' || Boolean(sipStartDate && new Date(`${sipStartDate}T00:00:00`) > new Date());
+  const canContinueAmountStep = amountValid && sipStartDateValid;
 
   useEffect(() => {
     let cancelled = false;
 
     const searchInvestors = async () => {
       const query = debouncedInvestorQuery.trim();
-      if (query.length < 1) {
-        setInvestorResults([]);
-        setInvestorLoading(false);
-        return;
-      }
-
       setInvestorLoading(true);
+      setInvestorError('');
       try {
-        const params = new URLSearchParams({ query, limit: '10' });
-        if (userData?.id) {
+        const role = normalizeRole(userData?.role);
+        const shouldScopeToDistributor = Boolean(userData?.id && role !== 'ADMIN');
+        const params = new URLSearchParams(
+          query
+            ? { query, limit: '50' }
+            : { page: '0', size: '50' }
+        );
+
+        if (shouldScopeToDistributor) {
           params.set('distributorId', userData.id);
         }
 
-        const res = await apiFetch(`/investors/search/transaction-eligible?${params.toString()}`);
+        const endpoint = query
+          ? `/investors/search/transaction-eligible?${params.toString()}`
+          : `/investors?${params.toString()}`;
+        const res = await apiFetch(endpoint);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
-        if (!cancelled) setInvestorResults(Array.isArray(data) ? data : []);
+        const investors = extractInvestors(data)
+          .filter((investor: any) => query ? true : isTransactionEligible(investor))
+          .filter((investor: any) => {
+            if (!query) return true;
+            return investorSearchText(investor).includes(query.toLowerCase());
+          });
+
+        if (!cancelled) setInvestorResults(investors);
       } catch (err) {
         console.error('Failed to search transaction eligible investors:', err);
-        if (!cancelled) setInvestorResults([]);
+        if (!cancelled) {
+          setInvestorResults([]);
+          setInvestorError('Could not load investors for this distributor. Please try again.');
+        }
       } finally {
         if (!cancelled) setInvestorLoading(false);
       }
@@ -1033,6 +1199,86 @@ function TransactionModal({ fund, userData, onClose }: { fund: any; userData?: a
       cancelled = true;
     };
   }, [debouncedInvestorQuery, userData]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setBankAccounts([]);
+    setSelectedBank(null);
+    setBankError('');
+
+    if (!selectedInvestor?.id) {
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    setBankLoading(true);
+    apiFetch(`/investors/${selectedInvestor.id}/bank-accounts`)
+      .then(async res => {
+        const data = await res.json().catch(() => null);
+        if (!res.ok) throw new Error(data?.message || `HTTP ${res.status}`);
+        if (cancelled) return;
+        const accounts = Array.isArray(data) ? data : [];
+        const verifiedAccounts = accounts.filter(isVerifiedBank);
+        setBankAccounts(verifiedAccounts);
+        setSelectedBank(verifiedAccounts[0] || null);
+      })
+      .catch(err => {
+        console.error('Failed to load investor bank accounts:', err);
+        if (!cancelled) setBankError('Could not load a verified bank account for this investor.');
+      })
+      .finally(() => {
+        if (!cancelled) setBankLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedInvestor?.id]);
+
+  const updateType = (nextType: string) => {
+    setType(nextType);
+    setAmount(nextType === 'SIP' ? '5000' : String(parseMoneyValue(fund.minInvestment || fund.minimumInvestment || fund.minLumpsum, 1000)));
+    if (nextType === 'SIP' && !sipStartDate) setSipStartDate(tomorrowDate());
+    setOrderError('');
+  };
+
+  const submitOrder = async () => {
+    if (!selectedInvestor || !amountValid || orderSubmitting) return;
+
+    setOrderSubmitting(true);
+    setOrderError('');
+    try {
+      const payload = {
+        investorId: selectedInvestor.id,
+        productSchemeId: fund.id,
+        type: type === 'SIP' ? 'SIP' : 'LUMPSUM',
+        transactionType: type === 'SIP' ? 'SIP' : 'LUMPSUM_PURCHASE',
+        amount: amountNumber,
+        paymentMode: type === 'SIP' ? 'MANDATE' : 'BANK_TRANSFER',
+        mandateMode: type === 'SIP' ? 'AUTO_DEBIT' : 'BANK_TRANSFER',
+        sipFrequency: type === 'SIP' ? sipFrequency : undefined,
+        sipStartDate: type === 'SIP' ? sipStartDate : undefined,
+      };
+
+      const response = await apiFetch('/orders', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const result = await response.json().catch(() => null);
+
+      if (!response.ok) {
+        throw new Error(result?.message || `Order creation failed (${response.status})`);
+      }
+
+      setCreatedOrder(result || {});
+    } catch (err: any) {
+      setOrderError(err?.message || 'Order creation failed. Please try again.');
+    } finally {
+      setOrderSubmitting(false);
+    }
+  };
 
   return (
     <div
@@ -1060,6 +1306,38 @@ function TransactionModal({ fund, userData, onClose }: { fund: any; userData?: a
         </div>
 
         <div className="p-8">
+          {createdOrder ? (
+            <div className="text-center py-6">
+              <div className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-full bg-green-100">
+                <CheckCircle2 className="h-8 w-8 text-green-600" />
+              </div>
+              <h2 id="transaction-modal-title" className="text-xl font-semibold text-slate-800">Investment Order Created</h2>
+              <p className="mt-2 text-sm text-slate-500">
+                {type === 'SIP' ? 'SIP' : 'Lumpsum'} order for {investorName(selectedInvestor)} has been sent for processing.
+              </p>
+              <div className="mt-6 rounded-2xl border border-slate-100 bg-slate-50 p-4 text-left text-sm">
+                <div className="flex justify-between gap-4 py-1">
+                  <span className="text-slate-500">Fund</span>
+                  <span className="font-medium text-slate-800 text-right">{fund.schemeName}</span>
+                </div>
+                <div className="flex justify-between gap-4 py-1">
+                  <span className="text-slate-500">Amount</span>
+                  <span className="font-mono font-semibold text-slate-800">Rs {amountNumber.toLocaleString('en-IN')}</span>
+                </div>
+                <div className="flex justify-between gap-4 py-1">
+                  <span className="text-slate-500">Status</span>
+                  <span className="font-semibold text-amber-700">{createdOrder.orderStatus || 'Processing'}</span>
+                </div>
+              </div>
+              <button
+                onClick={onClose}
+                className="mt-7 w-full rounded-xl bg-[#0B1B3E] py-3 text-sm font-semibold text-white transition-colors hover:bg-[#1A3066]"
+              >
+                Done
+              </button>
+            </div>
+          ) : (
+          <>
           <h2 id="transaction-modal-title" className="text-xl font-semibold mb-1 text-slate-800">New Transaction</h2>
           <p className="text-sm text-slate-500 mb-8">{fund.schemeName}</p>
 
@@ -1089,28 +1367,36 @@ function TransactionModal({ fund, userData, onClose }: { fund: any; userData?: a
                   </div>
                   {selectedInvestor && (
                     <div className="mt-3 rounded-xl border border-green-100 bg-green-50 p-3">
-                      <p className="text-sm font-semibold text-green-800">{selectedInvestor.fullName}</p>
+                      <p className="text-sm font-semibold text-green-800">{investorName(selectedInvestor)}</p>
                       <p className="text-xs text-green-700 font-mono mt-0.5">{selectedInvestor.pan}</p>
+                      <p className="mt-2 text-xs font-semibold text-green-800">
+                        Bank: {bankLoading ? 'Loading...' : selectedBank ? bankLabel(selectedBank) : 'No verified bank account'}
+                      </p>
+                      {bankError && <p className="mt-1 text-xs font-semibold text-red-600">{bankError}</p>}
                     </div>
                   )}
-                  {!selectedInvestor && investorQuery.trim().length >= 1 && (
+                  {!selectedInvestor && (
                     <div className="mt-3 max-h-48 overflow-auto rounded-xl border border-slate-200 bg-white">
                       {investorLoading ? (
-                        <div className="p-4 text-sm text-slate-500">Searching investors...</div>
+                        <div className="p-4 text-sm text-slate-500">Loading eligible investors...</div>
+                      ) : investorError ? (
+                        <div className="p-4 text-sm text-red-500">{investorError}</div>
                       ) : investorResults.length === 0 ? (
-                        <div className="p-4 text-sm text-slate-500">No transaction-ready investors found.</div>
+                        <div className="p-4 text-sm text-slate-500">No transaction-ready investors found under this distributor.</div>
                       ) : (
                         investorResults.map(inv => (
                           <button
                             key={inv.id}
                             onClick={() => {
                               setSelectedInvestor(inv);
-                              setInvestorQuery(inv.fullName || inv.pan || '');
+                              setInvestorQuery(investorName(inv));
                             }}
                             className="w-full px-4 py-3 text-left hover:bg-slate-50 border-b border-slate-100 last:border-b-0"
                           >
-                            <p className="text-sm font-semibold text-slate-800">{inv.fullName}</p>
-                            <p className="text-xs text-slate-500 font-mono mt-0.5">{inv.pan}</p>
+                            <p className="text-sm font-semibold text-slate-800">{investorName(inv)}</p>
+                            <p className="text-xs text-slate-500 font-mono mt-0.5">
+                              {inv.pan || 'PAN not captured'}{inv.mobileNumber ? ` · ${inv.mobileNumber}` : ''}
+                            </p>
                           </button>
                         ))
                       )}
@@ -1122,17 +1408,53 @@ function TransactionModal({ fund, userData, onClose }: { fund: any; userData?: a
             {step === 2 && (
               <motion.div key="s2" initial={{ opacity: 0, x: 10 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -10 }} className="space-y-6">
                 <div className="flex bg-slate-100 p-1 rounded-lg">
-                  <button onClick={() => setType('SIP')} className={`flex-1 py-2 text-sm font-medium rounded-md transition-all ${type === 'SIP' ? 'bg-white shadow-sm text-slate-800' : 'text-slate-500'}`}>SIP</button>
-                  <button onClick={() => setType('Lumpsum')} className={`flex-1 py-2 text-sm font-medium rounded-md transition-all ${type === 'Lumpsum' ? 'bg-white shadow-sm text-slate-800' : 'text-slate-500'}`}>Lumpsum</button>
+                  <button onClick={() => updateType('SIP')} className={`flex-1 py-2 text-sm font-medium rounded-md transition-all ${type === 'SIP' ? 'bg-white shadow-sm text-slate-800' : 'text-slate-500'}`}>SIP</button>
+                  <button onClick={() => updateType('Lumpsum')} className={`flex-1 py-2 text-sm font-medium rounded-md transition-all ${type === 'Lumpsum' ? 'bg-white shadow-sm text-slate-800' : 'text-slate-500'}`}>Lumpsum</button>
                 </div>
                 <div>
                   <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-3">Investment Amount</label>
                   <div className="relative">
-                    <span className="absolute left-4 top-3.5 text-slate-500 font-medium">₹</span>
-                    <input type="number" defaultValue={type === 'SIP' ? 5000 : 100000}
-                      className="w-full pl-8 pr-4 py-3 bg-white border border-slate-200 rounded-xl text-lg font-medium outline-none focus:ring-2 focus:ring-blue-100" />
+                    <span className="absolute left-4 top-3.5 text-slate-500 font-medium">Rs</span>
+                    <input
+                      type="number"
+                      min={minAmount}
+                      value={amount}
+                      onChange={e => setAmount(e.target.value)}
+                      className={`w-full pl-12 pr-4 py-3 bg-white border rounded-xl text-lg font-medium outline-none focus:ring-2 focus:ring-blue-100 ${amount && !amountValid ? 'border-red-300 bg-red-50' : 'border-slate-200'}`}
+                    />
                   </div>
+                  {amount && !amountValid && (
+                    <p className="mt-1 text-xs text-red-500">Minimum {type === 'SIP' ? 'SIP' : 'lumpsum'} amount is Rs {minAmount.toLocaleString('en-IN')}.</p>
+                  )}
                 </div>
+                {type === 'SIP' && (
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Frequency</label>
+                      <select
+                        value={sipFrequency}
+                        onChange={e => setSipFrequency(e.target.value as 'MONTHLY' | 'QUARTERLY')}
+                        className="w-full rounded-xl border border-slate-200 bg-white px-3 py-3 text-sm font-medium outline-none focus:ring-2 focus:ring-blue-100"
+                      >
+                        <option value="MONTHLY">Monthly</option>
+                        <option value="QUARTERLY">Quarterly</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Start Date</label>
+                      <input
+                        type="date"
+                        min={tomorrowDate()}
+                        value={sipStartDate}
+                        onChange={e => setSipStartDate(e.target.value)}
+                        className={`w-full rounded-xl border bg-white px-3 py-3 text-sm font-medium outline-none focus:ring-2 focus:ring-blue-100 ${!sipStartDateValid ? 'border-red-300 bg-red-50' : 'border-slate-200'}`}
+                      />
+                      {!sipStartDateValid && (
+                        <p className="mt-1 text-xs text-red-500">Start date must be in the future.</p>
+                      )}
+                    </div>
+                  </div>
+                )}
               </motion.div>
             )}
             {step === 3 && (
@@ -1152,15 +1474,31 @@ function TransactionModal({ fund, userData, onClose }: { fund: any; userData?: a
                   <div className="grid grid-cols-2 pt-4">
                     <div className="col-span-2 pb-4">
                       <p className="text-xs text-slate-400 font-semibold uppercase mb-1">Investor</p>
-                      <p className="font-medium text-slate-800 text-sm">{selectedInvestor?.fullName || 'Not selected'}</p>
+                      <p className="font-medium text-slate-800 text-sm">{investorName(selectedInvestor)}</p>
+                    </div>
+                    <div className="col-span-2 pb-4">
+                      <p className="text-xs text-slate-400 font-semibold uppercase mb-1">Bank</p>
+                      <p className="font-medium text-slate-800 text-sm">{bankLabel(selectedBank)}</p>
                     </div>
                     <div>
                       <p className="text-xs text-slate-400 font-semibold uppercase mb-1">{type}</p>
-                      <p className="font-mono font-medium text-slate-800">₹{type === 'SIP' ? '5,000' : '1,00,000'}</p>
+                      <p className="font-mono font-medium text-slate-800">Rs {amountNumber.toLocaleString('en-IN')}</p>
                     </div>
+                    {type === 'SIP' && (
+                      <div>
+                        <p className="text-xs text-slate-400 font-semibold uppercase mb-1">Frequency</p>
+                        <p className="font-medium text-slate-800">{sipFrequency === 'MONTHLY' ? 'Monthly' : 'Quarterly'}</p>
+                      </div>
+                    )}
+                    {type === 'SIP' && (
+                      <div className="pt-4">
+                        <p className="text-xs text-slate-400 font-semibold uppercase mb-1">Start Date</p>
+                        <p className="font-medium text-slate-800">{sipStartDate}</p>
+                      </div>
+                    )}
                     <div>
                       <p className="text-xs text-slate-400 font-semibold uppercase mb-1">Mode</p>
-                      <p className="font-medium text-slate-800">UPI Mandate</p>
+                      <p className="font-medium text-slate-800">{type === 'SIP' ? 'UPI Mandate' : 'Bank Transfer'}</p>
                     </div>
                   </div>
                 </div>
@@ -1170,6 +1508,11 @@ function TransactionModal({ fund, userData, onClose }: { fund: any; userData?: a
                     A payment link will be sent to the investor's registered email and mobile number.
                   </p>
                 </div>
+                {orderError && (
+                  <div className="rounded-xl border border-red-100 bg-red-50 p-3 text-sm font-medium text-red-700">
+                    {orderError}
+                  </div>
+                )}
               </motion.div>
             )}
           </AnimatePresence>
@@ -1182,14 +1525,16 @@ function TransactionModal({ fund, userData, onClose }: { fund: any; userData?: a
               </button>
             )}
             <button
-              onClick={() => step < 3 ? setStep(step + 1) : onClose()}
-              disabled={step === 1 && !selectedInvestor}
+              onClick={() => step < 3 ? setStep(step + 1) : submitOrder()}
+              disabled={(step === 1 && (!selectedInvestor || bankLoading || !selectedBank)) || (step === 2 && !canContinueAmountStep) || orderSubmitting}
               className="flex-1 py-3 bg-[#0B1B3E] text-white text-sm font-medium rounded-xl hover:bg-[#1A3066] transition-colors flex items-center justify-center gap-2 disabled:bg-slate-200 disabled:text-slate-400 disabled:cursor-not-allowed"
             >
-              {step === 3 ? 'Confirm & Trigger Link' : 'Continue'}
+              {step === 3 ? orderSubmitting ? 'Creating Order...' : 'Confirm & Create Order' : 'Continue'}
               {step !== 3 && <ChevronRight className="w-4 h-4" />}
             </button>
           </div>
+          </>
+          )}
         </div>
       </motion.div>
     </div>

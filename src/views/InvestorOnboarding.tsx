@@ -4,7 +4,7 @@ import {
   ArrowLeft, ArrowRight, CheckCircle2, Loader2, Check,
   ShieldCheck, Upload, Building2, User, AlertTriangle, X,
 } from 'lucide-react';
-import { apiFetch } from '../config/api';
+import { apiClient, apiFetch } from '../config/api';
 import { buildValidationSummary, mapServerErrorsToState, parseServerValidation } from '../utils/serverValidation';
 
 // ── Step metadata ────────────────────────────────────────────────────────────
@@ -261,18 +261,15 @@ export default function InvestorOnboarding({ prospect, userData, onComplete, onB
     formData.append('file', file);
     formData.append('documentType', String(key).toUpperCase());
 
-    setDocProgress(prev => ({ ...prev, [key]: 25 }));
-    const response = await apiFetch(`/investors/${investorId}/documents`, {
-      method: 'PUT',
-      body: formData,
+    const response = await apiClient.put(`/investors/${investorId}/documents`, formData, {
+      onUploadProgress: event => {
+        const total = event.total || file.size || event.loaded || 1;
+        setDocProgress(prev => ({ ...prev, [key]: Math.min(99, Math.round((event.loaded * 100) / total)) }));
+      },
     });
-    const data = await readJsonSafely(response);
-    if (!response.ok) {
-      throw new Error(typeof data === 'string' ? data : data?.message || `Document upload failed with HTTP ${response.status}.`);
-    }
 
     setDocProgress(prev => ({ ...prev, [key]: 100 }));
-    return data;
+    return response.data;
   };
 
   const appendExternalSyncWarning = (message: string) => {

@@ -8,7 +8,7 @@ import {
 import {
   AreaChart as RechartsArea, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
 } from 'recharts';
-import { apiFetch, apiUrl } from '../config/api';
+import { apiClient, apiFetch, apiUrl } from '../config/api';
 import Pagination from '../components/Pagination';
 import { getPageContent, getPageMeta } from '../utils/pagination';
 import { formatDate } from '../utils/formatDate';
@@ -77,6 +77,12 @@ const validateKycDocument = (file: File) => {
   return '';
 };
 
+const maskAccountNumber = (value?: string) => {
+  if (!value) return 'Account not captured';
+  const lastFour = value.slice(-4);
+  return `${'*'.repeat(Math.max(value.length - 4, 4))}${lastFour}`;
+};
+
 function KycDocumentUpload({
   investorId,
   onUploaded,
@@ -114,22 +120,20 @@ function KycDocumentUpload({
 
     try {
       setUploading(true);
-      setProgress(25);
-      const response = await apiFetch(`/investors/${investorId}/documents`, {
-        method: 'PUT',
-        body: formData,
+      const response = await apiClient.put(`/investors/${investorId}/documents`, formData, {
+        onUploadProgress: event => {
+          const total = event.total || file.size || event.loaded || 1;
+          setProgress(Math.min(99, Math.round((event.loaded * 100) / total)));
+        },
       });
-      const data = await response.json().catch(() => null);
-      if (!response.ok) {
-        throw new Error(data?.message || `KYC document upload failed with HTTP ${response.status}.`);
-      }
 
       setProgress(100);
       setSuccess('KYC document uploaded successfully.');
-      onUploaded?.(data?.data || data?.investor || data);
+      onUploaded?.(response.data?.data || response.data?.investor || response.data);
     } catch (err) {
       console.error('KYC document upload failed:', err);
-      setError(err instanceof Error ? err.message : 'KYC document upload failed.');
+      const responseData = (err as any)?.response?.data;
+      setError(responseData?.message || (err instanceof Error ? err.message : 'KYC document upload failed.'));
     } finally {
       setUploading(false);
     }
@@ -184,6 +188,133 @@ function KycDocumentUpload({
 
 
 // ─── Component ────────────────────────────────────────────────────────────────
+function BankAccountsPanel({
+  investorId,
+  onBankUpdated,
+}: {
+  investorId?: string;
+  onBankUpdated?: (patch: any) => void;
+}) {
+  const [accounts, setAccounts] = useState<any[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [refreshingId, setRefreshingId] = useState('');
+  const [error, setError] = useState('');
+
+  const loadAccounts = React.useCallback(async () => {
+    if (!investorId) return;
+    setLoading(true);
+    setError('');
+    try {
+      const response = await apiFetch(`/investors/${investorId}/bank-accounts`);
+      const data = await response.json().catch(() => null);
+      if (!response.ok) {
+        throw new Error(data?.message || `Bank accounts failed with HTTP ${response.status}.`);
+      }
+      setAccounts(Array.isArray(data) ? data : []);
+    } catch (err) {
+      console.error('Bank account fetch failed:', err);
+      setError(err instanceof Error ? err.message : 'Bank accounts could not be loaded.');
+      setAccounts([]);
+    } finally {
+      setLoading(false);
+    }
+  }, [investorId]);
+
+  useEffect(() => {
+    loadAccounts();
+  }, [loadAccounts]);
+
+  const refreshVerification = async (accountId: string) => {
+    if (!investorId || !accountId) return;
+    setRefreshingId(accountId);
+    setError('');
+    try {
+      const response = await apiFetch(`/investors/${investorId}/bank-accounts/${accountId}/verification`, {
+        method: 'PATCH',
+      });
+      const data = await response.json().catch(() => null);
+      if (!response.ok) {
+        throw new Error(data?.message || `Bank verification refresh failed with HTTP ${response.status}.`);
+      }
+      setAccounts(prev => prev.map(account => account.id === accountId ? { ...account, ...data } : account));
+      if (data?.verificationStatus) {
+        onBankUpdated?.({ bankVerificationStatus: data.verificationStatus });
+      }
+    } catch (err) {
+      console.error('Bank verification refresh failed:', err);
+      setError(err instanceof Error ? err.message : 'Bank verification could not be refreshed.');
+    } finally {
+      setRefreshingId('');
+    }
+  };
+
+  return (
+    <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <p className="text-sm font-semibold text-slate-800">Bank Verification</p>
+          <p className="mt-0.5 text-xs text-slate-500">FP bank accounts and verification status.</p>
+        </div>
+        <button
+          type="button"
+          onClick={loadAccounts}
+          disabled={loading}
+          className="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-50 disabled:opacity-50"
+        >
+          <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
+          Refresh list
+        </button>
+      </div>
+
+      {error && (
+        <p className="mt-3 flex items-center gap-1.5 text-xs font-medium text-red-600">
+          <AlertCircle className="h-3.5 w-3.5" /> {error}
+        </p>
+      )}
+
+      <div className="mt-4 space-y-3">
+        {loading ? (
+          <p className="text-sm text-slate-500">Loading bank accounts...</p>
+        ) : accounts.length === 0 ? (
+          <p className="text-sm text-slate-500">No bank accounts captured yet.</p>
+        ) : (
+          accounts.map(account => {
+            const status = String(account.verificationStatus || 'NOT_CAPTURED').replace(/_/g, ' ');
+            const canRefresh = Boolean(account.cybrillaBankVerificationId);
+            return (
+              <div key={account.id} className="rounded-xl border border-slate-100 bg-slate-50 p-3">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="min-w-0">
+                    <p className="text-sm font-semibold text-slate-800">
+                      {account.bankName || 'Bank'} <span className="font-mono text-xs text-slate-500">{maskAccountNumber(account.accountNumber)}</span>
+                    </p>
+                    <p className="mt-1 text-xs text-slate-500">
+                      IFSC {account.ifscCode || 'Currently unavailable'} · FP bank {account.cybrillaBankId || 'Currently unavailable'}
+                    </p>
+                    <p className="mt-1 text-xs text-slate-500">
+                      Verification {account.cybrillaBankVerificationStatus || status}
+                      {account.cybrillaBankVerificationConfidence ? ` · confidence ${account.cybrillaBankVerificationConfidence}` : ''}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => refreshVerification(account.id)}
+                    disabled={!canRefresh || refreshingId === account.id}
+                    className="inline-flex items-center justify-center gap-2 rounded-lg border border-blue-200 px-3 py-2 text-xs font-semibold text-blue-700 transition-colors hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    <RefreshCw className={`h-3.5 w-3.5 ${refreshingId === account.id ? 'animate-spin' : ''}`} />
+                    Refresh verification
+                  </button>
+                </div>
+              </div>
+            );
+          })
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function Investors({
   onInvest,
   userData,
@@ -772,6 +903,13 @@ function InvestorDetail({
                 <p className="text-sm font-semibold text-slate-800">{value}</p>
               </div>
             ))}
+
+            <BankAccountsPanel
+              investorId={currentInvestor.id}
+              onBankUpdated={patch => {
+                setCurrentInvestor((prev: any) => ({ ...prev, ...patch }));
+              }}
+            />
 
             <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
