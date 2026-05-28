@@ -15,6 +15,14 @@ import { formatDate } from '../utils/formatDate';
 import { useDebounce } from '../hooks/useDebounce';
 import EmptyState from '../components/EmptyState';
 import InvestorEditForm from '../components/InvestorEditForm';
+import {
+  extractPreVerification,
+  getPreVerificationDecision,
+  getPreVerificationRows,
+  parseStoredPreVerification,
+  preVerificationStatusClasses,
+  validateInvestorIdentityForKyc,
+} from '../utils/kycPreVerification';
 
 // ─── KYC status config ─────────────────────────────────────────────────────────
 const KYC_BADGE_CONFIG: Record<string, { label: string; bg: string; text: string }> = {
@@ -585,11 +593,20 @@ function InvestorDetail({
   const [kycActionError, setKycActionError] = useState('');
   const [kycActionMessage, setKycActionMessage] = useState('');
   const [identityRedirectUrl, setIdentityRedirectUrl] = useState('');
+  const [kycPreVerification, setKycPreVerification] = useState(() =>
+    parseStoredPreVerification(investor.externalKycPayloadJson),
+  );
+  const kycDecision = getPreVerificationDecision(kycPreVerification);
 
   // F-10: edit-form toggle for the Overview tab + a transient "Saved" pill
   // that auto-fades a few seconds after a successful PUT.
   const [isEditing, setIsEditing] = useState(false);
   const [savedFlash, setSavedFlash] = useState(false);
+  useEffect(() => {
+    setCurrentInvestor(investor);
+    setKycPreVerification(parseStoredPreVerification(investor.externalKycPayloadJson));
+  }, [investor]);
+
   useEffect(() => {
     if (!savedFlash) return;
     const t = setTimeout(() => setSavedFlash(false), 3000);
@@ -657,6 +674,10 @@ function InvestorDetail({
       if (data?.investor) {
         setCurrentInvestor((prev: any) => ({ ...prev, ...data.investor }));
       }
+      const preVerification = extractPreVerification(data);
+      if (preVerification) {
+        setKycPreVerification(preVerification);
+      }
       const redirectUrl = data?.externalResponse?.fetch?.redirect_url;
       if (redirectUrl) setIdentityRedirectUrl(redirectUrl);
       setKycActionMessage(successMessage);
@@ -668,15 +689,56 @@ function InvestorDetail({
     }
   };
 
-  const createKycCheck = () => runKycAction(
-    'kyc-check',
-    () => apiFetch(`/investors/${currentInvestor.id}/kyc-checks`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ dateOfBirth: currentInvestor.dateOfBirth || null }),
-    }),
-    'KYC status check completed.',
-  );
+  const createKycCheck = () => {
+    const errors = validateInvestorIdentityForKyc({
+      fullName: currentInvestor.fullName,
+      pan: currentInvestor.pan,
+      dob: currentInvestor.dateOfBirth,
+    }, { requireContact: false });
+    if (Object.keys(errors).length > 0) {
+      setKycActionError(Object.values(errors)[0] || 'Investor identity details are incomplete.');
+      setKycActionMessage('');
+      return;
+    }
+
+    runKycAction(
+      'kyc-check',
+      () => apiFetch(`/investors/${currentInvestor.id}/kyc-checks`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dateOfBirth: currentInvestor.dateOfBirth || null }),
+      }),
+      'POA pre-verification submitted. Refresh if the response is still accepted.',
+    );
+  };
+
+  const fetchKycCheck = () => {
+    const checkId = currentInvestor.externalKycCheckId || kycPreVerification?.id;
+    if (!checkId) {
+      setKycActionError('Run POA pre-verification before fetching it.');
+      return;
+    }
+    runKycAction(
+      'kyc-check-fetch',
+      () => apiFetch(`/investors/${currentInvestor.id}/kyc-checks/${checkId}`),
+      'POA pre-verification refreshed.',
+    );
+  };
+
+  const refetchKycCheck = () => {
+    const checkId = currentInvestor.externalKycCheckId || kycPreVerification?.id;
+    if (!checkId) {
+      setKycActionError('Run POA pre-verification before retrying it.');
+      return;
+    }
+    runKycAction(
+      'kyc-check-refetch',
+      () => apiFetch(`/investors/${currentInvestor.id}/kyc-checks/${checkId}/refetch`, {
+        method: 'PUT',
+      }),
+      'POA pre-verification refetched.',
+    );
+  };
 
   const createKycRequest = () => runKycAction(
     'kyc-request',
@@ -915,10 +977,10 @@ function InvestorDetail({
               <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                 <div>
                   <p className="text-sm font-semibold text-slate-800 flex items-center gap-2">
-                    <ShieldCheck className="h-4 w-4 text-blue-600" /> Fintech Primitives KYC
+                    <ShieldCheck className="h-4 w-4 text-blue-600" /> POA Pre-verification
                   </p>
                   <p className="mt-0.5 text-xs text-slate-500">
-                    Check KRA status and manage the digital KYC application.
+                    Validate PAN, name, date of birth, and readiness before accepting investments.
                   </p>
                 </div>
                 <button
@@ -930,8 +992,46 @@ function InvestorDetail({
                   Run check
                 </button>
               </div>
+              <div className={`mt-4 rounded-xl border p-3 text-xs font-medium ${kycDecision.canProceed ? 'border-green-100 bg-green-50 text-green-700' : 'border-slate-200 bg-slate-50 text-slate-600'}`}>
+                <p className="font-bold">{kycDecision.title}</p>
+                <p className="mt-1 leading-5">{kycDecision.message}</p>
+              </div>
 
-              <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4">
+              {getPreVerificationRows(kycPreVerification).length > 0 && (
+                <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                  {getPreVerificationRows(kycPreVerification).map(row => (
+                    <div key={row.field} className="rounded-xl border border-slate-100 bg-slate-50 p-3">
+                      <div className="flex items-center justify-between gap-3">
+                        <p className="text-xs font-semibold text-slate-500">{row.label}</p>
+                        <span className={`rounded-full border px-2 py-0.5 text-[10px] font-bold uppercase ${preVerificationStatusClasses(row.status)}`}>
+                          {row.status || 'pending'}
+                        </span>
+                      </div>
+                      {(row.code || row.reason || row.value) && (
+                        <p className="mt-2 text-[11px] leading-4 text-slate-500">
+                          {[row.value, row.code, row.reason].filter(Boolean).join(' - ')}
+                        </p>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                <button
+                  onClick={fetchKycCheck}
+                  disabled={Boolean(kycActionLoading)}
+                  className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-50 disabled:opacity-50"
+                >
+                  Fetch pre-verification
+                </button>
+                <button
+                  onClick={refetchKycCheck}
+                  disabled={Boolean(kycActionLoading)}
+                  className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-50 disabled:opacity-50"
+                >
+                  Retry pre-verification
+                </button>
                 <button
                   onClick={createKycRequest}
                   disabled={Boolean(kycActionLoading)}

@@ -2,10 +2,19 @@ import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   ArrowLeft, ArrowRight, CheckCircle2, Loader2, Check,
-  ShieldCheck, Upload, Building2, User, AlertTriangle, X,
+  ShieldCheck, Upload, Building2, User, AlertTriangle, X, RefreshCw,
 } from 'lucide-react';
 import { apiClient, apiFetch } from '../config/api';
 import { buildValidationSummary, mapServerErrorsToState, parseServerValidation } from '../utils/serverValidation';
+import {
+  extractPreVerification,
+  getPreVerificationDecision,
+  getPreVerificationRows,
+  normalizeMobile,
+  normalizePan,
+  preVerificationStatusClasses,
+  validateInvestorIdentityForKyc,
+} from '../utils/kycPreVerification';
 
 // ── Step metadata ────────────────────────────────────────────────────────────
 const STEPS = [
@@ -74,6 +83,8 @@ const sel = inp + ' cursor-pointer';
 const MAX_DOCUMENT_SIZE = 5 * 1024 * 1024;
 const ALLOWED_DOCUMENT_TYPES = new Set(['application/pdf', 'image/jpeg', 'image/png']);
 const ALLOWED_DOCUMENT_EXTENSIONS = new Set(['pdf', 'jpg', 'jpeg', 'png']);
+const IFSC_REGEX = /^[A-Z]{4}0[A-Z0-9]{6}$/;
+const ACCOUNT_NUMBER_REGEX = /^\d{9,18}$/;
 
 const validateDocumentFile = (file: File) => {
   const extension = file.name.split('.').pop()?.toLowerCase() || '';
@@ -121,7 +132,14 @@ export default function InvestorOnboarding({ prospect, userData, onComplete, onB
   const otpRefs = useRef<(HTMLInputElement | null)[]>([]);
 
   // ── Step 3 — KYC ────────────────────────────────────────────────────────────
-  const [kycPhase, setKycPhase] = useState<'idle' | 'loading' | 'found'>('idle');
+  const [kycPhase, setKycPhase] = useState<'idle' | 'checking' | 'accepted' | 'verified' | 'failed' | 'retry' | 'pending'>('idle');
+  const [draftInvestor, setDraftInvestor] = useState<any | null>(null);
+  const [draftIdentityFingerprint, setDraftIdentityFingerprint] = useState('');
+  const [kycPreVerification, setKycPreVerification] = useState<any | null>(null);
+  const [kycValidationErrors, setKycValidationErrors] = useState<Record<string, string>>({});
+  const [kycActionError, setKycActionError] = useState('');
+  const [kycActionMessage, setKycActionMessage] = useState('');
+  const [creatingKycRequest, setCreatingKycRequest] = useState(false);
 
   // ── Step 4 — Personal ───────────────────────────────────────────────────────
   const [s4, setS4] = useState({ gender: '', occupation: '', income: '', contactOwner: 'Self' });
@@ -147,6 +165,51 @@ export default function InvestorOnboarding({ prospect, userData, onComplete, onB
   const [docErrors, setDocErrors] = useState<Record<string, string>>({});
   const [docProgress, setDocProgress] = useState<Record<string, number>>({});
 
+  const distributorId = userData?.id || userData?.distributorId;
+  const fullName = `${s1.firstName} ${s1.lastName}`.replace(/\s+/g, ' ').trim();
+  const identityFingerprint = JSON.stringify({
+    fullName: fullName.toUpperCase(),
+    pan: normalizePan(s1.pan),
+    dob: s1.dob || '',
+    mobile: normalizeMobile(s1.mobile),
+    email: s1.email.trim().toLowerCase(),
+    relationshipType: s1.relationshipType,
+    guardianPan: normalizePan(s1.guardianPan),
+  });
+  const kycDecision = getPreVerificationDecision(kycPreVerification);
+
+  const buildInvestorPayload = () => ({
+    distributorId,
+    fullName,
+    mobileNumber: normalizeMobile(s1.mobile),
+    email: s1.email.trim(),
+    pan: normalizePan(s1.pan),
+    dateOfBirth: s1.dob || null,
+    relationshipType: s1.relationshipType,
+    householdName: s1.householdName.trim() || null,
+    guardianPan: s1.relationshipType === 'MINOR' ? normalizePan(s1.guardianPan) : null,
+    addressLine1: '',
+    addressLine2: '',
+    city: '',
+    state: '',
+    postalCode: '',
+    onboardingNotes: [
+      `frontend_reference=${refNum}`,
+      `gender=${s4.gender}`,
+      `occupation=${s4.occupation}`,
+      `income=${s4.income}`,
+      `contact_owner=${s4.contactOwner}`,
+      `tax_residency=${s6.taxResidency}`,
+      `pep=${s6.politicalExp}`,
+    ].join('; '),
+  });
+
+  const buildInvestorUpdatePayload = () => {
+    const payload = buildInvestorPayload();
+    const { distributorId: _distributorId, pan: _pan, ...updatablePayload } = payload;
+    return updatablePayload;
+  };
+
   // ── Effects ─────────────────────────────────────────────────────────────────
 
   // Countdown tick
@@ -162,15 +225,16 @@ export default function InvestorOnboarding({ prospect, userData, onComplete, onB
     setBankName(prefix.length === 4 ? (IFSC_MAP[prefix] ?? 'Unknown Bank') : '');
   }, [s5.ifsc]);
 
-  // KYC simulation — auto-start when we enter step 3
-  // Only depends on `step` so the cleanup doesn't cancel the timer when
-  // kycPhase transitions idle→loading (which would re-run the effect).
+  // Reset the POA pre-verification result if identity fields change.
   useEffect(() => {
-    if (step !== 3) return;
-    setKycPhase('loading');
-    const t = setTimeout(() => setKycPhase('found'), 2600);
-    return () => clearTimeout(t);
-  }, [step]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (!draftIdentityFingerprint || draftIdentityFingerprint === identityFingerprint) return;
+    setDraftInvestor(null);
+    setDraftIdentityFingerprint('');
+    setKycPreVerification(null);
+    setKycPhase('idle');
+    setKycActionError('');
+    setKycActionMessage('Identity details changed. Run POA pre-verification again.');
+  }, [draftIdentityFingerprint, identityFingerprint]);
 
   // ── OTP helpers ──────────────────────────────────────────────────────────────
   const sendOtp = () => {
@@ -208,18 +272,20 @@ export default function InvestorOnboarding({ prospect, userData, onComplete, onB
   // ── Can proceed guard ─────────────────────────────────────────────────────────
   const canNext: boolean = (() => {
     switch (step) {
-      case 1: return !!(
-        s1.firstName
-        && s1.lastName
-        && s1.pan.length >= 10
-        && s1.mobile.length >= 10
-        && s1.email.includes('@')
-        && (s1.relationshipType !== 'MINOR' || s1.guardianPan.length === 10)
-      );
+      case 1: return Object.keys(validateInvestorIdentityForKyc({
+        firstName: s1.firstName,
+        lastName: s1.lastName,
+        pan: s1.pan,
+        dob: s1.dob,
+        mobile: s1.mobile,
+        email: s1.email,
+        relationshipType: s1.relationshipType,
+        guardianPan: s1.guardianPan,
+      })).length === 0;
       case 2: return otpCorrect;
-      case 3: return kycPhase === 'found';
+      case 3: return kycDecision.canProceed;
       case 4: return !!(s4.gender && s4.occupation && s4.income);
-      case 5: return s5.accNumber.length >= 9 && s5.ifsc.length >= 11;
+      case 5: return ACCOUNT_NUMBER_REGEX.test(s5.accNumber) && IFSC_REGEX.test(s5.ifsc);
       case 6: return !!(s6.incomeSlab && s6.declared);
       case 7: return !!(docs.pan && docs.address && docs.signature);
       default: return true;
@@ -278,8 +344,262 @@ export default function InvestorOnboarding({ prospect, userData, onComplete, onB
     setShowExternalSyncNotice(true);
   };
 
+  const validateIdentityBeforePreVerification = () => {
+    const errors = validateInvestorIdentityForKyc({
+      firstName: s1.firstName,
+      lastName: s1.lastName,
+      pan: s1.pan,
+      dob: s1.dob,
+      mobile: s1.mobile,
+      email: s1.email,
+      relationshipType: s1.relationshipType,
+      guardianPan: s1.guardianPan,
+    });
+    setKycValidationErrors(errors);
+
+    if (Object.keys(errors).length > 0) {
+      setServerErrors(prev => ({ ...prev, ...errors }));
+      setKycActionError('Fix the highlighted identity fields before running POA pre-verification.');
+      setKycActionMessage('');
+      return false;
+    }
+
+    setServerErrors(prev => {
+      const next = { ...prev };
+      ['firstName', 'lastName', 'fullName', 'pan', 'dob', 'mobile', 'email', 'guardianPan'].forEach(key => delete next[key]);
+      return next;
+    });
+    setKycActionError('');
+    return true;
+  };
+
+  const ensureInvestorDraftForKyc = async () => {
+    if (draftInvestor?.id && draftIdentityFingerprint === identityFingerprint) {
+      return draftInvestor;
+    }
+    if (!distributorId) {
+      throw new Error('Distributor session was not found. Please log in again and retry.');
+    }
+
+    const payload = buildInvestorPayload();
+    console.log('poa_pre_verification_draft_investor_request=', payload);
+    const response = await apiFetch('/investors', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const result = await readJsonSafely(response);
+    console.log('poa_pre_verification_draft_investor_response=', {
+      status: response.status,
+      ok: response.ok,
+      body: result,
+    });
+
+    if (!response.ok) {
+      if (response.status === 400) {
+        const validation = parseServerValidation(result);
+        setServerErrors(mapServerErrorsToState(validation.fieldErrors, {
+          fullName: 'firstName',
+          mobileNumber: 'mobile',
+          dateOfBirth: 'dob',
+        }));
+        throw new Error(buildValidationSummary(validation));
+      }
+      if (response.status === 409) {
+        const message = typeof result === 'string' ? result : result?.message || 'Investor already exists';
+        if (message.toLowerCase().includes('pan')) {
+          setServerErrors(prev => ({ ...prev, pan: message }));
+        }
+        throw new Error(message);
+      }
+      throw new Error(typeof result === 'string' ? result : result?.message || 'Investor draft creation failed');
+    }
+
+    setDraftInvestor(result);
+    setDraftIdentityFingerprint(identityFingerprint);
+    return result;
+  };
+
+  const applyPreVerificationResponse = (result: any) => {
+    const external = extractPreVerification(result);
+    if (!external) {
+      throw new Error('POA pre-verification response was not returned.');
+    }
+    const decision = getPreVerificationDecision(external);
+    setKycPreVerification(external);
+    setKycPhase(decision.state);
+    setKycActionMessage(decision.message);
+    if (result?.investor) {
+      setDraftInvestor(result.investor);
+    }
+    return decision;
+  };
+
+  const runPoaPreVerification = async () => {
+    if (!validateIdentityBeforePreVerification()) return;
+
+    setKycPhase('checking');
+    setKycActionError('');
+    setKycActionMessage('');
+    setKycValidationErrors({});
+
+    try {
+      console.log('poa_pre_verification_request=', {
+        endpoint: 'POST /api/v1/investors/pre-verifications',
+        pan: normalizePan(s1.pan),
+        name: fullName,
+        dateOfBirth: s1.dob,
+      });
+      const response = await apiFetch('/investors/pre-verifications', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          fullName,
+          pan: normalizePan(s1.pan),
+          dateOfBirth: s1.dob || null,
+        }),
+      });
+      const result = await readJsonSafely(response);
+      console.log('poa_pre_verification_response=', {
+        status: response.status,
+        ok: response.ok,
+        body: result,
+      });
+      if (!response.ok) {
+        const errorMessage = typeof result === 'string'
+          ? result
+          : result?.message || `POA pre-verification failed with HTTP ${response.status}`;
+        console.error('poa_pre_verification_failed_response=', {
+          status: response.status,
+          error: typeof result === 'string' ? result : result?.error,
+          message: errorMessage,
+          path: typeof result === 'string' ? undefined : result?.path,
+          body: result,
+        });
+        if (response.status === 400 && /pan|sandbox/i.test(errorMessage)) {
+          setKycValidationErrors(prev => ({ ...prev, pan: errorMessage }));
+          setServerErrors(prev => ({ ...prev, pan: errorMessage }));
+        }
+        throw new Error(errorMessage);
+      }
+      applyPreVerificationResponse(result);
+    } catch (err) {
+      console.error('poa_pre_verification_error=', err);
+      setKycPhase('failed');
+      setKycActionError(err instanceof Error ? err.message : 'POA pre-verification failed.');
+    }
+  };
+
+  const refreshPoaPreVerification = async () => {
+    const kycCheckId = kycPreVerification?.id;
+    if (!kycCheckId) {
+      setKycActionError('Run POA pre-verification before refreshing the status.');
+      return;
+    }
+
+    setKycPhase('checking');
+    setKycActionError('');
+    setKycActionMessage('');
+
+    try {
+      console.log('poa_pre_verification_fetch_request=', {
+        endpoint: `GET /api/v1/investors/pre-verifications/${kycCheckId}`,
+      });
+      const response = await apiFetch(`/investors/pre-verifications/${kycCheckId}`);
+      const result = await readJsonSafely(response);
+      console.log('poa_pre_verification_fetch_response=', {
+        status: response.status,
+        ok: response.ok,
+        body: result,
+      });
+      if (!response.ok) {
+        throw new Error(typeof result === 'string' ? result : result?.message || `POA pre-verification refresh failed with HTTP ${response.status}`);
+      }
+      applyPreVerificationResponse(result);
+    } catch (err) {
+      console.error('poa_pre_verification_fetch_error=', err);
+      setKycPhase('retry');
+      setKycActionError(err instanceof Error ? err.message : 'POA pre-verification refresh failed.');
+    }
+  };
+
+  const createFreshKycRequestFromPreVerification = async () => {
+    const investor = draftInvestor;
+    if (!investor?.id) {
+      setKycActionError('Create the investor draft by running POA pre-verification first.');
+      return;
+    }
+
+    setCreatingKycRequest(true);
+    setKycActionError('');
+    setKycActionMessage('');
+
+    try {
+      console.log('fresh_kyc_request_create_request=', {
+        endpoint: `POST /api/v1/investors/${investor.id}/kyc-requests`,
+      });
+      const response = await apiFetch(`/investors/${investor.id}/kyc-requests`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: fullName,
+          pan: normalizePan(s1.pan),
+          email: s1.email.trim(),
+          mobile: normalizeMobile(s1.mobile),
+          dateOfBirth: s1.dob || null,
+          fields: {},
+        }),
+      });
+      const result = await readJsonSafely(response);
+      console.log('fresh_kyc_request_create_response=', {
+        status: response.status,
+        ok: response.ok,
+        body: result,
+      });
+      if (!response.ok) {
+        throw new Error(typeof result === 'string' ? result : result?.message || `Fresh KYC request failed with HTTP ${response.status}`);
+      }
+      if (result?.investor) {
+        setDraftInvestor(result.investor);
+      }
+      setKycActionMessage('Fresh KYC request was created. Continue only after KYC is verified.');
+    } catch (err) {
+      console.error('fresh_kyc_request_create_error=', err);
+      setKycActionError(err instanceof Error ? err.message : 'Fresh KYC request failed.');
+    } finally {
+      setCreatingKycRequest(false);
+    }
+  };
+
   const runInitialKycApis = async (createdInvestor: any) => {
     if (!createdInvestor?.id) return createdInvestor;
+    if (createdInvestor.externalKycRequestId) {
+      console.log('step_1a_kyc_check_skipped=', 'Fresh KYC request was already created during onboarding.');
+      return createdInvestor;
+    }
+    if (kycDecision.canProceed && kycPreVerification?.id) {
+      try {
+        console.log('step_1a_attach_pre_verification_request=', {
+          endpoint: `GET /api/v1/investors/${createdInvestor.id}/kyc-checks/${kycPreVerification.id}`,
+        });
+        const attachResponse = await apiFetch(`/investors/${createdInvestor.id}/kyc-checks/${kycPreVerification.id}`);
+        const attachResult = await readJsonSafely(attachResponse);
+        console.log('step_1a_attach_pre_verification_response=', {
+          status: attachResponse.status,
+          ok: attachResponse.ok,
+          body: attachResult,
+        });
+        if (!attachResponse.ok) {
+          throw new Error(typeof attachResult === 'string' ? attachResult : attachResult?.message || 'Unable to attach POA pre-verification');
+        }
+        return attachResult?.investor || createdInvestor;
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unable to attach POA pre-verification';
+        console.warn('step_1a_attach_pre_verification_external_sync=', message);
+        appendExternalSyncWarning(`Unable to save POA pre-verification on the investor record: ${message}`);
+        return createdInvestor;
+      }
+    }
     let latestInvestor = createdInvestor;
 
     try {
@@ -343,40 +663,13 @@ export default function InvestorOnboarding({ prospect, userData, onComplete, onB
   };
 
   const submitInvestorToBackend = async () => {
-    const distributorId = userData?.id || userData?.distributorId;
-    const fullName = `${s1.firstName} ${s1.lastName}`.trim();
-
     if (!distributorId) {
       setSubmitError('Distributor session was not found. Please log in again and retry.');
       console.error('[Cybrilla Workflow] Missing distributor id in user session', userData);
       return;
     }
 
-    const investorPayload = {
-      distributorId,
-      fullName,
-      mobileNumber: s1.mobile,
-      email: s1.email,
-      pan: s1.pan.trim().toUpperCase(),
-      dateOfBirth: s1.dob || null,
-      relationshipType: s1.relationshipType,
-      householdName: s1.householdName.trim() || null,
-      guardianPan: s1.relationshipType === 'MINOR' ? s1.guardianPan.trim().toUpperCase() : null,
-      addressLine1: '',
-      addressLine2: '',
-      city: '',
-      state: '',
-      postalCode: '',
-      onboardingNotes: [
-        `frontend_reference=${refNum}`,
-        `gender=${s4.gender}`,
-        `occupation=${s4.occupation}`,
-        `income=${s4.income}`,
-        `contact_owner=${s4.contactOwner}`,
-        `tax_residency=${s6.taxResidency}`,
-        `pep=${s6.politicalExp}`,
-      ].join('; '),
-    };
+    const investorPayload = buildInvestorPayload();
 
     const bankPayload = {
       accountHolderName: fullName,
@@ -404,39 +697,75 @@ export default function InvestorOnboarding({ prospect, userData, onComplete, onB
     ]);
 
     try {
-      const investorResponse = await apiFetch('/investors', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(investorPayload),
-      });
-      let investorResult = await readJsonSafely(investorResponse);
-      console.log('step_1_create_investor_response=', {
-        status: investorResponse.status,
-        ok: investorResponse.ok,
-        body: investorResult,
-        cybrillaInvestorId: investorResult?.cybrillaInvestorId,
-      });
+      let investorResult: any = null;
+      const shouldReuseDraft = draftInvestor?.id && draftIdentityFingerprint === identityFingerprint;
 
-      if (!investorResponse.ok) {
-        if (investorResponse.status === 400) {
-          const validation = parseServerValidation(investorResult);
-          setServerErrors(mapServerErrorsToState(validation.fieldErrors, {
-            fullName: 'firstName',
-            mobileNumber: 'mobile',
-            dateOfBirth: 'dob',
-          }));
-          throw new Error(buildValidationSummary(validation));
-        }
-        if (investorResponse.status === 409) {
-          const message = typeof investorResult === 'string'
-            ? investorResult
-            : investorResult?.message || 'Investor already exists';
-          if (message.toLowerCase().includes('pan')) {
-            setServerErrors(prev => ({ ...prev, pan: message }));
+      if (shouldReuseDraft) {
+        const updatePayload = buildInvestorUpdatePayload();
+        console.log('step_1_update_preverified_investor_request=', {
+          endpoint: `PUT /api/v1/investors/${draftInvestor.id}`,
+          body: updatePayload,
+        });
+        const investorResponse = await apiFetch(`/investors/${draftInvestor.id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(updatePayload),
+        });
+        investorResult = await readJsonSafely(investorResponse);
+        console.log('step_1_update_preverified_investor_response=', {
+          status: investorResponse.status,
+          ok: investorResponse.ok,
+          body: investorResult,
+          cybrillaInvestorId: investorResult?.cybrillaInvestorId,
+        });
+
+        if (!investorResponse.ok) {
+          if (investorResponse.status === 400) {
+            const validation = parseServerValidation(investorResult);
+            setServerErrors(mapServerErrorsToState(validation.fieldErrors, {
+              fullName: 'firstName',
+              mobileNumber: 'mobile',
+              dateOfBirth: 'dob',
+            }));
+            throw new Error(buildValidationSummary(validation));
           }
-          throw new Error(message);
+          throw new Error(typeof investorResult === 'string' ? investorResult : investorResult?.message || 'Investor update failed');
         }
-        throw new Error(typeof investorResult === 'string' ? investorResult : investorResult?.message || 'Investor creation failed');
+      } else {
+        const investorResponse = await apiFetch('/investors', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(investorPayload),
+        });
+        investorResult = await readJsonSafely(investorResponse);
+        console.log('step_1_create_investor_response=', {
+          status: investorResponse.status,
+          ok: investorResponse.ok,
+          body: investorResult,
+          cybrillaInvestorId: investorResult?.cybrillaInvestorId,
+        });
+
+        if (!investorResponse.ok) {
+          if (investorResponse.status === 400) {
+            const validation = parseServerValidation(investorResult);
+            setServerErrors(mapServerErrorsToState(validation.fieldErrors, {
+              fullName: 'firstName',
+              mobileNumber: 'mobile',
+              dateOfBirth: 'dob',
+            }));
+            throw new Error(buildValidationSummary(validation));
+          }
+          if (investorResponse.status === 409) {
+            const message = typeof investorResult === 'string'
+              ? investorResult
+              : investorResult?.message || 'Investor already exists';
+            if (message.toLowerCase().includes('pan')) {
+              setServerErrors(prev => ({ ...prev, pan: message }));
+            }
+            throw new Error(message);
+          }
+          throw new Error(typeof investorResult === 'string' ? investorResult : investorResult?.message || 'Investor creation failed');
+        }
       }
 
       const pendingExternalProfile = Boolean(investorResult?.externalSyncPending) || !investorResult?.cybrillaInvestorId;
@@ -533,7 +862,6 @@ export default function InvestorOnboarding({ prospect, userData, onComplete, onB
   const goBack = () => {
     if (step === 1) { onBack(); return; }
     if (step === 2) { setOtpSent(false); setOtp(['', '', '', '', '', '']); setDemoOtp(''); }
-    if (step === 3) { setKycPhase('idle'); }
     setStep(s => s - 1);
   };
 
@@ -548,8 +876,8 @@ export default function InvestorOnboarding({ prospect, userData, onComplete, onB
           { label: 'Compliance Review', sub: 'FATCA & PMLA check in queue', color: 'blue', done: false },
         ]
       : [
-          { label: 'Identity Verified', sub: 'PAN & consent OTP matched', color: 'green', done: true },
-          { label: 'KYC Processed', sub: 'CKYC registry record found', color: 'green', done: true },
+          { label: 'Identity Verified', sub: 'PAN and consent OTP captured', color: 'green', done: true },
+          { label: 'KYC Processed', sub: 'POA pre-verification completed', color: 'green', done: true },
           { label: 'Bank Mandate', sub: 'eNACH registration pending', color: 'amber', done: false },
           { label: 'Compliance Review', sub: 'FATCA & PMLA check in queue', color: 'blue', done: false },
         ];
@@ -747,7 +1075,7 @@ export default function InvestorOnboarding({ prospect, userData, onComplete, onB
                     className={inp + ' font-mono tracking-widest'}
                   />
                 </Field>
-                <Field label="Date of Birth" error={serverErrors.dob}>
+                <Field label="Date of Birth" required error={serverErrors.dob}>
                   <input type="date" value={s1.dob} onChange={e => setS1({ ...s1, dob: e.target.value })} className={inp} />
                 </Field>
                 <Field label="Relationship Type">
@@ -889,57 +1217,113 @@ export default function InvestorOnboarding({ prospect, userData, onComplete, onB
 
           {/* ── Step 3 — KYC Processing ───────────────────────────────── */}
           {step === 3 && (
-            <div className="text-center py-8">
-              <h2 className="text-lg font-semibold text-slate-800 mb-1">KYC Processing</h2>
-              <p className="text-sm text-slate-500 mb-8">Checking CKYC registry and verifying investor documents</p>
+            <div className="py-6">
+              <div className="text-center">
+                <h2 className="text-lg font-semibold text-slate-800 mb-1">POA Pre-verification</h2>
+                <p className="text-sm text-slate-500 mb-6">
+                  Validate PAN, legal name, date of birth, and investor readiness before continuing.
+                </p>
+              </div>
 
-              {kycPhase === 'loading' && (
-                <div className="space-y-6">
-                  <div className="w-20 h-20 bg-blue-50 border-4 border-blue-100 rounded-full flex items-center justify-center mx-auto">
-                    <Loader2 className="w-8 h-8 text-blue-600 animate-spin" />
+              <div className="mx-auto max-w-2xl rounded-2xl border border-slate-200 bg-slate-50 p-5">
+                <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                  <div className="flex gap-3">
+                    <div className={`flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-xl ${
+                      kycDecision.canProceed ? 'bg-green-100 text-green-700' : 'bg-blue-100 text-blue-700'
+                    }`}>
+                      {kycPhase === 'checking'
+                        ? <Loader2 className="h-6 w-6 animate-spin" />
+                        : <ShieldCheck className="h-6 w-6" />
+                      }
+                    </div>
+                    <div>
+                      <h3 className="text-sm font-bold text-slate-800">{kycDecision.title}</h3>
+                      <p className="mt-1 text-xs leading-5 text-slate-500">{kycDecision.message}</p>
+                    </div>
                   </div>
-                  <div className="space-y-2 max-w-xs mx-auto text-left">
-                    {['Querying CKYC registry…', 'Verifying PAN details…', 'Matching Aadhaar data…'].map((t, i) => (
-                      <div key={i} className="flex items-center gap-2 text-sm text-slate-500">
-                        <Loader2 className="w-3.5 h-3.5 text-blue-400 animate-spin flex-shrink-0" />
-                        {t}
-                      </div>
-                    ))}
+
+                  <div className="flex flex-shrink-0 flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={runPoaPreVerification}
+                      disabled={kycPhase === 'checking' || creatingKycRequest}
+                      className="inline-flex items-center justify-center gap-2 rounded-lg bg-[#0B1B3E] px-4 py-2 text-xs font-semibold text-white transition-colors hover:bg-[#1A3066] disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {kycPhase === 'checking' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ShieldCheck className="h-3.5 w-3.5" />}
+                      {kycPreVerification ? 'Run again' : 'Run check'}
+                    </button>
+                    {kycPreVerification?.id && !kycDecision.canProceed && (
+                      <button
+                        type="button"
+                        onClick={refreshPoaPreVerification}
+                        disabled={kycPhase === 'checking' || creatingKycRequest}
+                        className="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-50 disabled:opacity-50"
+                      >
+                        <RefreshCw className={`h-3.5 w-3.5 ${kycPhase === 'checking' ? 'animate-spin' : ''}`} />
+                        Refresh
+                      </button>
+                    )}
                   </div>
                 </div>
-              )}
 
-              {kycPhase === 'found' && (
-                <motion.div
-                  initial={{ opacity: 0, scale: 0.9 }}
-                  animate={{ opacity: 1, scale: 1 }}
-                  className="space-y-6"
-                >
-                  <div className="w-20 h-20 bg-green-100 rounded-full flex items-center justify-center mx-auto">
-                    <ShieldCheck className="w-10 h-10 text-green-600" />
+                {Object.keys(kycValidationErrors).length > 0 && (
+                  <div className="mt-4 rounded-xl border border-red-100 bg-red-50 p-3 text-xs font-medium text-red-700">
+                    {Object.values(kycValidationErrors).slice(0, 3).map(message => (
+                      <p key={message}>{message}</p>
+                    ))}
                   </div>
-                  <div>
-                    <h3 className="text-lg font-bold text-green-700">KYC Record Found!</h3>
-                    <p className="text-sm text-slate-500 mt-1">CKYC registry match successful</p>
-                  </div>
-                  <div className="bg-slate-50 rounded-2xl border border-slate-200 p-5 max-w-xs mx-auto text-left space-y-3">
-                    {[
-                      { label: 'KYC Status', value: 'Compliant', badge: 'bg-green-100 text-green-700' },
-                      { label: 'CKYC Number', value: 'CKYC-' + (s1.pan.slice(-4) || 'XXXX') + '-2025' },
-                      { label: 'KYC Type', value: 'Full KYC (In-person)' },
-                      { label: 'Verified By', value: 'CDSL Ventures Ltd' },
-                    ].map(row => (
-                      <div key={row.label} className="flex justify-between items-center">
-                        <span className="text-xs text-slate-500">{row.label}</span>
-                        {row.badge
-                          ? <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${row.badge}`}>{row.value}</span>
-                          : <span className="text-xs font-semibold text-slate-800">{row.value}</span>
-                        }
+                )}
+
+                {kycActionError && (
+                  <p className="mt-4 flex items-center gap-1.5 text-xs font-medium text-red-600">
+                    <AlertTriangle className="h-3.5 w-3.5" /> {kycActionError}
+                  </p>
+                )}
+                {kycActionMessage && !kycActionError && (
+                  <p className={`mt-4 flex items-center gap-1.5 text-xs font-medium ${kycDecision.canProceed ? 'text-green-600' : 'text-slate-600'}`}>
+                    {kycDecision.canProceed ? <CheckCircle2 className="h-3.5 w-3.5" /> : <ShieldCheck className="h-3.5 w-3.5" />}
+                    {kycActionMessage}
+                  </p>
+                )}
+
+                {getPreVerificationRows(kycPreVerification).length > 0 && (
+                  <div className="mt-5 grid gap-2 sm:grid-cols-2">
+                    {getPreVerificationRows(kycPreVerification).map(row => (
+                      <div key={row.field} className="rounded-xl border border-white bg-white p-3 shadow-sm">
+                        <div className="flex items-center justify-between gap-3">
+                          <p className="text-xs font-semibold text-slate-500">{row.label}</p>
+                          <span className={`rounded-full border px-2 py-0.5 text-[10px] font-bold uppercase ${preVerificationStatusClasses(row.status)}`}>
+                            {row.status || 'pending'}
+                          </span>
+                        </div>
+                        {(row.code || row.reason || row.value) && (
+                          <p className="mt-2 text-[11px] leading-4 text-slate-500">
+                            {[row.value, row.code, row.reason].filter(Boolean).join(' - ')}
+                          </p>
+                        )}
                       </div>
                     ))}
                   </div>
-                </motion.div>
-              )}
+                )}
+
+                {kycDecision.requiresFreshKyc && (
+                  <div className="mt-5 flex flex-col gap-3 rounded-xl border border-amber-100 bg-amber-50 p-4 sm:flex-row sm:items-center sm:justify-between">
+                    <p className="text-xs font-medium leading-5 text-amber-800">
+                      This investor needs a fresh digital KYC request before investments can be accepted.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={createFreshKycRequestFromPreVerification}
+                      disabled={creatingKycRequest || kycPhase === 'checking'}
+                      className="inline-flex items-center justify-center gap-2 rounded-lg bg-amber-600 px-4 py-2 text-xs font-semibold text-white transition-colors hover:bg-amber-700 disabled:opacity-50"
+                    >
+                      {creatingKycRequest ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ArrowRight className="h-3.5 w-3.5" />}
+                      Create KYC request
+                    </button>
+                  </div>
+                )}
+              </div>
+
             </div>
           )}
 
