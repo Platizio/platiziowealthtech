@@ -3,7 +3,6 @@ package com.platizio.wealthtech.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -21,7 +20,10 @@ import com.platizio.wealthtech.dto.IdentityDocumentCreateRequest;
 import com.platizio.wealthtech.dto.InvestorExternalKycResponse;
 import com.platizio.wealthtech.dto.InvestorKycCheckRequest;
 import com.platizio.wealthtech.dto.InvestorKycRequestCreateRequest;
+import com.platizio.wealthtech.dto.InvestorPreVerificationRequest;
+import com.platizio.wealthtech.dto.InvestorPreVerificationResponse;
 import com.platizio.wealthtech.integration.CybrillaClient;
+import com.platizio.wealthtech.integration.auth.CybrillaPreVerificationProperties;
 import com.platizio.wealthtech.repository.InvestorRepository;
 import java.time.LocalDate;
 import java.util.HashMap;
@@ -38,6 +40,54 @@ class InvestorKycServiceTest {
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
     @Test
+    void createPreVerificationDoesNotRequireLocalInvestor() throws Exception {
+        UUID actorId = UUID.randomUUID();
+        InvestorRepository investorRepository = mock(InvestorRepository.class);
+        CybrillaClient cybrillaClient = mock(CybrillaClient.class);
+        RecordingDistributorService distributorService = new RecordingDistributorService();
+        RecordingAuditService auditService = new RecordingAuditService();
+        when(cybrillaClient.createPreVerification(any())).thenReturn(json("""
+                {"object":"pre_verification","id":"pv_payload","status":"accepted"}
+                """));
+        InvestorKycService service = service(investorRepository, distributorService, auditService, cybrillaClient);
+
+        InvestorPreVerificationResponse response = service.createPreVerification(
+                new InvestorPreVerificationRequest("Rani Gupta", "aaapa3751a", LocalDate.of(1955, 10, 25)),
+                actorId
+        );
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.forClass(Map.class);
+        verify(cybrillaClient).createPreVerification(payloadCaptor.capture());
+        assertThat(payloadCaptor.getValue())
+                .containsEntry("investor_identifier", "AAAPA3751A")
+                .containsEntry("pan", Map.of("value", "AAAPA3751A"))
+                .containsEntry("name", Map.of("value", "Rani Gupta"))
+                .containsEntry("date_of_birth", Map.of("value", "1955-10-25"));
+        verify(investorRepository, never()).findById(any());
+        assertThat(response.externalResponse().path("id").asText()).isEqualTo("pv_payload");
+    }
+
+    @Test
+    void createPreVerificationRejectsUnsupportedSandboxPanBeforeExternalCall() {
+        UUID actorId = UUID.randomUUID();
+        InvestorRepository investorRepository = mock(InvestorRepository.class);
+        CybrillaClient cybrillaClient = mock(CybrillaClient.class);
+        RecordingDistributorService distributorService = new RecordingDistributorService();
+        RecordingAuditService auditService = new RecordingAuditService();
+        InvestorKycService service = service(investorRepository, distributorService, auditService, cybrillaClient);
+
+        assertThatThrownBy(() -> service.createPreVerification(
+                new InvestorPreVerificationRequest("Rani Gupta", "ABCDE1234F", LocalDate.of(1955, 10, 25)),
+                actorId
+        ))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Cybrilla sandbox only accepts simulator PANs");
+
+        verify(cybrillaClient, never()).createPreVerification(any());
+    }
+
+    @Test
     void createKycCheckStoresExternalIdAndMarksCompleted() throws Exception {
         UUID actorId = UUID.randomUUID();
         UUID investorId = UUID.randomUUID();
@@ -50,15 +100,22 @@ class InvestorKycServiceTest {
         distributorService.put(actorId, DistributorRole.SUB_DISTRIBUTOR);
         when(investorRepository.findById(investorId)).thenReturn(Optional.of(investor));
         when(investorRepository.save(any(Investor.class))).thenAnswer(invocation -> invocation.getArgument(0));
-        when(cybrillaClient.createKycCheck(eq("AAAPA3751A"), eq(investor.getDateOfBirth())))
-                .thenReturn(json("{\"id\":\"kyc-check-1\",\"status\":true}"));
+        when(cybrillaClient.createKycCheck(any(Investor.class)))
+                .thenReturn(json("""
+                        {
+                          "object": "pre_verification",
+                          "id": "pv_1",
+                          "status": "completed",
+                          "readiness": { "status": "verified", "code": null, "reason": null }
+                        }
+                        """));
 
         InvestorKycService service = service(investorRepository, distributorService, auditService, cybrillaClient);
 
         InvestorExternalKycResponse response = service.createKycCheck(investorId, new InvestorKycCheckRequest(null), actorId);
 
-        assertThat(response.investor().getExternalKycCheckId()).isEqualTo("kyc-check-1");
-        assertThat(response.investor().getExternalKycStatus()).isEqualTo("true");
+        assertThat(response.investor().getExternalKycCheckId()).isEqualTo("pv_1");
+        assertThat(response.investor().getExternalKycStatus()).isEqualTo("completed");
         assertThat(response.investor().getKycStatus()).isEqualTo(KycStatus.COMPLETED);
         assertThat(response.investor().getInvestorStatus()).isEqualTo(InvestorStatus.READY_FOR_TRANSACTIONS);
         assertThat(auditService.actionType).isEqualTo("KYC_CHECK_CREATED");
@@ -99,9 +156,9 @@ class InvestorKycServiceTest {
                 .containsEntry("name", "Jane Investor")
                 .containsEntry("pan", "AAAPA3751A")
                 .containsEntry("email", "jane@example.com")
-                .containsEntry("mobile", "9876543210")
                 .containsEntry("date_of_birth", "1980-10-19")
                 .containsEntry("father_name", "Rajesh Gupta");
+        assertThat(payload.get("mobile")).isEqualTo(Map.of("isd", "+91", "number", "9876543210"));
         assertThat(response.investor().getExternalKycRequestId()).isEqualTo("kycr_1");
         assertThat(response.investor().getKycStatus()).isEqualTo(KycStatus.IN_PROGRESS);
     }
@@ -121,7 +178,7 @@ class InvestorKycServiceTest {
         assertThatThrownBy(() -> service.createKycCheck(investorId, null, actorId))
                 .isInstanceOf(AccessDeniedException.class)
                 .hasMessage("Cannot manage KYC for another distributor's investor");
-        verify(cybrillaClient, never()).createKycCheck(any(), any());
+        verify(cybrillaClient, never()).createKycCheck(any(Investor.class));
     }
 
     @Test
@@ -163,7 +220,9 @@ class InvestorKycServiceTest {
             RecordingAuditService auditService,
             CybrillaClient cybrillaClient
     ) {
-        return new InvestorKycService(investorRepository, distributorService, auditService, cybrillaClient);
+        CybrillaPreVerificationProperties poaProperties = new CybrillaPreVerificationProperties();
+        poaProperties.setBaseUrl("https://api.sandbox.cybrilla.com");
+        return new InvestorKycService(investorRepository, distributorService, auditService, cybrillaClient, poaProperties);
     }
 
     private JsonNode json(String value) throws Exception {

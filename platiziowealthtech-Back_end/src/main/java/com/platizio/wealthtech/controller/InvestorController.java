@@ -11,6 +11,8 @@ import com.platizio.wealthtech.dto.InvestorKycCheckRequest;
 import com.platizio.wealthtech.dto.InvestorKycRequestCreateRequest;
 import com.platizio.wealthtech.dto.InvestorKycRequestUpdateRequest;
 import com.platizio.wealthtech.dto.InvestorKycSimulationRequest;
+import com.platizio.wealthtech.dto.InvestorPreVerificationRequest;
+import com.platizio.wealthtech.dto.InvestorPreVerificationResponse;
 import com.platizio.wealthtech.dto.IdentityDocumentCreateRequest;
 import com.platizio.wealthtech.dto.InvestorUpdateRequest;
 import com.platizio.wealthtech.security.JwtAuthPrincipal;
@@ -139,6 +141,22 @@ public class InvestorController {
             Authentication auth
     ) {
         return investorService.updateKycStatus(investorId, status, actorId(auth));
+    }
+
+    @PostMapping("/pre-verifications")
+    public InvestorPreVerificationResponse createPreVerification(
+            @Valid @RequestBody InvestorPreVerificationRequest request,
+            Authentication auth
+    ) {
+        return investorKycService.createPreVerification(request, actorId(auth));
+    }
+
+    @GetMapping("/pre-verifications/{preVerificationId}")
+    public InvestorPreVerificationResponse fetchPreVerification(
+            @PathVariable String preVerificationId,
+            Authentication auth
+    ) {
+        return investorKycService.fetchPreVerification(preVerificationId, actorId(auth));
     }
 
     @PostMapping("/{investorId}/kyc-checks")

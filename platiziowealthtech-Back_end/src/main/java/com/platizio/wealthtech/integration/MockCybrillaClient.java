@@ -8,7 +8,6 @@ import com.platizio.wealthtech.domain.InvestorBankAccount;
 import com.platizio.wealthtech.domain.ProductCategory;
 import com.platizio.wealthtech.domain.ProductScheme;
 import com.platizio.wealthtech.domain.TransactionOrder;
-import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -64,26 +63,57 @@ public class MockCybrillaClient implements CybrillaClient {
     }
 
     @Override
-    public JsonNode createKycCheck(String pan, LocalDate dateOfBirth) {
+    public JsonNode createPreVerification(Map<String, Object> payload) {
         ObjectNode response = OBJECT_MAPPER.createObjectNode();
-        response.put("id", "kyc-check-" + UUID.randomUUID());
-        response.put("pan", pan);
-        response.put("status", true);
-        response.putObject("entity_details").put("name", "Mock Investor");
+        response.put("object", "pre_verification");
+        response.put("id", "pv_" + UUID.randomUUID().toString().replace("-", ""));
+        response.put("status", "completed");
+        response.put("investor_identifier", textValue(payload, "investor_identifier"));
+        response.putObject("readiness").put("status", "verified").putNull("code").putNull("reason");
+        response.putObject("pan").put("status", "verified").putNull("code").putNull("reason").put("value", nestedTextValue(payload, "pan"));
+        response.putObject("name").put("status", "verified").putNull("code").putNull("reason").put("value", nestedTextValue(payload, "name"));
+        response.putObject("date_of_birth").put("status", "verified").putNull("code").putNull("reason").put("value", nestedTextValue(payload, "date_of_birth"));
         return response;
+    }
+
+    @Override
+    public JsonNode createKycCheck(Investor investor) {
+        return createPreVerification(Map.of(
+                "investor_identifier", investor.getPan(),
+                "pan", Map.of("value", investor.getPan()),
+                "name", Map.of("value", investor.getFullName()),
+                "date_of_birth", Map.of("value", investor.getDateOfBirth() == null ? "" : investor.getDateOfBirth().toString())
+        ));
     }
 
     @Override
     public JsonNode fetchKycCheck(String kycCheckId) {
         ObjectNode response = OBJECT_MAPPER.createObjectNode();
+        response.put("object", "pre_verification");
         response.put("id", kycCheckId);
-        response.put("status", true);
+        response.put("status", "completed");
+        response.putObject("readiness").put("status", "verified").putNull("code").putNull("reason");
         return response;
     }
 
     @Override
     public JsonNode refetchKycCheck(String kycCheckId) {
         return fetchKycCheck(kycCheckId);
+    }
+
+    private String textValue(Map<String, Object> payload, String key) {
+        Object value = payload.get(key);
+        return value == null ? "" : String.valueOf(value);
+    }
+
+    @SuppressWarnings("unchecked")
+    private String nestedTextValue(Map<String, Object> payload, String key) {
+        Object value = payload.get(key);
+        if (value instanceof Map<?, ?> map) {
+            Object nested = map.get("value");
+            return nested == null ? "" : String.valueOf(nested);
+        }
+        return value == null ? "" : String.valueOf(value);
     }
 
     @Override

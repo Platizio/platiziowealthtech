@@ -34,6 +34,7 @@ class RealCybrillaClientMetricsTest {
                 restClientBuilder,
                 tokenService,
                 properties,
+                new CybrillaPreVerificationProperties(),
                 meterRegistry
         );
 

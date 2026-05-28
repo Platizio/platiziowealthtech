@@ -38,26 +38,59 @@ import org.springframework.web.client.RestClient;
 class RealCybrillaClientTest {
 
     @Test
-    void createKycCheckPostsPanAndDateOfBirth() {
-        ClientFixture fixture = clientFixture(new StaticBearerTokenService("tenant-token"));
+    void createKycCheckCreatesPoaPreVerificationWithPartnerToken() {
+        ClientFixture fixture = clientFixture(new StaticBearerTokenService("tenant-token", "poa-token"));
+        Investor investor = investor(null, null);
+        investor.setPan("aaapa3751a");
+        investor.setFullName("Rani Gupta");
+        investor.setDateOfBirth(LocalDate.of(1955, 10, 25));
 
-        fixture.server.expect(once(), requestTo("https://finprim.test/api/kyc/check"))
+        fixture.server.expect(once(), requestTo("https://poa.test/poa/pre_verifications"))
                 .andExpect(method(HttpMethod.POST))
-                .andExpect(header(HttpHeaders.AUTHORIZATION, "Bearer tenant-token"))
-                .andExpect(header("x-tenant-id", "tenant-123"))
+                .andExpect(header(HttpHeaders.AUTHORIZATION, "Bearer poa-token"))
                 .andExpect(content().json("""
                         {
-                          "pan": "AAAPA3751A",
-                          "date_of_birth": "1955-10-25"
+                          "investor_identifier": "AAAPA3751A",
+                          "pan": { "value": "AAAPA3751A" },
+                          "name": { "value": "Rani Gupta" },
+                          "date_of_birth": { "value": "1955-10-25" }
                         }
                         """))
-                .andRespond(withSuccess("{\"id\":\"kyc-check-1\",\"status\":true}", MediaType.APPLICATION_JSON));
+                .andRespond(withSuccess("{\"object\":\"pre_verification\",\"id\":\"pv_1\",\"status\":\"accepted\"}", MediaType.APPLICATION_JSON));
 
-        JsonNode response = fixture.client.createKycCheck("aaapa3751a", LocalDate.of(1955, 10, 25));
+        JsonNode response = fixture.client.createKycCheck(investor);
 
         fixture.server.verify();
-        assertThat(response.path("id").asText()).isEqualTo("kyc-check-1");
-        assertThat(response.path("status").asBoolean()).isTrue();
+        assertThat(response.path("id").asText()).isEqualTo("pv_1");
+        assertThat(response.path("status").asText()).isEqualTo("accepted");
+    }
+
+    @Test
+    void createPreVerificationPostsPayloadWithPartnerToken() {
+        ClientFixture fixture = clientFixture(new StaticBearerTokenService("tenant-token", "poa-token"));
+
+        fixture.server.expect(once(), requestTo("https://poa.test/poa/pre_verifications"))
+                .andExpect(method(HttpMethod.POST))
+                .andExpect(header(HttpHeaders.AUTHORIZATION, "Bearer poa-token"))
+                .andExpect(content().json("""
+                        {
+                          "investor_identifier": "AAAPA3751A",
+                          "pan": { "value": "AAAPA3751A" },
+                          "name": { "value": "Rani Gupta" },
+                          "date_of_birth": { "value": "1955-10-25" }
+                        }
+                        """))
+                .andRespond(withSuccess("{\"object\":\"pre_verification\",\"id\":\"pv_payload\",\"status\":\"accepted\"}", MediaType.APPLICATION_JSON));
+
+        JsonNode response = fixture.client.createPreVerification(Map.of(
+                "investor_identifier", "AAAPA3751A",
+                "pan", Map.of("value", "AAAPA3751A"),
+                "name", Map.of("value", "Rani Gupta"),
+                "date_of_birth", Map.of("value", "1955-10-25")
+        ));
+
+        fixture.server.verify();
+        assertThat(response.path("id").asText()).isEqualTo("pv_payload");
     }
 
     @Test
@@ -237,6 +270,7 @@ class RealCybrillaClientTest {
                 restClientBuilder,
                 new StaticBearerTokenService("tenant-token"),
                 properties,
+                new CybrillaPreVerificationProperties(),
                 new SimpleMeterRegistry()
         );
 
@@ -334,11 +368,14 @@ class RealCybrillaClientTest {
         FinprimTenantProperties properties = new FinprimTenantProperties();
         properties.setBaseUrl("https://finprim.test");
         properties.getTenant().setId("tenant-123");
+        CybrillaPreVerificationProperties poaProperties = new CybrillaPreVerificationProperties();
+        poaProperties.setBaseUrl("https://poa.test");
 
         RealCybrillaClient client = new RealCybrillaClient(
                 restClientBuilder,
                 tokenService,
                 properties,
+                poaProperties,
                 new SimpleMeterRegistry()
         );
 
@@ -386,21 +423,32 @@ class RealCybrillaClientTest {
     }
 
     private static class StaticBearerTokenService extends ExternalBearerTokenService {
-        private final String token;
+        private final String tenantToken;
+        private final String poaToken;
 
         StaticBearerTokenService(String token) {
+            this(token, token);
+        }
+
+        StaticBearerTokenService(String tenantToken, String poaToken) {
             super(
                     new CybrillaPreVerificationProperties(),
                     new FinprimTenantProperties(),
                     null,
                     RestClient.builder()
             );
-            this.token = token;
+            this.tenantToken = tenantToken;
+            this.poaToken = poaToken;
         }
 
         @Override
         public String getFinprimTenantAccessToken() {
-            return token;
+            return tenantToken;
+        }
+
+        @Override
+        public String getCybrillaPreVerificationAccessToken() {
+            return poaToken;
         }
     }
 

@@ -5,7 +5,6 @@ import com.platizio.wealthtech.domain.Investor;
 import com.platizio.wealthtech.domain.InvestorBankAccount;
 import com.platizio.wealthtech.domain.ProductScheme;
 import com.platizio.wealthtech.domain.TransactionOrder;
-import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
 
@@ -14,7 +13,8 @@ public interface CybrillaClient {
     String createMfInvestmentAccount(Investor investor);
     void captureBankAccount(Investor investor, InvestorBankAccount bankAccount);
     JsonNode fetchBankAccountVerification(String bankAccountVerificationId);
-    JsonNode createKycCheck(String pan, LocalDate dateOfBirth);
+    JsonNode createPreVerification(Map<String, Object> payload);
+    JsonNode createKycCheck(Investor investor);
     JsonNode fetchKycCheck(String kycCheckId);
     JsonNode refetchKycCheck(String kycCheckId);
     JsonNode listKycRequests(String pan, String status);

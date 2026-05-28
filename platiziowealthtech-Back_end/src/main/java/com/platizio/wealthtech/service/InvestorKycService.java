@@ -12,7 +12,10 @@ import com.platizio.wealthtech.dto.InvestorExternalKycResponse;
 import com.platizio.wealthtech.dto.InvestorKycCheckRequest;
 import com.platizio.wealthtech.dto.InvestorKycRequestCreateRequest;
 import com.platizio.wealthtech.dto.InvestorKycRequestUpdateRequest;
+import com.platizio.wealthtech.dto.InvestorPreVerificationRequest;
+import com.platizio.wealthtech.dto.InvestorPreVerificationResponse;
 import com.platizio.wealthtech.integration.CybrillaClient;
+import com.platizio.wealthtech.integration.auth.CybrillaPreVerificationProperties;
 import com.platizio.wealthtech.repository.InvestorRepository;
 import jakarta.persistence.EntityNotFoundException;
 import java.time.LocalDate;
@@ -20,6 +23,7 @@ import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
+import java.util.regex.Pattern;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -28,30 +32,50 @@ import org.springframework.util.StringUtils;
 @Service
 public class InvestorKycService {
 
+    private static final Pattern CYBRILLA_SANDBOX_PAN_PATTERN = Pattern.compile("^[A-Z]{3}P[IAX][0-9]{4}[A-Z]$");
+    private static final String CYBRILLA_SANDBOX_PAN_MESSAGE = "Cybrilla sandbox only accepts simulator PANs: "
+            + "use AAAPX1234A for verified KYC, AAAPA1234A for Aadhaar-not-linked, or AAAPI1234A for invalid PAN.";
+
     private final InvestorRepository investorRepository;
     private final DistributorService distributorService;
     private final AuditService auditService;
     private final CybrillaClient cybrillaClient;
+    private final CybrillaPreVerificationProperties poaProperties;
 
     public InvestorKycService(
             InvestorRepository investorRepository,
             DistributorService distributorService,
             AuditService auditService,
-            CybrillaClient cybrillaClient
+            CybrillaClient cybrillaClient,
+            CybrillaPreVerificationProperties poaProperties
     ) {
         this.investorRepository = investorRepository;
         this.distributorService = distributorService;
         this.auditService = auditService;
         this.cybrillaClient = cybrillaClient;
+        this.poaProperties = poaProperties;
+    }
+
+    @Transactional
+    public InvestorPreVerificationResponse createPreVerification(InvestorPreVerificationRequest request, UUID actorId) {
+        JsonNode response = cybrillaClient.createPreVerification(preVerificationPayload(request));
+        return new InvestorPreVerificationResponse(response);
+    }
+
+    @Transactional(readOnly = true)
+    public InvestorPreVerificationResponse fetchPreVerification(String preVerificationId, UUID actorId) {
+        JsonNode response = cybrillaClient.fetchKycCheck(resolveExternalId(preVerificationId, null, "Pre-verification id"));
+        return new InvestorPreVerificationResponse(response);
     }
 
     @Transactional
     public InvestorExternalKycResponse createKycCheck(UUID investorId, InvestorKycCheckRequest request, UUID actorId) {
         Investor investor = getAuthorizedInvestor(investorId, actorId);
-        LocalDate dateOfBirth = request != null && request.dateOfBirth() != null
-                ? request.dateOfBirth()
-                : investor.getDateOfBirth();
-        JsonNode response = cybrillaClient.createKycCheck(investor.getPan(), dateOfBirth);
+        if (request != null && request.dateOfBirth() != null) {
+            investor.setDateOfBirth(request.dateOfBirth());
+        }
+        validateCybrillaSandboxPan(normalizePan(investor.getPan()));
+        JsonNode response = cybrillaClient.createKycCheck(investor);
         applyKycCheckResponse(investor, response);
         Investor saved = investorRepository.save(investor);
         auditService.log("INVESTOR", saved.getId(), "KYC_CHECK_CREATED", actorId, auditDetails(saved));
@@ -174,7 +198,7 @@ public class InvestorKycService {
         put(payload, "name", defaultText(request == null ? null : request.name(), investor.getFullName()));
         put(payload, "pan", defaultText(request == null ? null : request.pan(), investor.getPan()));
         put(payload, "email", defaultText(request == null ? null : request.email(), investor.getEmail()));
-        put(payload, "mobile", defaultText(request == null ? null : request.mobile(), investor.getMobileNumber()));
+        putMobile(payload, defaultText(request == null ? null : request.mobile(), investor.getMobileNumber()));
         LocalDate dateOfBirth = request != null && request.dateOfBirth() != null ? request.dateOfBirth() : investor.getDateOfBirth();
         if (dateOfBirth != null) {
             put(payload, "date_of_birth", dateOfBirth.toString());
@@ -211,6 +235,38 @@ public class InvestorKycService {
         return payload;
     }
 
+    private Map<String, Object> preVerificationPayload(InvestorPreVerificationRequest request) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        String pan = normalizePan(request.pan());
+        validateCybrillaSandboxPan(pan);
+        put(payload, "investor_identifier", pan);
+        putPoaValue(payload, "pan", pan);
+        putPoaValue(payload, "name", request.fullName());
+        if (request.dateOfBirth() != null) {
+            putPoaValue(payload, "date_of_birth", request.dateOfBirth().toString());
+        }
+        return payload;
+    }
+
+    private String normalizePan(String rawPan) {
+        return rawPan == null ? null : rawPan.trim().toUpperCase(Locale.ROOT);
+    }
+
+    private void validateCybrillaSandboxPan(String pan) {
+        if (!isCybrillaSandbox() || !StringUtils.hasText(pan)) {
+            return;
+        }
+        if (!CYBRILLA_SANDBOX_PAN_PATTERN.matcher(pan).matches()) {
+            throw new IllegalArgumentException(CYBRILLA_SANDBOX_PAN_MESSAGE);
+        }
+    }
+
+    private boolean isCybrillaSandbox() {
+        return poaProperties != null
+                && StringUtils.hasText(poaProperties.getBaseUrl())
+                && poaProperties.getBaseUrl().toLowerCase(Locale.ROOT).contains("sandbox");
+    }
+
     private void applyKycCheckResponse(Investor investor, JsonNode response) {
         String responseId = firstText(response, "id");
         if (StringUtils.hasText(responseId)) {
@@ -236,6 +292,9 @@ public class InvestorKycService {
     private KycStatus resolveKycCheckStatus(JsonNode response) {
         if (response != null && response.path("status").isBoolean()) {
             return response.path("status").asBoolean() ? KycStatus.COMPLETED : KycStatus.RETRY_REQUIRED;
+        }
+        if (isPreVerification(response)) {
+            return resolvePreVerificationStatus(response);
         }
         return mapExternalStatus(kycStatusText(response), KycStatus.PENDING);
     }
@@ -270,6 +329,64 @@ public class InvestorKycService {
         return fetchStatus.isMissingNode() || fetchStatus.isNull() ? null : fetchStatus.asText();
     }
 
+    private boolean isPreVerification(JsonNode response) {
+        return response != null && "pre_verification".equals(firstText(response, "object"));
+    }
+
+    private KycStatus resolvePreVerificationStatus(JsonNode response) {
+        String status = firstText(response, "status");
+        if (!"completed".equalsIgnoreCase(status)) {
+            return mapExternalStatus(status, KycStatus.IN_PROGRESS);
+        }
+
+        String readinessStatus = nestedText(response, "readiness", "status");
+        String readinessCode = nestedText(response, "readiness", "code");
+        if ("verified".equalsIgnoreCase(readinessStatus)) {
+            return KycStatus.COMPLETED;
+        }
+        if ("failed".equalsIgnoreCase(readinessStatus)) {
+            if ("kyc_unavailable".equalsIgnoreCase(readinessCode) || "unavailable".equalsIgnoreCase(readinessCode)) {
+                return KycStatus.NOT_STARTED;
+            }
+            if ("upstream_error".equalsIgnoreCase(readinessCode)
+                    || "kyc_incomplete".equalsIgnoreCase(readinessCode)
+                    || "unknown".equalsIgnoreCase(readinessCode)) {
+                return KycStatus.RETRY_REQUIRED;
+            }
+            return KycStatus.FAILED;
+        }
+
+        if (hasFailedPreVerificationHash(response, "pan")
+                || hasFailedPreVerificationHash(response, "name")
+                || hasFailedPreVerificationHash(response, "date_of_birth")) {
+            return KycStatus.FAILED;
+        }
+        if (hasVerifiedPreVerificationHash(response, "pan")
+                && hasVerifiedPreVerificationHash(response, "name")
+                && hasVerifiedPreVerificationHash(response, "date_of_birth")) {
+            return KycStatus.COMPLETED;
+        }
+        return KycStatus.IN_PROGRESS;
+    }
+
+    private boolean hasFailedPreVerificationHash(JsonNode response, String fieldName) {
+        return "failed".equalsIgnoreCase(nestedText(response, fieldName, "status"));
+    }
+
+    private boolean hasVerifiedPreVerificationHash(JsonNode response, String fieldName) {
+        return "verified".equalsIgnoreCase(nestedText(response, fieldName, "status"));
+    }
+
+    private String nestedText(JsonNode node, String objectName, String fieldName) {
+        if (node == null || node.isNull()) {
+            return null;
+        }
+        JsonNode value = node.path(objectName).path(fieldName);
+        return value.isMissingNode() || value.isNull() || !StringUtils.hasText(value.asText())
+                ? null
+                : value.asText().trim();
+    }
+
     private void markReadyIfEligible(Investor investor) {
         if (investor.getKycStatus() == KycStatus.COMPLETED
                 && investor.getBankVerificationStatus() == BankVerificationStatus.VERIFIED) {
@@ -283,6 +400,10 @@ public class InvestorKycService {
         }
         fields.forEach((key, value) -> {
             if (StringUtils.hasText(key) && value != null) {
+                if ("mobile".equals(key.trim()) && value instanceof String mobile) {
+                    putMobile(payload, mobile);
+                    return;
+                }
                 payload.put(key, value);
             }
         });
@@ -291,6 +412,19 @@ public class InvestorKycService {
     private void put(Map<String, Object> payload, String key, String value) {
         if (StringUtils.hasText(value)) {
             payload.put(key, value.trim());
+        }
+    }
+
+    private void putPoaValue(Map<String, Object> payload, String key, String value) {
+        if (StringUtils.hasText(value)) {
+            payload.put(key, Map.of("value", value.trim()));
+        }
+    }
+
+    private void putMobile(Map<String, Object> payload, String rawMobile) {
+        MobileParts mobile = MobileParts.from(rawMobile);
+        if (mobile != null) {
+            payload.put("mobile", Map.of("isd", mobile.isd(), "number", mobile.number()));
         }
     }
 
@@ -325,5 +459,21 @@ public class InvestorKycService {
 
     private String safe(String value) {
         return value == null ? "" : value.replace("\"", "\\\"");
+    }
+
+    private record MobileParts(String isd, String number) {
+        private static MobileParts from(String rawMobile) {
+            if (!StringUtils.hasText(rawMobile)) {
+                return null;
+            }
+            String digits = rawMobile.replaceAll("[^0-9]", "");
+            if (!StringUtils.hasText(digits)) {
+                return null;
+            }
+            if (digits.startsWith("91") && digits.length() > 10) {
+                digits = digits.substring(2);
+            }
+            return new MobileParts("+91", digits);
+        }
     }
 }

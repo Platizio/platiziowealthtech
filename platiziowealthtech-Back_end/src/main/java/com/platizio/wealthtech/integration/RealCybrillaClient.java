@@ -7,6 +7,7 @@ import com.platizio.wealthtech.domain.ProductCategory;
 import com.platizio.wealthtech.domain.ProductScheme;
 import com.platizio.wealthtech.domain.TransactionOrder;
 import com.platizio.wealthtech.domain.TransactionType;
+import com.platizio.wealthtech.integration.auth.CybrillaPreVerificationProperties;
 import com.platizio.wealthtech.integration.auth.ExternalApiAuthenticationException;
 import com.platizio.wealthtech.integration.auth.ExternalBearerTokenService;
 import com.platizio.wealthtech.integration.auth.FinprimTenantProperties;
@@ -47,6 +48,7 @@ public class RealCybrillaClient implements CybrillaClient {
     private static final String MF_REDEMPTIONS_PATH = "/v2/mf_redemptions";
 
     private final RestClient restClient;
+    private final RestClient poaRestClient;
     private final ExternalBearerTokenService tokenService;
     private final FinprimTenantProperties finprimProperties;
     private final MeterRegistry meterRegistry;
@@ -55,15 +57,20 @@ public class RealCybrillaClient implements CybrillaClient {
             RestClient.Builder restClientBuilder,
             ExternalBearerTokenService tokenService,
             FinprimTenantProperties finprimProperties,
+            CybrillaPreVerificationProperties poaProperties,
             MeterRegistry meterRegistry
     ) {
         this.restClient = restClientBuilder
                 .baseUrl(finprimProperties.getBaseUrl())
                 .build();
+        this.poaRestClient = restClientBuilder
+                .baseUrl(poaProperties.getBaseUrl())
+                .build();
         this.tokenService = tokenService;
         this.finprimProperties = finprimProperties;
         this.meterRegistry = meterRegistry;
         logger.info("cybrilla_client mode='real' base_url='{}' tenant_header_configured='{}'", finprimProperties.getBaseUrl(), StringUtils.hasText(finprimProperties.tenantHeaderValue()));
+        logger.info("cybrilla_poa_client mode='real' base_url='{}'", poaProperties.getBaseUrl());
     }
 
     @Override
@@ -133,21 +140,25 @@ public class RealCybrillaClient implements CybrillaClient {
     }
 
     @Override
-    public JsonNode createKycCheck(String pan, LocalDate dateOfBirth) {
-        return executeWithTenantTokenRetry("create KYC check", () ->
-                post("create_kyc_check", "/api/kyc/check", kycCheckPayload(pan, dateOfBirth)));
+    public JsonNode createPreVerification(Map<String, Object> payload) {
+        return executeWithPoaTokenRetry("create POA pre verification", () ->
+                postPoa("create_poa_pre_verification", "/poa/pre_verifications", payload));
+    }
+
+    @Override
+    public JsonNode createKycCheck(Investor investor) {
+        return createPreVerification(preVerificationPayload(investor));
     }
 
     @Override
     public JsonNode fetchKycCheck(String kycCheckId) {
-        return executeWithTenantTokenRetry("fetch KYC check", () ->
-                get("fetch_kyc_check", "/api/kyc/" + kycCheckId));
+        return executeWithPoaTokenRetry("fetch POA pre verification", () ->
+                getPoa("fetch_poa_pre_verification", "/poa/pre_verifications/" + kycCheckId));
     }
 
     @Override
     public JsonNode refetchKycCheck(String kycCheckId) {
-        return executeWithTenantTokenRetry("refetch KYC check", () ->
-                put("refetch_kyc_check", "/api/kyc/" + kycCheckId + "/refetch"));
+        return fetchKycCheck(kycCheckId);
     }
 
     @Override
@@ -361,6 +372,17 @@ public class RealCybrillaClient implements CybrillaClient {
         return post(operation, path, payload, null);
     }
 
+    private JsonNode postPoa(String operation, String path, Map<String, Object> payload) {
+        logger.info("cybrilla_api direction='backend_to_poa' method='POST' path='{}' payload_fields='{}'", path, payload.keySet());
+        return recordApiRequest(operation, () -> poaRestClient.post()
+                    .uri(path)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .headers(this::setPoaAuthHeaders)
+                    .body(payload)
+                    .retrieve()
+                    .body(JsonNode.class));
+    }
+
     private JsonNode post(String operation, String path, Map<String, Object> payload, String idempotencyKey) {
         logger.info("cybrilla_api direction='backend_to_finprim' method='POST' path='{}' payload_fields='{}'", path, payload.keySet());
         return recordApiRequest(operation, () -> restClient.post()
@@ -406,6 +428,15 @@ public class RealCybrillaClient implements CybrillaClient {
         return recordApiRequest(operation, () -> restClient.get()
                     .uri(path)
                     .headers(this::setTenantAuthHeaders)
+                    .retrieve()
+                    .body(JsonNode.class));
+    }
+
+    private JsonNode getPoa(String operation, String path) {
+        logger.info("cybrilla_api direction='backend_to_poa' method='GET' path='{}'", path);
+        return recordApiRequest(operation, () -> poaRestClient.get()
+                    .uri(path)
+                    .headers(this::setPoaAuthHeaders)
                     .retrieve()
                     .body(JsonNode.class));
     }
@@ -495,6 +526,10 @@ public class RealCybrillaClient implements CybrillaClient {
         }
     }
 
+    private void setPoaAuthHeaders(HttpHeaders headers) {
+        headers.setBearerAuth(tokenService.getCybrillaPreVerificationAccessToken());
+    }
+
     private <T> T executeWithTenantTokenRetry(String operation, Supplier<T> supplier) {
         try {
             return supplier.get();
@@ -513,6 +548,44 @@ public class RealCybrillaClient implements CybrillaClient {
         } catch (ExternalApiAuthenticationException ex) {
             throw new CybrillaApiException("Unable to authenticate with Fintech Primitives while trying to " + operation, ex);
         }
+    }
+
+    private <T> T executeWithPoaTokenRetry(String operation, Supplier<T> supplier) {
+        try {
+            return supplier.get();
+        } catch (RestClientResponseException ex) {
+            if (ex.getStatusCode() == HttpStatus.UNAUTHORIZED) {
+                tokenService.invalidateCybrillaPreVerificationToken();
+                try {
+                    return supplier.get();
+                } catch (RestClientResponseException retryEx) {
+                    throw poaApiException(operation, retryEx);
+                }
+            }
+            throw poaApiException(operation, ex);
+        } catch (RestClientException ex) {
+            throw poaApiException(operation, ex);
+        } catch (ExternalApiAuthenticationException ex) {
+            throw new CybrillaApiException("Unable to authenticate with Cybrilla POA while trying to " + operation, ex);
+        } catch (IllegalStateException ex) {
+            throw new CybrillaApiException("Cybrilla POA configuration error while trying to " + operation + ": " + ex.getMessage(), ex);
+        }
+    }
+
+    private CybrillaApiException poaApiException(String operation, RestClientResponseException ex) {
+        String responseBody = ex.getResponseBodyAsString();
+        String detail = StringUtils.hasText(responseBody) ? " response=" + responseBody : "";
+        return new CybrillaApiException(
+                "Unable to " + operation + " with Cybrilla POA: " + ex.getStatusCode() + detail,
+                ex
+        );
+    }
+
+    private CybrillaApiException poaApiException(String operation, RestClientException ex) {
+        return new CybrillaApiException(
+                "Unable to " + operation + " with Cybrilla POA: " + rootCauseMessage(ex),
+                ex
+        );
     }
 
     private CybrillaApiException apiException(String operation, RestClientResponseException ex) {
@@ -614,13 +687,22 @@ public class RealCybrillaClient implements CybrillaClient {
         return payload;
     }
 
-    private Map<String, Object> kycCheckPayload(String pan, LocalDate dateOfBirth) {
+    private Map<String, Object> preVerificationPayload(Investor investor) {
         Map<String, Object> payload = new LinkedHashMap<>();
-        put(payload, "pan", pan == null ? null : pan.trim().toUpperCase());
-        if (dateOfBirth != null) {
-            put(payload, "date_of_birth", dateOfBirth.toString());
+        String pan = investor.getPan() == null ? null : investor.getPan().trim().toUpperCase();
+        put(payload, "investor_identifier", pan);
+        putPoaValue(payload, "pan", pan);
+        putPoaValue(payload, "name", investor.getFullName());
+        if (investor.getDateOfBirth() != null) {
+            putPoaValue(payload, "date_of_birth", investor.getDateOfBirth().toString());
         }
         return payload;
+    }
+
+    private void putPoaValue(Map<String, Object> payload, String key, String value) {
+        if (StringUtils.hasText(value)) {
+            payload.put(key, Map.of("value", value.trim()));
+        }
     }
 
     private Map<String, Object> mfPurchasePayload(TransactionOrder order, Investor investor, ProductScheme productScheme) {
