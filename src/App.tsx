@@ -37,6 +37,7 @@ const InvestorTransaction = lazy(() => import('./views/InvestorTransaction'));
 const Portfolio           = lazy(() => import('./views/Portfolio'));
 const Reports             = lazy(() => import('./views/Reports'));
 const Communications      = lazy(() => import('./views/Communications'));
+const Calculators         = lazy(() => import('./views/Calculators'));
 
 // Admin views
 const AdminOverview       = lazy(() => import('./views/AdminOverview'));
@@ -209,6 +210,7 @@ export default function App() {
           <Route path="/distributor/portfolio"       element={<Portfolio userData={userData} />} />
           <Route path="/distributor/reports"         element={<Reports userData={userData} />} />
           <Route path="/distributor/communications"  element={<Communications userData={userData} />} />
+          <Route path="/distributor/calculators"    element={<Calculators userData={userData} />} />
           
           {/* Pass state dynamically or let the components grab it from location state */}
           <Route path="/distributor/investor-onboarding" element={<InvestorOnboardingWrapper userData={userData} />} />
