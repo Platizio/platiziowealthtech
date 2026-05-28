@@ -61,7 +61,7 @@ function PasswordStrengthBar({ password }: { password: string }) {
 
 type LoginMode = 'password' | 'otp';
 type OtpStep = 'send' | 'verify';
-type ForgotStatus = 'idle' | 'loading' | 'sent' | 'notfound';
+type ForgotStatus = 'idle' | 'loading' | 'sent' | 'resetting' | 'done';
 
 export default function LoginPage({
   onLogin,
@@ -86,7 +86,11 @@ export default function LoginPage({
   const [forgotMode, setForgotMode] = useState(false);
   const [forgotEmail, setForgotEmail] = useState('');
   const [forgotStatus, setForgotStatus] = useState<ForgotStatus>('idle');
-  const [recoveredArn, setRecoveredArn] = useState('');
+  const [forgotError, setForgotError] = useState('');
+  const [resetToken, setResetToken] = useState('');
+  const [devResetToken, setDevResetToken] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
 
   /* ── OTP state ──────────────────────────────────────────────────────── */
   const [otpId, setOtpId] = useState('');         // identifier entered
@@ -184,22 +188,86 @@ export default function LoginPage({
     }
   };
 
-  /* ── Forgot ARN ─────────────────────────────────────────────────────── */
-  const handleForgotSubmit = () => {
+  /* ── Forgot password ────────────────────────────────────────────────── */
+  const handleForgotSubmit = async () => {
+    setForgotError('');
     const em = forgotEmail.trim().toLowerCase();
-    if (!em || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(em)) return;
+    if (!em || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(em)) {
+      setForgotError('Please enter a valid registered email address.');
+      return;
+    }
     console.log('[Login] Forgot password requested:', { email: em });
     setForgotStatus('loading');
-    setTimeout(() => {
-      setRecoveredArn('');
+    try {
+      const response = await apiFetch('/auth/forgot-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: em }),
+        skipAuthRedirect: true,
+      });
+      const data = await response.json().catch(() => null);
+      if (!response.ok) {
+        throw new Error(data?.message || 'Unable to start password reset. Please try again.');
+      }
+      const token = data?.resetToken || '';
+      setForgotEmail(em);
+      setResetToken(token);
+      setDevResetToken(token);
       setForgotStatus('sent');
-      console.log('[Login] Forgot password demo flow completed');
-    }, 800);
+      console.log('[Login] Password reset request completed');
+    } catch (error) {
+      console.error('Forgot password failed:', error);
+      setForgotError(error instanceof Error ? error.message : 'Unable to start password reset. Please try again.');
+      setForgotStatus('idle');
+    }
+  };
+
+  const handleResetPassword = async () => {
+    setForgotError('');
+    const token = resetToken.trim();
+    if (!token) {
+      setForgotError('Please enter the reset token.');
+      return;
+    }
+    if (getPwdScore(newPassword) < 4) {
+      setForgotError('Please choose a stronger password before continuing.');
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      setForgotError('New password and confirmation do not match.');
+      return;
+    }
+
+    setForgotStatus('resetting');
+    try {
+      const response = await apiFetch('/auth/reset-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token, newPassword }),
+        skipAuthRedirect: true,
+      });
+      const data = await response.json().catch(() => null);
+      if (!response.ok) {
+        throw new Error(data?.message || 'Unable to reset password. Please request a new token.');
+      }
+      setEmail(forgotEmail);
+      setPassword('');
+      setNewPassword('');
+      setConfirmPassword('');
+      setForgotStatus('done');
+      console.log('[Login] Password reset completed');
+    } catch (error) {
+      console.error('Password reset failed:', error);
+      setForgotError(error instanceof Error ? error.message : 'Unable to reset password. Please request a new token.');
+      setForgotStatus('sent');
+    }
   };
 
   const resetForgot = () => {
     setForgotMode(false); setForgotEmail('');
-    setForgotStatus('idle'); setRecoveredArn('');
+    setForgotStatus('idle'); setForgotError('');
+    setResetToken(''); setDevResetToken('');
+    setNewPassword(''); setConfirmPassword('');
   };
 
   /* ── OTP: send ──────────────────────────────────────────────────────── */
@@ -279,11 +347,11 @@ export default function LoginPage({
   );
 
   /* ── Left branding panel ────────────────────────────────────────────── */
-  const leftTitle = forgotMode ? 'Recover Access'
+  const leftTitle = forgotMode ? 'Reset Password'
     : loginMode === 'otp' ? 'Quick OTP Login'
       : 'Welcome Back';
   const leftSubtitle = forgotMode
-    ? "Enter your registered email and we'll send a password reset link."
+    ? 'Verify your registered email, then set a new secure password.'
     : loginMode === 'otp'
       ? 'No password needed — enter your email or mobile to receive a one-time passcode.'
       : 'Sign in to access your distributor dashboard, manage investors, and track earnings.';
@@ -347,52 +415,107 @@ export default function LoginPage({
                 <KeyRound className="w-6 h-6 text-blue-500" />
               </div>
               <h1 className="text-2xl font-semibold text-slate-800 mb-1">Forgot your password?</h1>
-              <p className="text-sm text-slate-500 mb-8">Enter your registered email and we'll send a password reset link.</p>
+              <p className="text-sm text-slate-500 mb-8">Enter your registered email to start a secure password reset.</p>
 
               <AnimatePresence mode="wait">
-                {forgotStatus === 'sent' && (
-                  <motion.div key="sent" initial={{ opacity: 0, scale: 0.97 }} animate={{ opacity: 1, scale: 1 }} className="bg-green-50 border border-green-200 rounded-2xl p-6 text-center">
+                {forgotStatus === 'done' && (
+                  <motion.div key="done" initial={{ opacity: 0, scale: 0.97 }} animate={{ opacity: 1, scale: 1 }} className="bg-green-50 border border-green-200 rounded-2xl p-6 text-center">
                     <div className="w-12 h-12 rounded-full bg-green-100 flex items-center justify-center mx-auto mb-4">
                       <CheckCircle2 className="w-6 h-6 text-green-500" />
                     </div>
-                    <p className="text-sm font-semibold text-slate-700 mb-1">Reset link sent!</p>
-                    <p className="text-xs text-slate-500 mb-4">
-                      A password reset link has been sent to{' '}
-                      <span className="font-semibold text-slate-700">{forgotEmail}</span>.
+                    <p className="text-sm font-semibold text-slate-700 mb-1">Password updated</p>
+                    <p className="text-xs text-slate-500 mb-5">
+                      Your password has been reset. You can now sign in with the new password.
                     </p>
-                    <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 mb-5 text-left">
-                      <p className="text-[11px] text-amber-800 leading-relaxed">
-                        <span className="font-bold">Demo note:</span> No real email is sent. Use the demo password{' '}
-                        <span className="font-mono font-bold">Platizio@2024</span> to sign in.
-                      </p>
-                    </div>
                     <button onClick={resetForgot} className="w-full py-3 bg-[#0B1B3E] text-white font-semibold text-sm rounded-xl hover:bg-[#1A3066] transition-colors">
                       Back to Sign In
                     </button>
                   </motion.div>
                 )}
-                {forgotStatus === 'notfound' && (
-                  <motion.div key="notfound" initial={{ opacity: 0, scale: 0.97 }} animate={{ opacity: 1, scale: 1 }} className="bg-amber-50 border border-amber-200 rounded-2xl p-6 text-center">
-                    <div className="w-12 h-12 rounded-full bg-amber-100 flex items-center justify-center mx-auto mb-4">
-                      <Mail className="w-6 h-6 text-amber-500" />
+                {(forgotStatus === 'sent' || forgotStatus === 'resetting') && (
+                  <motion.div key="reset-form" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+                    <div className="flex items-center gap-3 bg-green-50 border border-green-200 rounded-xl px-4 py-3 mb-5">
+                      <div className="w-8 h-8 rounded-full bg-green-100 flex items-center justify-center flex-shrink-0">
+                        <Mail className="w-4 h-4 text-green-600" />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-xs font-semibold text-slate-700">Reset request accepted</p>
+                        <p className="text-[11px] text-slate-500 truncate">{forgotEmail}</p>
+                      </div>
+                      <button onClick={() => { setForgotStatus('idle'); setForgotError(''); }} className="text-[11px] text-blue-500 hover:underline font-medium flex-shrink-0">
+                        Change
+                      </button>
                     </div>
-                    <p className="text-sm font-semibold text-slate-700 mb-2">No account found</p>
-                    <p className="text-xs text-slate-500 leading-relaxed mb-5">
-                      We couldn't find an account for <span className="font-semibold text-slate-700">{forgotEmail}</span>.
-                    </p>
-                    <div className="flex gap-3">
-                      <button onClick={() => setForgotStatus('idle')} className="flex-1 py-2.5 border border-slate-200 text-slate-600 font-medium text-sm rounded-xl hover:bg-slate-50 transition-colors">Try Again</button>
-                      <button onClick={onSignUp} className="flex-1 py-2.5 bg-[#0B1B3E] text-white font-semibold text-sm rounded-xl hover:bg-[#1A3066] transition-colors">Sign Up</button>
+
+                    {devResetToken && (
+                      <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 mb-5 text-left">
+                        <p className="text-[11px] font-semibold text-amber-900 mb-1">Local reset token</p>
+                        <p className="break-all font-mono text-[11px] text-amber-800 leading-relaxed">{devResetToken}</p>
+                      </div>
+                    )}
+
+                    <AnimatePresence>
+                      {forgotError && (
+                        <motion.div initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }}
+                          className="mb-5 flex items-start gap-2.5 bg-red-50 border border-red-100 rounded-xl px-4 py-3">
+                          <AlertCircle className="w-4 h-4 text-red-500 flex-shrink-0 mt-0.5" />
+                          <p className="text-sm text-red-700">{forgotError}</p>
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
+
+                    <div className="mb-5">
+                      <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5">
+                        Reset Token <span className="text-red-400">*</span>
+                      </label>
+                      <input type="text" value={resetToken} onChange={e => { setResetToken(e.target.value); setForgotError(''); }}
+                        placeholder="Paste token from reset email"
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm focus:ring-2 focus:ring-blue-100 focus:border-blue-500 outline-none transition-all" />
                     </div>
+
+                    <div className="mb-5">
+                      <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5">
+                        New Password <span className="text-red-400">*</span>
+                      </label>
+                      <input type="password" value={newPassword} onChange={e => { setNewPassword(e.target.value); setForgotError(''); }}
+                        onKeyDown={e => e.key === 'Enter' && handleResetPassword()}
+                        placeholder="Create a strong password"
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm focus:ring-2 focus:ring-blue-100 focus:border-blue-500 outline-none transition-all" />
+                      <PasswordStrengthBar password={newPassword} />
+                    </div>
+
+                    <div className="mb-6">
+                      <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5">
+                        Confirm Password <span className="text-red-400">*</span>
+                      </label>
+                      <input type="password" value={confirmPassword} onChange={e => { setConfirmPassword(e.target.value); setForgotError(''); }}
+                        onKeyDown={e => e.key === 'Enter' && handleResetPassword()}
+                        placeholder="Re-enter new password"
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm focus:ring-2 focus:ring-blue-100 focus:border-blue-500 outline-none transition-all" />
+                    </div>
+
+                    <button onClick={handleResetPassword} disabled={forgotStatus === 'resetting' || !resetToken.trim() || getPwdScore(newPassword) < 4 || newPassword !== confirmPassword}
+                      className="w-full py-3.5 bg-[#0B1B3E] text-white font-semibold text-sm rounded-xl hover:bg-[#1A3066] transition-colors disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2 shadow-lg">
+                      {forgotStatus === 'resetting' ? (<><Spinner />Updating password...</>) : 'Update Password'}
+                    </button>
                   </motion.div>
                 )}
                 {(forgotStatus === 'idle' || forgotStatus === 'loading') && (
                   <motion.div key="forgot-input" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+                    <AnimatePresence>
+                      {forgotError && (
+                        <motion.div initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }}
+                          className="mb-5 flex items-start gap-2.5 bg-red-50 border border-red-100 rounded-xl px-4 py-3">
+                          <AlertCircle className="w-4 h-4 text-red-500 flex-shrink-0 mt-0.5" />
+                          <p className="text-sm text-red-700">{forgotError}</p>
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
                     <div className="mb-6">
                       <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5">
                         Registered Email Address <span className="text-red-400">*</span>
                       </label>
-                      <input type="email" value={forgotEmail} onChange={e => setForgotEmail(e.target.value)}
+                      <input type="email" value={forgotEmail} onChange={e => { setForgotEmail(e.target.value); setForgotError(''); }}
                         onKeyDown={e => e.key === 'Enter' && handleForgotSubmit()}
                         placeholder="you@example.com" autoFocus
                         className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm focus:ring-2 focus:ring-blue-100 focus:border-blue-500 outline-none transition-all" />

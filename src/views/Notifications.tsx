@@ -40,7 +40,7 @@ const typeConfig: Record<NotifType, { borderColor: string; iconBg: string; icon:
   },
 };
 
-const CATEGORIES = ['All', 'KYC', 'Transaction', 'Payment', 'SIP', 'Redemption', 'Mandate', 'General'];
+const CATEGORIES = ['All', 'KYC', 'Transaction', 'Payment', 'SIP', 'Redemption', 'Mandate', 'Life Event', 'General'];
 
 function mapBackendType(type: string): { notifType: NotifType, category: string } {
   switch (type) {
@@ -54,6 +54,7 @@ function mapBackendType(type: string): { notifType: NotifType, category: string 
     case 'REDEMPTION_SUCCESSFUL': return { notifType: 'success', category: 'Redemption' };
     case 'BANK_CREDIT_COMPLETED': return { notifType: 'success', category: 'Redemption' };
     case 'RECURRING_PLAN_EVENT': return { notifType: 'info', category: 'SIP' };
+    case 'LIFE_EVENT_REMINDER': return { notifType: 'info', category: 'Life Event' };
     case 'GENERAL':
     default:
       return { notifType: 'info', category: 'General' };

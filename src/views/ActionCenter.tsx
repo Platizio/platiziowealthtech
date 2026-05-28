@@ -3,11 +3,11 @@ import { motion, AnimatePresence } from 'motion/react';
 import {
   ArrowLeft, AlertCircle, ShieldCheck, Landmark,
   ArrowLeftRight, RefreshCw, Package, ChevronRight,
-  CheckCircle2, XCircle,
+  CheckCircle2, XCircle, Gift,
 } from 'lucide-react';
 import { apiFetch } from '../config/api';
 
-type Category = 'All' | 'KYC' | 'Bank' | 'Transaction' | 'SIP' | 'Maturing';
+type Category = 'All' | 'KYC' | 'Bank' | 'Transaction' | 'SIP' | 'Maturing' | 'Life Event';
 type Priority  = 'High' | 'Medium' | 'Low';
 
 interface Action {
@@ -21,6 +21,7 @@ const TABS: { key: Category; label: string; icon: React.ReactNode }[] = [
   { key: 'Bank',        label: 'Bank',         icon: <Landmark        className="w-3.5 h-3.5" /> },
   { key: 'Transaction', label: 'Transactions', icon: <ArrowLeftRight  className="w-3.5 h-3.5" /> },
   { key: 'SIP',         label: 'SIP',          icon: <RefreshCw       className="w-3.5 h-3.5" /> },
+  { key: 'Life Event',  label: 'Life Events',  icon: <Gift            className="w-3.5 h-3.5" /> },
   { key: 'Maturing',    label: 'Maturing',     icon: <Package         className="w-3.5 h-3.5" /> },
 ];
 
@@ -35,6 +36,7 @@ const catIcon: Record<string, { icon: React.ReactNode; cls: string }> = {
   Bank:        { icon: <Landmark       className="w-4 h-4" />, cls: 'bg-green-100  text-green-600'  },
   Transaction: { icon: <ArrowLeftRight className="w-4 h-4" />, cls: 'bg-violet-100 text-violet-600' },
   SIP:         { icon: <RefreshCw      className="w-4 h-4" />, cls: 'bg-orange-100 text-orange-600' },
+  'Life Event':{ icon: <Gift           className="w-4 h-4" />, cls: 'bg-pink-100   text-pink-600'   },
   Maturing:    { icon: <Package        className="w-4 h-4" />, cls: 'bg-slate-100  text-slate-600'  },
 };
 

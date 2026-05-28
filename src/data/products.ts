@@ -4,7 +4,7 @@
 // admin are immediately reflected in the distributor catalog.
 
 export interface Product {
-  id:          number;
+  id:          string | number;
   name:        string;
   assetClass:  'MF' | 'SIF';
   category:    string;
@@ -15,6 +15,9 @@ export interface Product {
   riskLevel:   string;   // 'Low' | 'Moderate' | 'High' | 'Very High'
   status:      'Active' | 'Inactive';
   amc:         string;
+  externalSchemeCode?: string;
+  externalIsin?:       string;
+  productType?:        string;
 }
 
 // ── Distributor tier (simulated for Aditya Sharma) ──────────────────────────

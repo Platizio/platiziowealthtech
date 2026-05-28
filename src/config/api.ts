@@ -23,7 +23,7 @@ const isAuthRedirectExcluded = (pathOrUrl: string) => {
     ? pathOrUrl.slice(API_BASE_URL.length)
     : pathOrUrl;
 
-  return ['/auth/login', '/auth/logout', '/auth/signup', '/auth/me'].some(authPath => path.startsWith(authPath));
+  return path.startsWith('/auth/');
 };
 
 const clearLocalAuthState = () => {
@@ -31,6 +31,18 @@ const clearLocalAuthState = () => {
   window.sessionStorage.removeItem('userSession');
   window.localStorage.removeItem('authToken');
   window.localStorage.removeItem('userSession');
+};
+
+const redirectToLoginForExpiredSession = () => {
+  if (sessionRedirectInProgress || typeof window === 'undefined') return;
+
+  sessionRedirectInProgress = true;
+  clearLocalAuthState();
+  window.dispatchEvent(new CustomEvent(SESSION_EXPIRED_EVENT));
+
+  if (window.location.pathname !== '/login') {
+    window.location.replace('/login?reason=session_expired');
+  }
 };
 
 let sessionRedirectInProgress = false;
@@ -52,11 +64,19 @@ const refreshSession = async () => {
   return refreshInProgress;
 };
 
-axios.interceptors.response.use(
+export const apiClient = axios.create({
+  baseURL: API_BASE_URL,
+  withCredentials: true,
+});
+
+apiClient.interceptors.response.use(
   response => response,
   error => {
     if (error?.response?.status === 400) {
       error.serverValidation = parseServerValidation(error.response.data);
+    }
+    if (error?.response?.status === 401 && typeof window !== 'undefined') {
+      redirectToLoginForExpiredSession();
     }
     return Promise.reject(error);
   },
@@ -80,15 +100,7 @@ export const apiFetch = async (pathOrUrl: string, init: ApiFetchInit = {}) => {
       });
     }
 
-    if (!sessionRedirectInProgress) {
-      sessionRedirectInProgress = true;
-      clearLocalAuthState();
-      window.dispatchEvent(new CustomEvent(SESSION_EXPIRED_EVENT));
-
-      if (window.location.pathname !== '/login') {
-        window.location.replace('/login?reason=session_expired');
-      }
-    }
+    redirectToLoginForExpiredSession();
   }
 
   return response;

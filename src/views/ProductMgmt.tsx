@@ -93,22 +93,54 @@ const mapBackendSchemeToProduct = (scheme: BackendProductScheme, index: number):
   const metadata = parseMetadata(scheme.metadataJson);
   const rawCategory = firstMetadataValue(metadata, ['category', 'scheme_category', 'sub_category']) || scheme.category;
   const rawRisk = firstMetadataValue(metadata, ['risk_level', 'riskometer', 'risk', 'risk_grade']);
+  const rawVisibility = firstMetadataValue(metadata, ['visibility', 'distributor_visibility']);
   const rawReturn = metadata?.returns?.['1y'] ?? metadata?.returns?.one_year ?? firstMetadataValue(metadata, ['return_1y', 'one_year_return']);
   const rawMinInvestment = firstMetadataValue(metadata, ['minimum_purchase_amount', 'min_purchase_amount', 'min_initial_investment', 'purchase_amount_minimum']);
   const rawNav = firstMetadataValue(metadata, ['nav', 'current_nav', 'last_nav']);
 
   return {
-    id: index + 1,
+    id: scheme.id || scheme.externalSchemeCode || `scheme-${index + 1}`,
     name: scheme.schemeName || scheme.externalSchemeCode || 'Unnamed Fund Scheme',
     assetClass: scheme.category === 'SIF' ? 'SIF' : 'MF',
     category: normalizeCategory(String(rawCategory || '')),
     return1y: formatReturn(rawReturn),
     minInvest: formatCurrency(rawMinInvestment, 'Rs 100'),
     nav: formatCurrency(rawNav, 'Rs 0'),
-    visibility: 'All Tiers',
+    visibility: rawVisibility ? String(rawVisibility) : 'All Tiers',
     riskLevel: rawRisk ? String(rawRisk) : 'Moderate',
     status: scheme.active === false ? 'Inactive' : 'Active',
     amc: scheme.amcName || 'Unknown AMC',
+    externalSchemeCode: scheme.externalSchemeCode,
+    externalIsin: scheme.externalIsin,
+    productType: scheme.productType,
+  };
+};
+
+const parseDisplayNumber = (value: string) => {
+  const numberValue = Number(String(value || '').replace(/[^0-9.-]/g, ''));
+  return Number.isFinite(numberValue) ? numberValue : 0;
+};
+
+const productToSchemePayload = (product: Omit<Product, 'id'>) => {
+  const active = product.status !== 'Inactive';
+  const metadata = {
+    category: product.category,
+    risk_level: product.riskLevel,
+    return_1y: parseDisplayNumber(product.return1y),
+    minimum_purchase_amount: parseDisplayNumber(product.minInvest),
+    nav: parseDisplayNumber(product.nav),
+    visibility: product.visibility,
+  };
+
+  return {
+    schemeName: product.name.trim(),
+    amcName: product.amc.trim(),
+    category: product.assetClass,
+    externalSchemeCode: (product.externalSchemeCode || '').trim(),
+    externalIsin: product.externalIsin?.trim() || null,
+    productType: product.productType?.trim() || (product.assetClass === 'SIF' ? 'SIF' : 'MUTUAL_FUND'),
+    active,
+    metadataJson: JSON.stringify(metadata),
   };
 };
 
@@ -130,6 +162,8 @@ export default function ProductMgmt({
   const [showFilters,    setShowFilters]    = useState(false);
   const [showAddModal,   setShowAddModal]   = useState(false);
   const [loadingProducts, setLoadingProducts] = useState(false);
+  const [savingProduct, setSavingProduct] = useState(false);
+  const [productActionId, setProductActionId] = useState<string | number | null>(null);
   const [syncError, setSyncError] = useState('');
   const [page, setPage] = useState(0);
   const [size, setSize] = useState(20);
@@ -231,17 +265,75 @@ export default function ProductMgmt({
   const sifCount = products.filter(p => p.assetClass === 'SIF').length;
 
   // ── Handlers ───────────────────────────────────────────────────────────────
-  const handleDelete = (id: number) =>
-    setProducts(prev => prev.filter(p => p.id !== id));
+  const apiErrorMessage = (result: any, fallback: string) =>
+    typeof result === 'string' ? result : result?.message || fallback;
 
-  const handleToggleStatus = (id: number) =>
-    setProducts(prev =>
-      prev.map(p => p.id === id ? { ...p, status: p.status === 'Active' ? 'Inactive' : 'Active' } : p)
-    );
+  const handleDelete = async (id: string | number) => {
+    const product = products.find(p => p.id === id);
+    if (!product || !window.confirm(`Delete ${product.name}? This removes it from the backend catalog.`)) return;
 
-  const handleAdd = (newProduct: Omit<Product, 'id'>) => {
-    const id = products.length > 0 ? Math.max(...products.map(p => p.id)) + 1 : 1;
-    setProducts(prev => [...prev, { id, ...newProduct }]);
+    setProductActionId(id);
+    setSyncError('');
+    try {
+      const response = await apiFetch(`/products/schemes/${id}`, { method: 'DELETE' });
+      const result = await readJsonSafely(response);
+      if (!response.ok) throw new Error(apiErrorMessage(result, 'Unable to delete product'));
+      setProducts(prev => prev.filter(p => p.id !== id));
+      setTotalElements(prev => Math.max(prev - 1, 0));
+    } catch (error) {
+      console.error('Failed to delete product:', error);
+      setSyncError(error instanceof Error ? error.message : 'Unable to delete product');
+    } finally {
+      setProductActionId(null);
+    }
+  };
+
+  const handleToggleStatus = async (id: string | number) => {
+    const product = products.find(p => p.id === id);
+    if (!product) return;
+
+    const nextActive = product.status !== 'Active';
+    setProductActionId(id);
+    setSyncError('');
+    try {
+      const response = await apiFetch(`/products/schemes/${id}/status`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ active: nextActive }),
+      });
+      const result = await readJsonSafely(response);
+      if (!response.ok) throw new Error(apiErrorMessage(result, 'Unable to update product status'));
+      const updated = mapBackendSchemeToProduct(result, products.findIndex(p => p.id === id));
+      setProducts(prev => prev.map(p => p.id === id ? updated : p));
+    } catch (error) {
+      console.error('Failed to update product status:', error);
+      setSyncError(error instanceof Error ? error.message : 'Unable to update product status');
+    } finally {
+      setProductActionId(null);
+    }
+  };
+
+  const handleAdd = async (newProduct: Omit<Product, 'id'>) => {
+    setSavingProduct(true);
+    setSyncError('');
+    try {
+      const response = await apiFetch('/products/schemes', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(productToSchemePayload(newProduct)),
+      });
+      const result = await readJsonSafely(response);
+      if (!response.ok) throw new Error(apiErrorMessage(result, 'Unable to add product'));
+      const created = mapBackendSchemeToProduct(result, products.length);
+      setProducts(prev => [created, ...prev]);
+      setTotalElements(prev => prev + 1);
+      setShowAddModal(false);
+    } catch (error) {
+      console.error('Failed to add product:', error);
+      setSyncError(error instanceof Error ? error.message : 'Unable to add product');
+    } finally {
+      setSavingProduct(false);
+    }
   };
 
   // ── Render ─────────────────────────────────────────────────────────────────
@@ -432,18 +524,20 @@ export default function ProductMgmt({
                       {/* Toggle active / inactive */}
                       <button
                         onClick={() => handleToggleStatus(p.id)}
+                        disabled={productActionId === p.id}
                         title={p.status === 'Active' ? 'Deactivate (hides from distributor)' : 'Activate'}
                         aria-label={p.status === 'Active' ? `Deactivate ${p.name}` : `Activate ${p.name}`}
-                        className={`p-1.5 rounded-lg transition-colors ${p.status === 'Active' ? 'text-green-500 hover:bg-green-50' : 'text-slate-400 hover:bg-slate-100'}`}
+                        className={`p-1.5 rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${p.status === 'Active' ? 'text-green-500 hover:bg-green-50' : 'text-slate-400 hover:bg-slate-100'}`}
                       >
                         {p.status === 'Active' ? <Eye className="w-4 h-4" aria-hidden="true" /> : <EyeOff className="w-4 h-4" aria-hidden="true" />}
                       </button>
                       {/* Delete */}
                       <button
                         onClick={() => handleDelete(p.id)}
+                        disabled={productActionId === p.id}
                         title="Remove product"
                         aria-label={`Remove ${p.name}`}
-                        className="p-1.5 text-red-400 hover:bg-red-50 rounded-lg transition-colors"
+                        className="p-1.5 text-red-400 hover:bg-red-50 rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                       >
                         <Trash2 className="w-4 h-4" aria-hidden="true" />
                       </button>
@@ -500,7 +594,8 @@ export default function ProductMgmt({
         {showAddModal && (
           <AddProductModal
             onClose={() => setShowAddModal(false)}
-            onAdd={p => { handleAdd(p); setShowAddModal(false); }}
+            onAdd={handleAdd}
+            saving={savingProduct}
           />
         )}
       </AnimatePresence>
@@ -513,14 +608,18 @@ export default function ProductMgmt({
 function AddProductModal({
   onClose,
   onAdd,
+  saving,
 }: {
   onClose: () => void;
-  onAdd:   (p: Omit<Product, 'id'>) => void;
+  onAdd:   (p: Omit<Product, 'id'>) => Promise<void>;
+  saving:  boolean;
 }) {
   const dialogRef = useFocusTrap<HTMLDivElement>(true);
   const [assetClass,    setAssetClass]    = useState<'MF' | 'SIF'>('MF');
   const [name,          setName]          = useState('');
   const [amc,           setAmc]           = useState('');
+  const [schemeCode,    setSchemeCode]    = useState('');
+  const [isin,          setIsin]          = useState('');
   const [category,      setCategory]      = useState('Equity');
   const [riskLevel,     setRiskLevel]     = useState('Moderate');
   const [visibility,    setVisibility]    = useState('All Tiers');
@@ -531,8 +630,8 @@ function AddProductModal({
   const mfCategories  = ['Equity', 'Debt', 'ELSS', 'Hybrid', 'Liquid'];
   const sifCategories = ['Strategic Growth', 'Strategic Income'];
 
-  const handleSubmit = () => {
-    if (!name.trim()) return;
+  const handleSubmit = async () => {
+    if (!name.trim() || !amc.trim() || !schemeCode.trim() || saving) return;
 
     const ret = parseFloat(returnVal);
     const return1y = !isNaN(ret)
@@ -545,7 +644,21 @@ function AddProductModal({
     const minNum = parseInt(minInvestVal, 10);
     const minInvest = !isNaN(minNum) ? `₹${minNum.toLocaleString('en-IN')}` : '₹100';
 
-    onAdd({ name: name.trim(), assetClass, category, amc: amc.trim() || 'Unknown AMC', return1y, minInvest, nav, riskLevel, visibility, status: 'Active' });
+    await onAdd({
+      name: name.trim(),
+      assetClass,
+      category,
+      amc: amc.trim(),
+      return1y,
+      minInvest,
+      nav,
+      riskLevel,
+      visibility,
+      status: 'Active',
+      externalSchemeCode: schemeCode.trim(),
+      externalIsin: isin.trim() || undefined,
+      productType: assetClass === 'SIF' ? 'SIF' : 'MUTUAL_FUND',
+    });
   };
 
   return (
@@ -599,6 +712,21 @@ function AddProductModal({
               <input type="text" value={name} onChange={e => setName(e.target.value)}
                 placeholder="e.g. HDFC Large & Mid Cap Fund"
                 className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:ring-2 focus:ring-blue-100 focus:border-blue-500 outline-none" />
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5">Scheme Code</label>
+                <input type="text" value={schemeCode} onChange={e => setSchemeCode(e.target.value.toUpperCase())}
+                  placeholder="e.g. MF-HDFC-001"
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-mono focus:ring-2 focus:ring-blue-100 focus:border-blue-500 outline-none" />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5">ISIN</label>
+                <input type="text" value={isin} onChange={e => setIsin(e.target.value.toUpperCase())}
+                  placeholder="Optional"
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-mono focus:ring-2 focus:ring-blue-100 focus:border-blue-500 outline-none" />
+              </div>
             </div>
 
             {/* Category + Risk */}
@@ -672,13 +800,13 @@ function AddProductModal({
           </div>
 
           <div className="mt-8 flex gap-3">
-            <button onClick={onClose} className="px-5 py-2.5 bg-slate-100 text-slate-600 text-sm font-medium rounded-xl hover:bg-slate-200 transition-colors">Cancel</button>
+            <button onClick={onClose} disabled={saving} className="px-5 py-2.5 bg-slate-100 text-slate-600 text-sm font-medium rounded-xl hover:bg-slate-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">Cancel</button>
             <button
               onClick={handleSubmit}
-              disabled={!name.trim()}
+              disabled={!name.trim() || !amc.trim() || !schemeCode.trim() || saving}
               className="flex-1 py-2.5 bg-[#0B1B3E] text-white text-sm font-medium rounded-xl hover:bg-[#1A3066] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
             >
-              Add Product
+              {saving ? 'Saving...' : 'Add Product'}
             </button>
           </div>
         </div>

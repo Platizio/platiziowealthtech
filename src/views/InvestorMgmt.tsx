@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Search, Filter, Upload, UserPlus, X, CheckCircle2, Clock, XCircle, AlertCircle, ChevronDown, Download } from 'lucide-react';
+import { Search, Filter, Upload, UserPlus, X, CheckCircle2, Clock, XCircle, AlertCircle, ChevronDown, Download, RefreshCw } from 'lucide-react';
 import { apiFetch, apiUrl } from '../config/api';
 import { useFocusTrap } from '../hooks/useFocusTrap';
 
@@ -65,6 +65,9 @@ export default function InvestorMgmt({ userData }: { userData?: any }) {
   const [showFilters,    setShowFilters]    = useState(false);
   const [addModal,       setAddModal]       = useState<'manual' | 'csv' | null>(null);
   const [fetchedDistributorNames, setFetchedDistributorNames] = useState<Record<string, string>>({});
+  const [rekycLoadingId, setRekycLoadingId] = useState<string | number | null>(null);
+  const [kycActionMessage, setKycActionMessage] = useState('');
+  const [kycActionError, setKycActionError] = useState('');
   const hasLoadedRef = React.useRef(false);
   const userId = userData?.id;
   const userRole = userData?.role;
@@ -206,6 +209,47 @@ export default function InvestorMgmt({ userData }: { userData?: any }) {
     const matchDist = distFilter === 'All' || resolveDistributorName(inv) === distFilter;
     return matchKyc && matchDist;
   });
+
+  const handleReKyc = async (inv: Investor) => {
+    setRekycLoadingId(inv.id);
+    setKycActionError('');
+    setKycActionMessage('');
+    try {
+      const checkResponse = await apiFetch(`/investors/${inv.id}/kyc-checks`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      const checkResult = await checkResponse.json().catch(() => null);
+      if (!checkResponse.ok) {
+        throw new Error(checkResult?.message || `KYC check failed with HTTP ${checkResponse.status}`);
+      }
+
+      let updatedInvestor = checkResult?.investor;
+      if (updatedInvestor && updatedInvestor.kycStatus !== 'COMPLETED') {
+        const requestResponse = await apiFetch(`/investors/${inv.id}/kyc-requests`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ fields: {} }),
+        });
+        const requestResult = await requestResponse.json().catch(() => null);
+        if (!requestResponse.ok) {
+          throw new Error(requestResult?.message || `KYC request failed with HTTP ${requestResponse.status}`);
+        }
+        updatedInvestor = requestResult?.investor || updatedInvestor;
+      }
+
+      if (updatedInvestor) {
+        setInvestors(prev => prev.map(row => row.id === inv.id ? mapInvestor(updatedInvestor) : row));
+      }
+      setKycActionMessage(`${inv.name} KYC was refreshed.`);
+    } catch (err) {
+      console.error('Re-KYC failed:', err);
+      setKycActionError(err instanceof Error ? err.message : 'Re-KYC failed.');
+    } finally {
+      setRekycLoadingId(null);
+    }
+  };
 
   const distributorOptions: string[] = [
     'All',
@@ -349,6 +393,16 @@ export default function InvestorMgmt({ userData }: { userData?: any }) {
           )}
         </AnimatePresence>
 
+        {(kycActionMessage || kycActionError) && (
+          <div className={`mx-4 mt-4 rounded-xl border px-4 py-3 text-sm font-medium ${
+            kycActionError
+              ? 'border-red-100 bg-red-50 text-red-700'
+              : 'border-green-100 bg-green-50 text-green-700'
+          }`}>
+            {kycActionError || kycActionMessage}
+          </div>
+        )}
+
         <div className="overflow-auto">
           {loading ? (
             <div className="p-12 text-center text-slate-500 font-medium">
@@ -396,8 +450,13 @@ export default function InvestorMgmt({ userData }: { userData?: any }) {
                       <div className="flex items-center gap-2 justify-end opacity-0 group-hover:opacity-100 transition-opacity">
                         <button className="px-3 py-1.5 text-xs font-semibold text-blue-600 border border-blue-200 rounded-lg hover:bg-blue-50 transition-colors">View</button>
                         {(inv.kyc === 'Pending' || inv.kyc === 'Failed') && (
-                          <button className="px-3 py-1.5 text-xs font-semibold text-amber-600 border border-amber-200 rounded-lg hover:bg-amber-50 transition-colors">
-                            Re-KYC
+                          <button
+                            onClick={() => handleReKyc(inv)}
+                            disabled={rekycLoadingId === inv.id}
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-amber-600 border border-amber-200 rounded-lg hover:bg-amber-50 transition-colors disabled:opacity-50"
+                          >
+                            {rekycLoadingId === inv.id && <RefreshCw className="h-3.5 w-3.5 animate-spin" />}
+                            {rekycLoadingId === inv.id ? 'Running' : 'Re-KYC'}
                           </button>
                         )}
                       </div>

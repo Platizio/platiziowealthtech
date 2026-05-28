@@ -24,6 +24,8 @@ interface FormValues {
   mobileNumber: string;
   email: string;
   dateOfBirth: string; // ISO yyyy-MM-dd for <input type="date">
+  anniversaryDate: string;
+  goalMaturityDate: string;
   addressLine1: string;
   addressLine2: string;
   city: string;
@@ -36,20 +38,25 @@ interface FormValues {
 // defaults. dateOfBirth may arrive as either an ISO string or a [y,m,d] tuple
 // (Spring + Jackson can serialise LocalDate either way depending on config) —
 // handle both. Nulls become "" so the inputs stay controlled.
-function toDefaults(investor: any): FormValues {
-  const dob = investor?.dateOfBirth;
-  let dateOfBirth = '';
-  if (typeof dob === 'string') {
-    dateOfBirth = dob.length >= 10 ? dob.substring(0, 10) : dob;
-  } else if (Array.isArray(dob) && dob.length === 3) {
-    const [y, m, d] = dob;
-    dateOfBirth = `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+function dateInputValue(value: any): string {
+  if (typeof value === 'string') {
+    return value.length >= 10 ? value.substring(0, 10) : value;
   }
+  if (Array.isArray(value) && value.length === 3) {
+    const [y, m, d] = value;
+    return `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+  }
+  return '';
+}
+
+function toDefaults(investor: any): FormValues {
   return {
     fullName:        investor?.fullName        ?? '',
     mobileNumber:    investor?.mobileNumber    ?? '',
     email:           investor?.email           ?? '',
-    dateOfBirth,
+    dateOfBirth:     dateInputValue(investor?.dateOfBirth),
+    anniversaryDate: dateInputValue(investor?.anniversaryDate),
+    goalMaturityDate: dateInputValue(investor?.goalMaturityDate),
     addressLine1:    investor?.addressLine1    ?? '',
     addressLine2:    investor?.addressLine2    ?? '',
     city:            investor?.city            ?? '',
@@ -120,6 +127,8 @@ export default function InvestorEditForm({ investor, onSaved, onCancel }: Props)
       mobileNumber:    values.mobileNumber.trim(),
       email:           values.email.trim(),
       dateOfBirth:     values.dateOfBirth || null,
+      anniversaryDate: values.anniversaryDate || null,
+      goalMaturityDate: values.goalMaturityDate || null,
       addressLine1:    values.addressLine1.trim() || null,
       addressLine2:    values.addressLine2.trim() || null,
       city:            values.city.trim() || null,
@@ -215,6 +224,26 @@ export default function InvestorEditForm({ investor, onSaved, onCancel }: Props)
             className={`${INPUT_CLS} ${errors.dateOfBirth ? ERR_INPUT_CLS : ''}`}
           />
           {errors.dateOfBirth && <p className={ERR_TEXT_CLS}><AlertCircle className="w-3 h-3" />{errors.dateOfBirth.message}</p>}
+        </div>
+
+        <div>
+          <label className={LABEL_CLS}>Anniversary date</label>
+          <input
+            type="date"
+            {...register('anniversaryDate')}
+            className={`${INPUT_CLS} ${errors.anniversaryDate ? ERR_INPUT_CLS : ''}`}
+          />
+          {errors.anniversaryDate && <p className={ERR_TEXT_CLS}><AlertCircle className="w-3 h-3" />{errors.anniversaryDate.message}</p>}
+        </div>
+
+        <div>
+          <label className={LABEL_CLS}>Goal maturity date</label>
+          <input
+            type="date"
+            {...register('goalMaturityDate')}
+            className={`${INPUT_CLS} ${errors.goalMaturityDate ? ERR_INPUT_CLS : ''}`}
+          />
+          {errors.goalMaturityDate && <p className={ERR_TEXT_CLS}><AlertCircle className="w-3 h-3" />{errors.goalMaturityDate.message}</p>}
         </div>
 
         <div>

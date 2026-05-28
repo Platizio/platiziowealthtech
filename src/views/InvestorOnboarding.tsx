@@ -1,11 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import axios from 'axios';
 import {
   ArrowLeft, ArrowRight, CheckCircle2, Loader2, Check,
-  ShieldCheck, Upload, Building2, User,
+  ShieldCheck, Upload, Building2, User, AlertTriangle, X,
 } from 'lucide-react';
-import { apiFetch, apiUrl } from '../config/api';
+import { apiClient, apiFetch } from '../config/api';
 import { buildValidationSummary, mapServerErrorsToState, parseServerValidation } from '../utils/serverValidation';
 
 // ── Step metadata ────────────────────────────────────────────────────────────
@@ -91,6 +90,9 @@ const validateDocumentFile = (file: File) => {
 export default function InvestorOnboarding({ prospect, userData, onComplete, onBack }: Props) {
   const [step, setStep] = useState(1);
   const [submitted, setSubmitted] = useState(false);
+  const [externalSyncPending, setExternalSyncPending] = useState(false);
+  const [externalSyncMessage, setExternalSyncMessage] = useState('');
+  const [showExternalSyncNotice, setShowExternalSyncNotice] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState('');
   const [serverErrors, setServerErrors] = useState<Record<string, string>>({});
@@ -104,6 +106,9 @@ export default function InvestorOnboarding({ prospect, userData, onComplete, onB
     dob: prospect?.dob || '',
     mobile: prospect?.mobile || '',
     email: prospect?.email || '',
+    relationshipType: 'SELF',
+    householdName: '',
+    guardianPan: '',
   });
 
   // ── Step 2 — Consent ────────────────────────────────────────────────────────
@@ -203,7 +208,14 @@ export default function InvestorOnboarding({ prospect, userData, onComplete, onB
   // ── Can proceed guard ─────────────────────────────────────────────────────────
   const canNext: boolean = (() => {
     switch (step) {
-      case 1: return !!(s1.firstName && s1.lastName && s1.pan.length >= 10 && s1.mobile.length >= 10 && s1.email.includes('@'));
+      case 1: return !!(
+        s1.firstName
+        && s1.lastName
+        && s1.pan.length >= 10
+        && s1.mobile.length >= 10
+        && s1.email.includes('@')
+        && (s1.relationshipType !== 'MINOR' || s1.guardianPan.length === 10)
+      );
       case 2: return otpCorrect;
       case 3: return kycPhase === 'found';
       case 4: return !!(s4.gender && s4.occupation && s4.income);
@@ -249,19 +261,85 @@ export default function InvestorOnboarding({ prospect, userData, onComplete, onB
     formData.append('file', file);
     formData.append('documentType', String(key).toUpperCase());
 
-    const response = await axios.put(apiUrl(`/investors/${investorId}/documents`), formData, {
-      withCredentials: true,
+    const response = await apiClient.put(`/investors/${investorId}/documents`, formData, {
       onUploadProgress: event => {
-        const total = event.total || file.size;
-        setDocProgress(prev => ({
-          ...prev,
-          [key]: Math.round((event.loaded * 100) / total),
-        }));
+        const total = event.total || file.size || event.loaded || 1;
+        setDocProgress(prev => ({ ...prev, [key]: Math.min(99, Math.round((event.loaded * 100) / total)) }));
       },
     });
 
     setDocProgress(prev => ({ ...prev, [key]: 100 }));
     return response.data;
+  };
+
+  const appendExternalSyncWarning = (message: string) => {
+    setExternalSyncPending(true);
+    setExternalSyncMessage(prev => prev ? `${prev}\n${message}` : message);
+    setShowExternalSyncNotice(true);
+  };
+
+  const runInitialKycApis = async (createdInvestor: any) => {
+    if (!createdInvestor?.id) return createdInvestor;
+    let latestInvestor = createdInvestor;
+
+    try {
+      console.log('step_1a_kyc_check_request=', {
+        endpoint: `POST /api/v1/investors/${createdInvestor.id}/kyc-checks`,
+        pan: createdInvestor.pan,
+      });
+      const kycCheckResponse = await apiFetch(`/investors/${createdInvestor.id}/kyc-checks`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dateOfBirth: createdInvestor.dateOfBirth || s1.dob || null }),
+      });
+      const kycCheckResult = await readJsonSafely(kycCheckResponse);
+      console.log('step_1a_kyc_check_response=', {
+        status: kycCheckResponse.status,
+        ok: kycCheckResponse.ok,
+        body: kycCheckResult,
+      });
+
+      if (!kycCheckResponse.ok) {
+        throw new Error(typeof kycCheckResult === 'string' ? kycCheckResult : kycCheckResult?.message || 'KYC check failed');
+      }
+      latestInvestor = kycCheckResult?.investor || latestInvestor;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unable to complete KYC check';
+      console.warn('step_1a_kyc_check_external_sync=', message);
+      appendExternalSyncWarning(`Unable to complete KYC status check with Cybrilla/Fintech Primitives: ${message}`);
+      return latestInvestor;
+    }
+
+    if (latestInvestor?.kycStatus === 'COMPLETED') {
+      return latestInvestor;
+    }
+
+    try {
+      console.log('step_1a_kyc_request_create_request=', {
+        endpoint: `POST /api/v1/investors/${createdInvestor.id}/kyc-requests`,
+      });
+      const kycRequestResponse = await apiFetch(`/investors/${createdInvestor.id}/kyc-requests`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fields: {} }),
+      });
+      const kycRequestResult = await readJsonSafely(kycRequestResponse);
+      console.log('step_1a_kyc_request_create_response=', {
+        status: kycRequestResponse.status,
+        ok: kycRequestResponse.ok,
+        body: kycRequestResult,
+      });
+
+      if (!kycRequestResponse.ok) {
+        throw new Error(typeof kycRequestResult === 'string' ? kycRequestResult : kycRequestResult?.message || 'KYC request creation failed');
+      }
+      return kycRequestResult?.investor || latestInvestor;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unable to create KYC request';
+      console.warn('step_1a_kyc_request_external_sync=', message);
+      appendExternalSyncWarning(`Unable to create digital KYC request with Cybrilla/Fintech Primitives: ${message}`);
+      return latestInvestor;
+    }
   };
 
   const submitInvestorToBackend = async () => {
@@ -281,6 +359,9 @@ export default function InvestorOnboarding({ prospect, userData, onComplete, onB
       email: s1.email,
       pan: s1.pan.trim().toUpperCase(),
       dateOfBirth: s1.dob || null,
+      relationshipType: s1.relationshipType,
+      householdName: s1.householdName.trim() || null,
+      guardianPan: s1.relationshipType === 'MINOR' ? s1.guardianPan.trim().toUpperCase() : null,
       addressLine1: '',
       addressLine2: '',
       city: '',
@@ -307,6 +388,9 @@ export default function InvestorOnboarding({ prospect, userData, onComplete, onB
 
     setSubmitting(true);
     setSubmitError('');
+    setExternalSyncPending(false);
+    setExternalSyncMessage('');
+    setShowExternalSyncNotice(false);
     setServerErrors({});
     console.groupCollapsed('[Cybrilla Workflow] Investor onboarding submit');
     console.log('frontend_route=', '/distributor/investor-onboarding');
@@ -325,7 +409,7 @@ export default function InvestorOnboarding({ prospect, userData, onComplete, onB
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(investorPayload),
       });
-      const investorResult = await readJsonSafely(investorResponse);
+      let investorResult = await readJsonSafely(investorResponse);
       console.log('step_1_create_investor_response=', {
         status: investorResponse.status,
         ok: investorResponse.ok,
@@ -343,8 +427,29 @@ export default function InvestorOnboarding({ prospect, userData, onComplete, onB
           }));
           throw new Error(buildValidationSummary(validation));
         }
+        if (investorResponse.status === 409) {
+          const message = typeof investorResult === 'string'
+            ? investorResult
+            : investorResult?.message || 'Investor already exists';
+          if (message.toLowerCase().includes('pan')) {
+            setServerErrors(prev => ({ ...prev, pan: message }));
+          }
+          throw new Error(message);
+        }
         throw new Error(typeof investorResult === 'string' ? investorResult : investorResult?.message || 'Investor creation failed');
       }
+
+      const pendingExternalProfile = Boolean(investorResult?.externalSyncPending) || !investorResult?.cybrillaInvestorId;
+      setExternalSyncPending(pendingExternalProfile);
+      if (pendingExternalProfile) {
+        const message = investorResult?.externalSyncMessage
+          || 'Unable to post investor data to Cybrilla/Fintech Primitives. The investor was saved locally with KYC PENDING.';
+        setExternalSyncMessage(message);
+        setShowExternalSyncNotice(true);
+        console.warn('step_1_create_investor_external_sync=', message);
+      }
+
+      investorResult = await runInitialKycApis(investorResult);
 
       console.log('step_1b_upload_documents_request=', {
         endpoint: `PUT /api/v1/investors/${investorResult.id}/documents`,
@@ -396,6 +501,13 @@ export default function InvestorOnboarding({ prospect, userData, onComplete, onB
         }
         throw new Error(typeof bankResult === 'string' ? bankResult : bankResult?.message || 'Bank account creation failed');
       }
+      if (Boolean(bankResult?.externalSyncPending) || !bankResult?.cybrillaBankId) {
+        const message = bankResult?.externalSyncMessage
+          || 'Unable to post bank data to Cybrilla/Fintech Primitives. Bank details were saved locally for retry.';
+        setExternalSyncPending(true);
+        setExternalSyncMessage(prev => prev ? `${prev}\n${message}` : message);
+        setShowExternalSyncNotice(true);
+      }
 
       console.log('workflow_status=', 'completed');
       setSubmitted(true);
@@ -428,6 +540,20 @@ export default function InvestorOnboarding({ prospect, userData, onComplete, onB
   // ═══════════════════════════════════════════════════════════════════════════
   // ── Submitted screen ──────────────────────────────────────────────────────
   if (submitted) {
+    const statusRows = externalSyncPending
+      ? [
+          { label: 'Investor Saved', sub: 'Local profile created successfully', color: 'green', done: true },
+          { label: 'KYC Pending', sub: 'PAN/external verification will be retried later', color: 'amber', done: false },
+          { label: 'Bank Mandate', sub: 'Bank details saved locally for later sync', color: 'amber', done: false },
+          { label: 'Compliance Review', sub: 'FATCA & PMLA check in queue', color: 'blue', done: false },
+        ]
+      : [
+          { label: 'Identity Verified', sub: 'PAN & consent OTP matched', color: 'green', done: true },
+          { label: 'KYC Processed', sub: 'CKYC registry record found', color: 'green', done: true },
+          { label: 'Bank Mandate', sub: 'eNACH registration pending', color: 'amber', done: false },
+          { label: 'Compliance Review', sub: 'FATCA & PMLA check in queue', color: 'blue', done: false },
+        ];
+
     return (
       <motion.div
         initial={{ opacity: 0, scale: 0.95 }}
@@ -444,9 +570,13 @@ export default function InvestorOnboarding({ prospect, userData, onComplete, onB
             <CheckCircle2 className="w-12 h-12 text-green-600" />
           </motion.div>
 
-          <h1 className="text-2xl font-bold text-slate-800 mb-2">Application Submitted!</h1>
+          <h1 className="text-2xl font-bold text-slate-800 mb-2">
+            {externalSyncPending ? 'Investor created, KYC incomplete' : 'Application Submitted!'}
+          </h1>
           <p className="text-slate-500 text-sm mb-6 leading-relaxed">
-            {s1.firstName} {s1.lastName}'s onboarding application has been submitted and is under review.
+            {externalSyncPending
+              ? (externalSyncMessage || `${s1.firstName} ${s1.lastName}'s profile has been saved with KYC pending. External verification will be retried once the platform is available.`)
+              : `${s1.firstName} ${s1.lastName}'s onboarding application has been submitted and is under review.`}
           </p>
 
           <div className="bg-slate-50 border border-slate-200 rounded-2xl p-5 mb-6 text-left">
@@ -456,12 +586,7 @@ export default function InvestorOnboarding({ prospect, userData, onComplete, onB
           </div>
 
           <div className="space-y-3 mb-8 text-left">
-            {[
-              { label: 'Identity Verified', sub: 'PAN & consent OTP matched', color: 'green', done: true },
-              { label: 'KYC Processed', sub: 'CKYC registry record found', color: 'green', done: true },
-              { label: 'Bank Mandate', sub: 'eNACH registration pending', color: 'amber', done: false },
-              { label: 'Compliance Review', sub: 'FATCA & PMLA check in queue', color: 'blue', done: false },
-            ].map(it => (
+            {statusRows.map(it => (
               <div key={it.label} className={`flex items-center gap-3 rounded-xl p-3.5 bg-${it.color}-50`}>
                 {it.done
                   ? <CheckCircle2 className={`w-5 h-5 text-${it.color}-600 flex-shrink-0`} />
@@ -481,6 +606,63 @@ export default function InvestorOnboarding({ prospect, userData, onComplete, onB
           >
             Back to Dashboard
           </button>
+
+          <AnimatePresence>
+            {externalSyncPending && showExternalSyncNotice && (
+              <motion.div
+                className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 px-4 backdrop-blur-sm"
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="investor-onboarding-external-sync-title"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+              >
+                <motion.div
+                  className="w-full max-w-md rounded-2xl border border-amber-100 bg-white p-6 text-left shadow-2xl"
+                  initial={{ opacity: 0, y: 18, scale: 0.97 }}
+                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                  exit={{ opacity: 0, y: 12, scale: 0.98 }}
+                  transition={{ duration: 0.18 }}
+                >
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="flex items-start gap-3">
+                      <div className="mt-0.5 flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl bg-amber-50 text-amber-600">
+                        <AlertTriangle className="h-5 w-5" />
+                      </div>
+                      <div>
+                        <h2 id="investor-onboarding-external-sync-title" className="text-base font-semibold text-slate-900">
+                          Investor created, KYC incomplete
+                        </h2>
+                        <div className="mt-1 space-y-2 text-sm leading-6 text-slate-600">
+                          {(externalSyncMessage || 'Unable to post data to Cybrilla/Fintech Primitives. The record was saved locally for retry.')
+                            .split('\n')
+                            .map((line, index) => <p key={`${line}-${index}`}>{line}</p>)}
+                        </div>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setShowExternalSyncNotice(false)}
+                      className="rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700"
+                      aria-label="Close external sync warning"
+                    >
+                      <X className="h-4 w-4" />
+                    </button>
+                  </div>
+                  <div className="mt-5 flex justify-end">
+                    <button
+                      type="button"
+                      onClick={() => setShowExternalSyncNotice(false)}
+                      className="rounded-xl bg-[#0B1B3E] px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-[#1A3066]"
+                    >
+                      Got it
+                    </button>
+                  </div>
+                </motion.div>
+              </motion.div>
+            )}
+          </AnimatePresence>
         </div>
       </motion.div>
     );
@@ -568,6 +750,37 @@ export default function InvestorOnboarding({ prospect, userData, onComplete, onB
                 <Field label="Date of Birth" error={serverErrors.dob}>
                   <input type="date" value={s1.dob} onChange={e => setS1({ ...s1, dob: e.target.value })} className={inp} />
                 </Field>
+                <Field label="Relationship Type">
+                  <select
+                    value={s1.relationshipType}
+                    onChange={e => setS1({ ...s1, relationshipType: e.target.value })}
+                    className={sel}
+                  >
+                    <option value="SELF">Self / Primary</option>
+                    <option value="SPOUSE">Spouse / Joint holder</option>
+                    <option value="MINOR">Minor folio</option>
+                    <option value="HUF">HUF</option>
+                  </select>
+                </Field>
+                <Field label="Household Name">
+                  <input
+                    value={s1.householdName}
+                    onChange={e => setS1({ ...s1, householdName: e.target.value })}
+                    placeholder="Sharma Family"
+                    className={inp}
+                  />
+                </Field>
+                {s1.relationshipType === 'MINOR' && (
+                  <Field label="Guardian PAN" required error={serverErrors.guardianPan}>
+                    <input
+                      value={s1.guardianPan}
+                      onChange={e => setS1({ ...s1, guardianPan: e.target.value.toUpperCase() })}
+                      placeholder="ABCDE1234F"
+                      maxLength={10}
+                      className={inp + ' font-mono tracking-widest'}
+                    />
+                  </Field>
+                )}
                 <Field label="Mobile Number" required error={serverErrors.mobile}>
                   <input value={s1.mobile} onChange={e => setS1({ ...s1, mobile: e.target.value.replace(/\D/g, '') })} placeholder="9876543210" maxLength={13} className={inp} />
                 </Field>
@@ -993,12 +1206,6 @@ export default function InvestorOnboarding({ prospect, userData, onComplete, onB
       </AnimatePresence>
 
       {/* ── Navigation bar ────────────────────────────────────────────────── */}
-      {submitError && (
-        <div className="mt-6 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-700">
-          {submitError}
-        </div>
-      )}
-
       <div className="flex items-center justify-between mt-6">
         <button
           onClick={goBack}
@@ -1020,6 +1227,59 @@ export default function InvestorOnboarding({ prospect, userData, onComplete, onB
           </button>
         </div>
       </div>
+
+      <AnimatePresence>
+        {submitError && (
+          <motion.div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 px-4 backdrop-blur-sm"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="investor-onboarding-error-title"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+          >
+            <motion.div
+              className="w-full max-w-md rounded-2xl border border-red-100 bg-white p-6 shadow-2xl"
+              initial={{ opacity: 0, y: 18, scale: 0.97 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 12, scale: 0.98 }}
+              transition={{ duration: 0.18 }}
+            >
+              <div className="flex items-start justify-between gap-4">
+                <div className="flex items-start gap-3">
+                  <div className="mt-0.5 flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl bg-red-50 text-red-600">
+                    <AlertTriangle className="h-5 w-5" />
+                  </div>
+                  <div>
+                    <h2 id="investor-onboarding-error-title" className="text-base font-semibold text-slate-900">
+                      Investor onboarding failed
+                    </h2>
+                    <p className="mt-1 text-sm leading-6 text-slate-600">{submitError}</p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setSubmitError('')}
+                  className="rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700"
+                  aria-label="Close error message"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+              <div className="mt-5 flex justify-end">
+                <button
+                  type="button"
+                  onClick={() => setSubmitError('')}
+                  className="rounded-xl bg-[#0B1B3E] px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-[#1A3066]"
+                >
+                  Review and retry
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
     </div>
   );

@@ -4,7 +4,7 @@ import {
   LayoutDashboard, Users, BookOpen, Search, Bell, Menu,
   ArrowLeftRight, UserCircle2, TrendingUp, Target,
   BarChart3, Network, Layers, UserCheck, ShieldCheck, X, AlertTriangle,
-  PieChart, RefreshCw, FileBarChart2, MessageSquare, ClipboardList, Calculator
+  PieChart, RefreshCw, FileBarChart2, MessageSquare, ClipboardList, Calculator, Wrench
 } from 'lucide-react';
 import { apiFetch } from '../config/api';
 import { useFocusTrap } from '../hooks/useFocusTrap';
@@ -18,6 +18,7 @@ const DIST_NAV_PRIMARY = [
   { id: '/distributor/portfolio',      icon: <PieChart className="w-4 h-4" />,      label: 'Portfolio' },
   { id: '/distributor/sip-dashboard',  icon: <RefreshCw className="w-4 h-4" />,      label: 'SIP / Mandates' },
   { id: '/distributor/reports',        icon: <FileBarChart2 className="w-4 h-4" />,  label: 'Reports' },
+  { id: '/distributor/tools',          icon: <Wrench className="w-4 h-4" />,         label: 'Tools' },
   { id: '/distributor/action-center',  icon: <ClipboardList className="w-4 h-4" />,  label: 'Action Centre' },
   { id: '/distributor/communications', icon: <MessageSquare className="w-4 h-4" />,  label: 'Communications' },
   { id: '/distributor/calculators',    icon: <Calculator className="w-4 h-4" />,     label: 'Calculators' },
@@ -37,6 +38,7 @@ const ADMIN_NAV = [
 
 const ADMIN_ROLES = new Set(['ADMIN', 'MASTER_DISTRIBUTOR']);
 const normalizeRole = (role?: string) => role?.trim().toUpperCase() || '';
+const NOTIFICATION_POLL_INTERVAL_MS = 5 * 60 * 1000;
 
 export default function AppLayout({ userData, onSignOut }: { userData: any, onSignOut: () => void }) {
   const navigate = useNavigate();
@@ -55,12 +57,14 @@ export default function AppLayout({ userData, onSignOut }: { userData: any, onSi
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
 
     const fetchUnreadNotifications = async () => {
+      if (document.visibilityState === 'hidden') return;
+
       try {
         const res = await apiFetch(`/notifications/distributor/${userData.id}`, { headers });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
         const unread = Array.isArray(data)
-          ? data.filter((n: any) => n.readFlag === false).length
+          ? data.filter((n: any) => n.readFlag === false || n.read === false || n.read_flag === false).length
           : 0;
 
         if (!cancelled) setUnreadNotifs(unread);
@@ -71,11 +75,17 @@ export default function AppLayout({ userData, onSignOut }: { userData: any, onSi
     };
 
     fetchUnreadNotifications();
-    const intervalId = window.setInterval(fetchUnreadNotifications, 60000);
+    const intervalId = window.setInterval(fetchUnreadNotifications, NOTIFICATION_POLL_INTERVAL_MS);
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') void fetchUnreadNotifications();
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
 
     return () => {
       cancelled = true;
       window.clearInterval(intervalId);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
   }, [userData?.id]);
 

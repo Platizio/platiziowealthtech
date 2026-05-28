@@ -19,6 +19,7 @@ interface Investor {
   type: string;
   kyc: string;
   aum: string;
+  bankVerificationStatus?: string;
 }
 
 interface Props {
@@ -38,6 +39,15 @@ type Product = {
   minSip: number;
   minLumpsum: number;
   color: ProductColor;
+};
+
+type BankAccount = {
+  id: string;
+  bankName?: string;
+  accountNumber?: string;
+  ifscCode?: string;
+  verificationStatus?: string;
+  cybrillaBankId?: string;
 };
 
 const sipSchema = z.object({
@@ -98,12 +108,6 @@ const PRODUCTS: Product[] = [
   },
 ];
 
-const BANKS = [
-  { id: 1, name: 'HDFC Bank',          account: '****4532', ifsc: 'HDFC0001234' },
-  { id: 2, name: 'ICICI Bank',         account: '****8901', ifsc: 'ICIC0002345' },
-  { id: 3, name: 'State Bank of India', account: '****2217', ifsc: 'SBIN0003456' },
-];
-
 const STEPS = [
   { id: 1, label: 'Select Fund' },
   { id: 2, label: 'Amount'      },
@@ -125,6 +129,18 @@ const accentColor: Record<ProductColor, string> = {
   rose: 'border-rose-500 bg-rose-50',
   emerald: 'border-emerald-500 bg-emerald-50',
 };
+
+const maskAccountNumber = (value?: string) => {
+  if (!value) return 'Account not captured';
+  const lastFour = value.slice(-4);
+  return `${'*'.repeat(Math.max(value.length - 4, 4))}${lastFour}`;
+};
+
+const bankLabel = (bank?: BankAccount | null) =>
+  bank ? `${bank.bankName || 'Bank'} ${maskAccountNumber(bank.accountNumber)}` : '';
+
+const isVerifiedBank = (bank: BankAccount) =>
+  String(bank.verificationStatus || '').toUpperCase() === 'VERIFIED';
 
 // ── Step indicator ───────────────────────────────────────────────────────────
 function StepBar({ current }: { current: number }) {
@@ -161,7 +177,10 @@ export default function InvestorTransaction({ investor, onComplete, onBack }: Pr
   const [products, setProducts] = useState(PRODUCTS);
   const [product,  setProduct]  = useState<Product | null>(null);
   const [txType,   setTxType]   = useState<'sip' | 'lumpsum'>('sip');
-  const [bank,     setBank]     = useState<typeof BANKS[0] | null>(null);
+  const [banks, setBanks] = useState<BankAccount[]>([]);
+  const [bank, setBank] = useState<BankAccount | null>(null);
+  const [bankLoading, setBankLoading] = useState(false);
+  const [bankError, setBankError] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [done,     setDone]     = useState(false);
   const [submitError, setSubmitError] = useState('');
@@ -189,6 +208,12 @@ export default function InvestorTransaction({ investor, onComplete, onBack }: Pr
   const minAmount = product ? (txType === 'sip' ? 500 : product.minLumpsum) : 0;
   const amountValid = amountNum >= minAmount;
   const investorName = investor.fullName || investor.name || 'Investor';
+  const BANKS = banks.filter(isVerifiedBank).map(b => ({
+    ...b,
+    name: b.bankName || 'Bank',
+    account: maskAccountNumber(b.accountNumber),
+    ifsc: b.ifscCode || 'Currently unavailable',
+  }));
   const isSip = txType === 'sip';
   const sipFieldsValid = !isSip || sipSchema.safeParse({
     amount: amountNum,
@@ -224,9 +249,38 @@ export default function InvestorTransaction({ investor, onComplete, onBack }: Pr
     return () => { cancelled = true; };
   }, []);
 
+  React.useEffect(() => {
+    let cancelled = false;
+    setBankLoading(true);
+    setBankError('');
+    setBank(null);
+
+    apiFetch(`/investors/${investor.id}/bank-accounts`)
+      .then(async res => {
+        const data = await res.json().catch(() => null);
+        if (!res.ok) throw new Error(data?.message || `HTTP ${res.status}`);
+        if (cancelled) return;
+        const nextBanks = Array.isArray(data) ? data : [];
+        setBanks(nextBanks);
+        setBank(nextBanks.find(isVerifiedBank) || nextBanks[0] || null);
+      })
+      .catch(err => {
+        console.error('Failed to load investor bank accounts for transaction form', err);
+        if (!cancelled) {
+          setBanks([]);
+          setBankError('Could not load verified bank account for this investor.');
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setBankLoading(false);
+      });
+
+    return () => { cancelled = true; };
+  }, [investor.id]);
+
   const handleConfirm = async () => {
     const validSipForm = !isSip || await trigger();
-    if (!product || !bank || !amountValid || !validSipForm) return;
+    if (!product || !bank || !isVerifiedBank(bank) || !amountValid || !validSipForm) return;
 
     setSubmitting(true);
     setSubmitError('');
@@ -238,7 +292,7 @@ export default function InvestorTransaction({ investor, onComplete, onBack }: Pr
         transactionType: isSip ? 'SIP' : 'LUMPSUM_PURCHASE',
         amount: amountNum,
         paymentMode: isSip ? 'MANDATE' : 'BANK_TRANSFER',
-        mandateMode: isSip ? 'AUTO_DEBIT' : bank.name,
+        mandateMode: isSip ? 'AUTO_DEBIT' : bank.bankName,
         sipFrequency: isSip ? frequency : undefined,
         sipStartDate: isSip ? startDate : undefined,
         sipInstalments: isSip && instalments ? instalments : undefined,
@@ -297,7 +351,7 @@ export default function InvestorTransaction({ investor, onComplete, onBack }: Pr
             <Row label="Amount"         value={`₹${amountNum.toLocaleString('en-IN')}`} />
             {txType === 'sip' && <Row label="Start Date" value={formatDate(startDate)} />}
             {txType === 'sip' && instalments && <Row label="Instalments" value={String(instalments)} />}
-            <Row label="Bank"           value={`${bank?.name} ${bank?.account}`}  />
+            <Row label="Bank"           value={bankLabel(bank)}  />
             <Row label="Status"         value="Processing"
               valueClass="inline-flex items-center gap-1.5 text-amber-700 font-semibold">
               <Clock className="w-3.5 h-3.5" />
@@ -545,6 +599,21 @@ export default function InvestorTransaction({ investor, onComplete, onBack }: Pr
             </p>
 
             <div className="space-y-3 mb-6">
+              {bankLoading && (
+                <div className="rounded-2xl border border-slate-200 bg-white p-5 text-sm text-slate-500">
+                  Loading bank accounts...
+                </div>
+              )}
+              {!bankLoading && bankError && (
+                <div className="rounded-2xl border border-red-100 bg-red-50 p-5 text-sm font-medium text-red-700">
+                  {bankError}
+                </div>
+              )}
+              {!bankLoading && !bankError && BANKS.length === 0 && (
+                <div className="rounded-2xl border border-amber-100 bg-amber-50 p-5 text-sm font-medium text-amber-800">
+                  No verified bank account is available for this investor.
+                </div>
+              )}
               {BANKS.map(b => (
                 <button
                   key={b.id}
@@ -585,7 +654,7 @@ export default function InvestorTransaction({ investor, onComplete, onBack }: Pr
               </button>
               <button
                 onClick={() => setStep(4)}
-                disabled={!bank}
+                disabled={!bank || !isVerifiedBank(bank)}
                 className="flex items-center gap-2 px-6 py-3 bg-[#0B1B3E] text-white font-semibold text-sm rounded-xl hover:bg-[#1A3066] transition-colors disabled:opacity-50 disabled:cursor-not-allowed shadow-lg"
               >
                 Review Order <ArrowRight className="w-4 h-4" />
@@ -611,8 +680,8 @@ export default function InvestorTransaction({ investor, onComplete, onBack }: Pr
               {txType === 'sip' && <Row label="Start Date" value={formatDate(startDate)} />}
               {txType === 'sip' && instalments && <Row label="Instalments" value={String(instalments)} />}
               <Row label="Bank"
-                value={`${bank.name} · ${bank.account}`} />
-              <Row label="IFSC"        value={bank.ifsc} />
+                value={bankLabel(bank)} />
+              <Row label="IFSC"        value={bank.ifscCode || 'Currently unavailable'} />
             </div>
 
             <div className="bg-[#0B1B3E]/5 border border-[#0B1B3E]/10 rounded-xl px-4 py-3 flex items-start gap-3 mb-6">
