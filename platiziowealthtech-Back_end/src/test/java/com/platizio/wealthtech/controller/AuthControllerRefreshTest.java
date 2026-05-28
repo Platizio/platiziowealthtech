@@ -22,7 +22,7 @@ class AuthControllerRefreshTest {
     void loginWritesAccessAndRefreshCookies() {
         UUID refreshToken = UUID.randomUUID();
         RecordingAuthService authService = new RecordingAuthService(refreshToken);
-        AuthController controller = new AuthController(authService, cookieService());
+        AuthController controller = new AuthController(authService, cookieService(), null);
         MockHttpServletResponse response = new MockHttpServletResponse();
 
         controller.login(new AuthLoginRequest("user@example.com", "password"), response);
@@ -45,7 +45,7 @@ class AuthControllerRefreshTest {
         UUID refreshToken = UUID.randomUUID();
         UUID rotatedRefreshToken = UUID.randomUUID();
         RecordingAuthService authService = new RecordingAuthService(refreshToken, rotatedRefreshToken);
-        AuthController controller = new AuthController(authService, cookieService());
+        AuthController controller = new AuthController(authService, cookieService(), null);
         MockHttpServletRequest request = new MockHttpServletRequest();
         request.setCookies(new Cookie("refresh_token", refreshToken.toString()));
         MockHttpServletResponse response = new MockHttpServletResponse();
@@ -64,7 +64,7 @@ class AuthControllerRefreshTest {
     void logoutRevokesRefreshTokenAndClearsBothCookies() {
         UUID refreshToken = UUID.randomUUID();
         RecordingAuthService authService = new RecordingAuthService(refreshToken);
-        AuthController controller = new AuthController(authService, cookieService());
+        AuthController controller = new AuthController(authService, cookieService(), null);
         MockHttpServletRequest request = new MockHttpServletRequest();
         request.setCookies(
                 new Cookie("access_token", "access.jwt"),

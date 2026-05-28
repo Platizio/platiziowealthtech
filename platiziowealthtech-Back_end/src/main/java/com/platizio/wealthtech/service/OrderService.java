@@ -4,6 +4,7 @@ import com.platizio.wealthtech.domain.*;
 import com.platizio.wealthtech.dto.BulkOrderCreateRequest;
 import com.platizio.wealthtech.dto.OrderCreateRequest;
 import com.platizio.wealthtech.integration.CybrillaClient;
+import com.platizio.wealthtech.repository.ProductSchemeRepository;
 import com.platizio.wealthtech.repository.RedemptionRecordRepository;
 import com.platizio.wealthtech.repository.TransactionOrderRepository;
 import jakarta.persistence.EntityNotFoundException;
@@ -42,6 +43,7 @@ public class OrderService {
     private static final Logger logger = LoggerFactory.getLogger(OrderService.class);
     private final CybrillaClient cybrillaClient;
     private final TransactionTemplate transactionTemplate;
+    private final ProductSchemeRepository productSchemeRepository;
 
     public OrderService(
             TransactionOrderRepository transactionOrderRepository,
@@ -50,7 +52,8 @@ public class OrderService {
             AuditService auditService,
             NotificationService notificationService,
             CybrillaClient cybrillaClient,
-            PlatformTransactionManager transactionManager
+            PlatformTransactionManager transactionManager,
+            ProductSchemeRepository productSchemeRepository
     ) {
         this.transactionOrderRepository = transactionOrderRepository;
         this.redemptionRecordRepository = redemptionRecordRepository;
@@ -59,6 +62,7 @@ public class OrderService {
         this.notificationService = notificationService;
         this.cybrillaClient = cybrillaClient;
         this.transactionTemplate = transactionManager == null ? null : perOrderTransactionTemplate(transactionManager);
+        this.productSchemeRepository = productSchemeRepository;
     }
 
     public List<TransactionOrder> listOrdersByInvestor(UUID investorId) {
@@ -163,7 +167,9 @@ public class OrderService {
         if (investor.getBankVerificationStatus() != BankVerificationStatus.VERIFIED) {
             throw new IllegalStateException("Verified bank account is required before order creation");
         }
+        investor = investorService.ensureMfInvestmentAccount(request.investorId());
         validateSipRequest(request);
+        ProductScheme productScheme = resolveProductScheme(request.productSchemeId());
 
         TransactionOrder order = new TransactionOrder();
         order.setInvestorId(request.investorId());
@@ -177,10 +183,11 @@ public class OrderService {
         order.setSipFrequency(normalizeSipFrequency(request.sipFrequency()));
         order.setSipStartDate(request.sipStartDate());
         order.setSipInstalments(request.sipInstalments());
+        order.setInvestorActionToken(UUID.randomUUID().toString());
         order.setOrderStatus(OrderStatus.CREATED);
 
         TransactionOrder saved = transactionOrderRepository.save(order);
-        String externalOrderId = cybrillaClient.createOrder(saved, investor);
+        String externalOrderId = cybrillaClient.createOrder(saved, investor, productScheme);
         saved.setExternalOrderId(externalOrderId);
         saved.setOrderStatus(OrderStatus.PENDING_INVESTOR_ACTION);
         saved.setInvestorActionUrl(cybrillaClient.generateInvestorActionUrl(saved));
@@ -212,6 +219,8 @@ public class OrderService {
     public RedemptionRecord createRedemption(UUID orderId, UUID actorId) {
         TransactionOrder order = transactionOrderRepository.findById(orderId)
                 .orElseThrow(() -> new EntityNotFoundException("Order not found"));
+        Investor investor = investorService.ensureMfInvestmentAccount(order.getInvestorId());
+        ProductScheme productScheme = resolveProductScheme(order.getProductSchemeId());
 
         RedemptionRecord record = new RedemptionRecord();
         record.setOrderId(orderId);
@@ -219,7 +228,7 @@ public class OrderService {
         record.setRedemptionStatus(RedemptionStatus.CREATED);
         record.setAmount(order.getAmount());
         record.setUnits(order.getUnits());
-        record.setExternalRedemptionId(cybrillaClient.createRedemption(order));
+        record.setExternalRedemptionId(cybrillaClient.createRedemption(order, investor, productScheme));
 
         RedemptionRecord saved = redemptionRecordRepository.save(record);
         auditService.log("REDEMPTION", saved.getId(), "REDEMPTION_CREATED", actorId, "{}");
@@ -264,6 +273,17 @@ public class OrderService {
 
     private String normalizeSipFrequency(String frequency) {
         return frequency == null ? null : frequency.trim().toUpperCase();
+    }
+
+    private ProductScheme resolveProductScheme(UUID productSchemeId) {
+        if (productSchemeId == null) {
+            throw new IllegalArgumentException("Product scheme is required");
+        }
+        if (productSchemeRepository == null) {
+            throw new IllegalStateException("Product scheme repository is not configured");
+        }
+        return productSchemeRepository.findById(productSchemeId)
+                .orElseThrow(() -> new EntityNotFoundException("Product scheme not found"));
     }
 
     private Sort.Direction resolveSortDirection(String direction) {

@@ -6,6 +6,7 @@ import com.platizio.wealthtech.domain.InvestorBankAccount;
 import com.platizio.wealthtech.domain.ProductCategory;
 import com.platizio.wealthtech.domain.ProductScheme;
 import com.platizio.wealthtech.domain.TransactionOrder;
+import com.platizio.wealthtech.domain.TransactionType;
 import com.platizio.wealthtech.integration.auth.ExternalApiAuthenticationException;
 import com.platizio.wealthtech.integration.auth.ExternalBearerTokenService;
 import com.platizio.wealthtech.integration.auth.FinprimTenantProperties;
@@ -41,6 +42,9 @@ public class RealCybrillaClient implements CybrillaClient {
     private static final int FUND_SCHEME_RATE_LIMIT_RETRIES = 3;
     private static final long FUND_SCHEME_RATE_LIMIT_BACKOFF_MILLIS = 5_000L;
     private static final String IDEMPOTENCY_KEY_HEADER = "Idempotency-Key";
+    private static final String MF_PURCHASES_PATH = "/v2/mf_purchases";
+    private static final String MF_PURCHASE_PLANS_PATH = "/v2/mf_purchase_plans";
+    private static final String MF_REDEMPTIONS_PATH = "/v2/mf_redemptions";
 
     private final RestClient restClient;
     private final ExternalBearerTokenService tokenService;
@@ -79,6 +83,20 @@ public class RealCybrillaClient implements CybrillaClient {
     }
 
     @Override
+    public String createMfInvestmentAccount(Investor investor) {
+        if (!StringUtils.hasText(investor.getCybrillaInvestorId())) {
+            throw new CybrillaApiException("Investor must have a Cybrilla/FP investor profile id before opening an MF investment account");
+        }
+
+        String investmentAccountId = executeWithTenantTokenRetry("create MF investment account", () -> {
+            JsonNode response = post("create_mf_investment_account", "/v2/mf_investment_accounts", mfInvestmentAccountPayload(investor));
+            return extractId(response, "MF investment account");
+        });
+        logger.info("cybrilla_workflow operation='create_mf_investment_account' status='completed' local_investor_id='{}' external_mf_investment_account_id='{}'", investor.getId(), investmentAccountId);
+        return investmentAccountId;
+    }
+
+    @Override
     public void captureBankAccount(Investor investor, InvestorBankAccount bankAccount) {
         if (!StringUtils.hasText(investor.getCybrillaInvestorId())) {
             throw new CybrillaApiException("Investor must have a Cybrilla/FP investor profile id before adding a bank account");
@@ -90,6 +108,28 @@ public class RealCybrillaClient implements CybrillaClient {
         });
         logger.info("cybrilla_workflow operation='create_bank_account' status='completed' local_investor_id='{}' local_bank_id='{}' external_bank_id='{}'", investor.getId(), bankAccount.getId(), bankAccountId);
         bankAccount.setCybrillaBankId(bankAccountId);
+
+        try {
+            JsonNode verification = executeWithTenantTokenRetry("create bank account verification", () ->
+                    post("create_bank_account_verification", "/v2/bank_account_verifications", bankAccountVerificationPayload(bankAccountId)));
+            bankAccount.setCybrillaBankVerificationId(extractId(verification, "bank account verification"));
+            bankAccount.setCybrillaBankVerificationStatus(firstText(verification, "status"));
+            bankAccount.setCybrillaBankVerificationConfidence(firstText(verification, "confidence"));
+            logger.info("cybrilla_workflow operation='create_bank_account_verification' status='completed' local_bank_id='{}' external_verification_id='{}'", bankAccount.getId(), bankAccount.getCybrillaBankVerificationId());
+        } catch (CybrillaApiException ex) {
+            bankAccount.setExternalSyncPending(true);
+            bankAccount.setExternalSyncMessage("Bank account was captured in Fintech Primitives, but bank verification could not be started. Please confirm bank verification is enabled for this tenant.");
+            logger.warn("cybrilla_workflow operation='create_bank_account_verification' status='pending' local_bank_id='{}' external_bank_id='{}' reason='{}'", bankAccount.getId(), bankAccountId, ex.getMessage());
+        }
+    }
+
+    @Override
+    public JsonNode fetchBankAccountVerification(String bankAccountVerificationId) {
+        if (!StringUtils.hasText(bankAccountVerificationId)) {
+            throw new CybrillaApiException("Bank account verification id is required");
+        }
+        return executeWithTenantTokenRetry("fetch bank account verification", () ->
+                get("fetch_bank_account_verification", "/v2/bank_account_verifications/" + bankAccountVerificationId.trim()));
     }
 
     @Override
@@ -216,16 +256,20 @@ public class RealCybrillaClient implements CybrillaClient {
     }
 
     @Override
-    public String createOrder(TransactionOrder order, Investor investor) {
+    public String createOrder(TransactionOrder order, Investor investor, ProductScheme productScheme) {
         if (!StringUtils.hasText(investor.getCybrillaInvestorId())) {
             throw new CybrillaApiException("Investor must have a Cybrilla/FP investor profile id before order creation");
         }
+        if (!StringUtils.hasText(investor.getExternalMfInvestmentAccountId())) {
+            throw new CybrillaApiException("Investor must have a Fintech Primitives MF investment account id before order creation");
+        }
 
         return executeWithTenantTokenRetry("create order", () -> {
+            boolean sipOrder = order.getTransactionType() == TransactionType.SIP;
             JsonNode response = post(
-                    "create_order",
-                    "/v2/orders",
-                    orderPayload(order, investor),
+                    sipOrder ? "create_mf_purchase_plan" : "create_mf_purchase",
+                    sipOrder ? MF_PURCHASE_PLANS_PATH : MF_PURCHASES_PATH,
+                    sipOrder ? mfPurchasePlanPayload(order, investor, productScheme) : mfPurchasePayload(order, investor, productScheme),
                     idempotencyKey("order", order.getId())
             );
             return extractId(response, "order");
@@ -234,20 +278,26 @@ public class RealCybrillaClient implements CybrillaClient {
 
     @Override
     public String generateInvestorActionUrl(TransactionOrder order) {
-        return "https://example.com/investor-action/" + order.getId();
+        String token = StringUtils.hasText(order.getInvestorActionToken())
+                ? order.getInvestorActionToken()
+                : String.valueOf(order.getId());
+        return "/investor-actions/" + token;
     }
 
     @Override
-    public String createRedemption(TransactionOrder order) {
+    public String createRedemption(TransactionOrder order, Investor investor, ProductScheme productScheme) {
         if (!StringUtils.hasText(order.getExternalOrderId())) {
             throw new CybrillaApiException("Order must have a Cybrilla/FP external order id before redemption");
+        }
+        if (!StringUtils.hasText(investor.getExternalMfInvestmentAccountId())) {
+            throw new CybrillaApiException("Investor must have a Fintech Primitives MF investment account id before redemption");
         }
 
         return executeWithTenantTokenRetry("create redemption", () -> {
             JsonNode response = post(
-                    "create_redemption",
-                    "/v2/orders",
-                    redemptionPayload(order),
+                    "create_mf_redemption",
+                    MF_REDEMPTIONS_PATH,
+                    redemptionPayload(order, investor, productScheme),
                     idempotencyKey("redemption", order.getId())
             );
             return extractId(response, "redemption");
@@ -262,7 +312,10 @@ public class RealCybrillaClient implements CybrillaClient {
         }
 
         executeWithTenantTokenRetry("cancel order", () -> {
-            delete("/v2/orders/" + order.getExternalOrderId());
+            String path = (order.getTransactionType() == TransactionType.SIP ? MF_PURCHASE_PLANS_PATH : MF_PURCHASES_PATH)
+                    + "/" + order.getExternalOrderId()
+                    + "/cancel";
+            post("cancel_order", path, idempotencyKey("cancel-order", order.getId()));
             logger.info("cybrilla_workflow operation='cancel_order' status='completed' local_order_id='{}' external_order_id='{}'", order.getId(), order.getExternalOrderId());
             return null;
         });
@@ -315,6 +368,15 @@ public class RealCybrillaClient implements CybrillaClient {
                     .contentType(MediaType.APPLICATION_JSON)
                     .headers(headers -> setTenantAuthHeaders(headers, idempotencyKey))
                     .body(payload)
+                    .retrieve()
+                    .body(JsonNode.class));
+    }
+
+    private JsonNode post(String operation, String path, String idempotencyKey) {
+        logger.info("cybrilla_api direction='backend_to_finprim' method='POST' path='{}' payload_fields='none'", path);
+        return recordApiRequest(operation, () -> restClient.post()
+                    .uri(path)
+                    .headers(headers -> setTenantAuthHeaders(headers, idempotencyKey))
                     .retrieve()
                     .body(JsonNode.class));
     }
@@ -539,6 +601,19 @@ public class RealCybrillaClient implements CybrillaClient {
         return payload;
     }
 
+    private Map<String, Object> mfInvestmentAccountPayload(Investor investor) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        put(payload, "primary_investor", investor.getCybrillaInvestorId());
+        put(payload, "holding_pattern", "single");
+        return payload;
+    }
+
+    private Map<String, Object> bankAccountVerificationPayload(String bankAccountId) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        put(payload, "bank_account", bankAccountId);
+        return payload;
+    }
+
     private Map<String, Object> kycCheckPayload(String pan, LocalDate dateOfBirth) {
         Map<String, Object> payload = new LinkedHashMap<>();
         put(payload, "pan", pan == null ? null : pan.trim().toUpperCase());
@@ -548,49 +623,58 @@ public class RealCybrillaClient implements CybrillaClient {
         return payload;
     }
 
-    private Map<String, Object> orderPayload(TransactionOrder order, Investor investor) {
+    private Map<String, Object> mfPurchasePayload(TransactionOrder order, Investor investor, ProductScheme productScheme) {
         Map<String, Object> payload = new LinkedHashMap<>();
         put(payload, "source_ref_id", order.getId() == null ? null : order.getId().toString());
-        put(payload, "investor_profile", investor.getCybrillaInvestorId());
-        put(payload, "investor_id", order.getInvestorId());
-        put(payload, "distributor_id", order.getDistributorId());
-        put(payload, "scheme", order.getProductSchemeId());
-        put(payload, "type", externalOrderType(order.getTransactionType()));
+        put(payload, "mf_investment_account", investor.getExternalMfInvestmentAccountId());
+        put(payload, "scheme", schemeIdentifier(productScheme));
         put(payload, "amount", order.getAmount());
-        put(payload, "units", order.getUnits());
-        put(payload, "payment_mode", order.getPaymentMode());
-        put(payload, "mandate_mode", order.getMandateMode());
-        put(payload, "sip_frequency", order.getSipFrequency());
-        put(payload, "sip_start_date", order.getSipStartDate() == null ? null : order.getSipStartDate().toString());
-        put(payload, "sip_instalments", order.getSipInstalments());
         return payload;
     }
 
-    private Map<String, Object> redemptionPayload(TransactionOrder order) {
+    private Map<String, Object> mfPurchasePlanPayload(TransactionOrder order, Investor investor, ProductScheme productScheme) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        put(payload, "source_ref_id", order.getId() == null ? null : order.getId().toString());
+        put(payload, "mf_investment_account", investor.getExternalMfInvestmentAccountId());
+        put(payload, "scheme", schemeIdentifier(productScheme));
+        put(payload, "amount", order.getAmount());
+        put(payload, "systematic", true);
+        put(payload, "frequency", externalFrequency(order.getSipFrequency()));
+        put(payload, "start_date", order.getSipStartDate() == null ? null : order.getSipStartDate().toString());
+        put(payload, "number_of_installments", order.getSipInstalments());
+        put(payload, "auto_generate_installments", true);
+        return payload;
+    }
+
+    private Map<String, Object> redemptionPayload(TransactionOrder order, Investor investor, ProductScheme productScheme) {
         Map<String, Object> payload = new LinkedHashMap<>();
         put(payload, "source_ref_id", order.getId() == null ? null : "redemption-" + order.getId());
-        put(payload, "source_order_id", order.getExternalOrderId());
-        put(payload, "investor_id", order.getInvestorId());
-        put(payload, "distributor_id", order.getDistributorId());
-        put(payload, "scheme", order.getProductSchemeId());
-        put(payload, "type", "redemption");
+        put(payload, "mf_investment_account", investor.getExternalMfInvestmentAccountId());
+        put(payload, "scheme", schemeIdentifier(productScheme));
         put(payload, "amount", order.getAmount());
         put(payload, "units", order.getUnits());
         return payload;
     }
 
-    private String externalOrderType(com.platizio.wealthtech.domain.TransactionType transactionType) {
-        if (transactionType == null) {
+    private String schemeIdentifier(ProductScheme productScheme) {
+        if (productScheme == null) {
+            throw new CybrillaApiException("Product scheme is required before order creation");
+        }
+        String scheme = defaultText(productScheme.getExternalIsin(), productScheme.getExternalSchemeCode());
+        if (!StringUtils.hasText(scheme)) {
+            throw new CybrillaApiException("Product scheme must have an external ISIN or scheme code before order creation");
+        }
+        return scheme;
+    }
+
+    private String externalFrequency(String sipFrequency) {
+        if (!StringUtils.hasText(sipFrequency)) {
             return null;
         }
-        return switch (transactionType) {
-            case PURCHASE, LUMPSUM_PURCHASE -> "purchase";
-            case SIP -> "sip";
-            case REDEMPTION -> "redemption";
-            case SWITCH -> "switch";
-            case SWP -> "swp";
-            case STP -> "stp";
-            case PAUSE_RECURRING_PLAN -> "pause_recurring_plan";
+        return switch (sipFrequency.trim().toUpperCase()) {
+            case "MONTHLY" -> "monthly";
+            case "QUARTERLY" -> "quarterly";
+            default -> sipFrequency.trim().toLowerCase();
         };
     }
 

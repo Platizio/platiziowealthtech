@@ -8,11 +8,14 @@ import com.platizio.wealthtech.domain.Investor;
 import com.platizio.wealthtech.domain.KycStatus;
 import com.platizio.wealthtech.domain.Notification;
 import com.platizio.wealthtech.domain.NotificationType;
+import com.platizio.wealthtech.domain.ProductCategory;
+import com.platizio.wealthtech.domain.ProductScheme;
 import com.platizio.wealthtech.domain.TransactionOrder;
 import com.platizio.wealthtech.domain.TransactionType;
 import com.platizio.wealthtech.dto.BulkOrderCreateRequest;
 import com.platizio.wealthtech.dto.OrderCreateRequest;
 import com.platizio.wealthtech.integration.CybrillaClient;
+import com.platizio.wealthtech.repository.ProductSchemeRepository;
 import com.platizio.wealthtech.repository.TransactionOrderRepository;
 import java.math.BigDecimal;
 import java.lang.reflect.Proxy;
@@ -50,6 +53,7 @@ class OrderServiceTest {
                 null,
                 null,
                 null,
+                null,
                 null
         );
 
@@ -80,6 +84,40 @@ class OrderServiceTest {
     }
 
     @Test
+    void createOrderStoresInvestorActionTokenAndUrl() {
+        UUID distributorId = UUID.randomUUID();
+        List<TransactionOrder> savedOrders = new ArrayList<>();
+        OrderService orderService = new OrderService(
+                savingOrderRepository(savedOrders),
+                null,
+                new FixedInvestorService(verifiedInvestor(distributorId)),
+                new CountingAuditService(new AtomicInteger()),
+                new CountingNotificationService(new AtomicInteger()),
+                actionUrlCybrillaClient(),
+                null,
+                productSchemeRepository()
+        );
+        OrderCreateRequest request = new OrderCreateRequest(
+                UUID.randomUUID(),
+                UUID.randomUUID(),
+                null,
+                TransactionType.LUMPSUM_PURCHASE,
+                BigDecimal.TEN,
+                null,
+                "NET_BANKING",
+                null,
+                null,
+                null,
+                null
+        );
+
+        TransactionOrder order = orderService.createOrder(request, distributorId);
+
+        assertThat(order.getInvestorActionToken()).isNotBlank();
+        assertThat(order.getInvestorActionUrl()).isEqualTo("/investor-actions/" + order.getInvestorActionToken());
+    }
+
+    @Test
     void deleteOrderMarksDeletedInsteadOfHardDeleting() {
         UUID orderId = UUID.randomUUID();
         UUID actorId = UUID.randomUUID();
@@ -93,6 +131,7 @@ class OrderServiceTest {
                 null,
                 null,
                 new CapturingAuditService(auditDetails),
+                null,
                 null,
                 null,
                 null
@@ -135,7 +174,8 @@ class OrderServiceTest {
                 new CountingAuditService(auditCalls),
                 new CountingNotificationService(notificationCalls),
                 failingCybrillaClient(externalCreateCalls, 3),
-                transactionManager
+                transactionManager,
+                productSchemeRepository()
         );
 
         assertThatThrownBy(() -> orderService.createOrders(request, distributorId))
@@ -162,6 +202,11 @@ class OrderServiceTest {
         public Investor getInvestor(UUID investorId) {
             return investor;
         }
+
+        @Override
+        public Investor ensureMfInvestmentAccount(UUID investorId) {
+            return investor;
+        }
     }
 
     private Investor verifiedInvestor(UUID distributorId) {
@@ -169,6 +214,8 @@ class OrderServiceTest {
         investor.setDistributorId(distributorId);
         investor.setKycStatus(KycStatus.COMPLETED);
         investor.setBankVerificationStatus(BankVerificationStatus.VERIFIED);
+        investor.setCybrillaInvestorId("invp-test");
+        investor.setExternalMfInvestmentAccountId("mfia-test");
         return investor;
     }
 
@@ -207,6 +254,22 @@ class OrderServiceTest {
         );
     }
 
+    private CybrillaClient actionUrlCybrillaClient() {
+        return (CybrillaClient) Proxy.newProxyInstance(
+                CybrillaClient.class.getClassLoader(),
+                new Class<?>[]{CybrillaClient.class},
+                (proxy, method, args) -> switch (method.getName()) {
+                    case "createOrder" -> "external-order";
+                    case "generateInvestorActionUrl" -> {
+                        TransactionOrder order = (TransactionOrder) args[0];
+                        yield "/investor-actions/" + order.getInvestorActionToken();
+                    }
+                    case "fetchProductSchemes" -> List.of();
+                    default -> defaultValue(method.getReturnType());
+                }
+        );
+    }
+
     private TransactionOrderRepository orderRepository(
             TransactionOrder order,
             AtomicReference<TransactionOrder> savedOrder,
@@ -229,6 +292,27 @@ class OrderServiceTest {
                     default -> defaultValue(method.getReturnType());
                 }
         );
+    }
+
+    private ProductSchemeRepository productSchemeRepository() {
+        return (ProductSchemeRepository) Proxy.newProxyInstance(
+                ProductSchemeRepository.class.getClassLoader(),
+                new Class<?>[]{ProductSchemeRepository.class},
+                (proxy, method, args) -> switch (method.getName()) {
+                    case "findById" -> Optional.of(productScheme());
+                    default -> defaultValue(method.getReturnType());
+                }
+        );
+    }
+
+    private ProductScheme productScheme() {
+        ProductScheme productScheme = new ProductScheme();
+        productScheme.setSchemeName("Test Scheme");
+        productScheme.setAmcName("Test AMC");
+        productScheme.setCategory(ProductCategory.MF);
+        productScheme.setExternalSchemeCode("INF000000001");
+        productScheme.setExternalIsin("INF000000001");
+        return productScheme;
     }
 
     private Object defaultValue(Class<?> returnType) {

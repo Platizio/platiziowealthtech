@@ -64,6 +64,7 @@ public class Investor extends BaseEntity {
     private UUID guardianInvestorId;
     private String guardianPan;
     private String cybrillaInvestorId;
+    private String externalMfInvestmentAccountId;
     private String externalKycCheckId;
     private String externalKycRequestId;
     private String externalKycStatus;
@@ -128,6 +129,8 @@ public class Investor extends BaseEntity {
     public void setGuardianPan(String guardianPan) { this.guardianPan = guardianPan; }
     public String getCybrillaInvestorId() { return cybrillaInvestorId; }
     public void setCybrillaInvestorId(String cybrillaInvestorId) { this.cybrillaInvestorId = cybrillaInvestorId; }
+    public String getExternalMfInvestmentAccountId() { return externalMfInvestmentAccountId; }
+    public void setExternalMfInvestmentAccountId(String externalMfInvestmentAccountId) { this.externalMfInvestmentAccountId = externalMfInvestmentAccountId; }
     public String getExternalKycCheckId() { return externalKycCheckId; }
     public void setExternalKycCheckId(String externalKycCheckId) { this.externalKycCheckId = externalKycCheckId; }
     public String getExternalKycRequestId() { return externalKycRequestId; }

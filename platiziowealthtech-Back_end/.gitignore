@@ -4,3 +4,5 @@
 target/
 .external-auth-token-cache.json
 .class
+outputs/
+*.log

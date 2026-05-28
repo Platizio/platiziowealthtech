@@ -252,6 +252,23 @@ public class InvestorController {
         return investorService.addBankAccount(investorId, request, actorId(auth));
     }
 
+    @GetMapping("/{investorId}/bank-accounts")
+    public List<InvestorBankAccount> listBankAccounts(
+            @PathVariable UUID investorId,
+            Authentication auth
+    ) {
+        return investorService.listBankAccounts(investorId, actorId(auth));
+    }
+
+    @PatchMapping("/{investorId}/bank-accounts/{bankAccountId}/verification")
+    public InvestorBankAccount refreshBankVerification(
+            @PathVariable UUID investorId,
+            @PathVariable UUID bankAccountId,
+            Authentication auth
+    ) {
+        return investorService.refreshBankVerification(investorId, bankAccountId, actorId(auth));
+    }
+
     @PreAuthorize("hasRole('ADMIN')")
     @PatchMapping("/{investorId}/bank-verify")
     public Investor verifyBank(@PathVariable UUID investorId, Authentication auth) {

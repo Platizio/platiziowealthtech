@@ -9,6 +9,7 @@ import com.platizio.wealthtech.integration.CybrillaClient;
 import com.platizio.wealthtech.integration.CybrillaApiException;
 import com.platizio.wealthtech.repository.InvestorBankAccountRepository;
 import com.platizio.wealthtech.repository.InvestorRepository;
+import com.fasterxml.jackson.databind.JsonNode;
 import jakarta.persistence.EntityNotFoundException;
 import java.time.LocalDateTime;
 import java.util.Locale;
@@ -237,6 +238,25 @@ public class InvestorService {
         try {
             String externalInvestorId = cybrillaClient.createInvestorProfile(saved);
             saved.setCybrillaInvestorId(externalInvestorId);
+            try {
+                String externalMfInvestmentAccountId = cybrillaClient.createMfInvestmentAccount(saved);
+                saved.setExternalMfInvestmentAccountId(externalMfInvestmentAccountId);
+            } catch (CybrillaApiException ex) {
+                logger.warn(
+                        "Investor {} synced to FP profile but MF investment account creation failed: {}",
+                        saved.getId(),
+                        ex.getMessage()
+                );
+                saved.setExternalSyncPending(true);
+                saved.setExternalSyncMessage("Investor profile was created in Fintech Primitives, but MF investment account creation is pending.");
+                auditService.log(
+                        "INVESTOR",
+                        saved.getId(),
+                        "EXTERNAL_MF_INVESTMENT_ACCOUNT_PENDING",
+                        request.distributorId(),
+                        "{\"externalMfInvestmentAccountPending\":true}"
+                );
+            }
         } catch (CybrillaApiException ex) {
             String externalMessage = investorExternalSyncMessage(ex);
             logger.warn(
@@ -273,6 +293,7 @@ public class InvestorService {
     @Transactional
     public InvestorBankAccount addBankAccount(UUID investorId, InvestorBankRequest request, UUID actorId) {
         Investor investor = getInvestor(investorId);
+        listVisibleToDistributor(actorId, investor.getDistributorId());
 
         InvestorBankAccount bankAccount = new InvestorBankAccount();
         bankAccount.setInvestorId(investorId);
@@ -311,6 +332,40 @@ public class InvestorService {
         return savedBank;
     }
 
+    @Transactional(readOnly = true)
+    public List<InvestorBankAccount> listBankAccounts(UUID investorId, UUID actorId) {
+        Investor investor = getInvestor(investorId);
+        listVisibleToDistributor(actorId, investor.getDistributorId());
+        return investorBankAccountRepository.findByInvestorId(investorId);
+    }
+
+    @Transactional
+    public InvestorBankAccount refreshBankVerification(UUID investorId, UUID bankAccountId, UUID actorId) {
+        Investor investor = getInvestor(investorId);
+        listVisibleToDistributor(actorId, investor.getDistributorId());
+        InvestorBankAccount bankAccount = investorBankAccountRepository.findById(bankAccountId)
+                .orElseThrow(() -> new EntityNotFoundException("Bank account not found"));
+        if (!investorId.equals(bankAccount.getInvestorId())) {
+            throw new AccessDeniedException("Bank account does not belong to this investor");
+        }
+        if (bankAccount.getCybrillaBankVerificationId() == null || bankAccount.getCybrillaBankVerificationId().isBlank()) {
+            throw new IllegalStateException("Bank verification has not been started for this account");
+        }
+
+        JsonNode verification = cybrillaClient.fetchBankAccountVerification(bankAccount.getCybrillaBankVerificationId());
+        applyBankVerificationResponse(investor, bankAccount, verification);
+        InvestorBankAccount savedBank = investorBankAccountRepository.save(bankAccount);
+        investorRepository.save(investor);
+        auditService.log(
+                "INVESTOR_BANK",
+                savedBank.getId(),
+                "BANK_VERIFICATION_REFRESHED",
+                actorId,
+                "{\"investorId\":\"" + investorId + "\",\"status\":\"" + savedBank.getVerificationStatus() + "\"}"
+        );
+        return savedBank;
+    }
+
     @Transactional
     public Investor verifyBank(UUID investorId, UUID actorId) {
         Investor investor = getInvestor(investorId);
@@ -326,6 +381,20 @@ public class InvestorService {
     public Investor getInvestor(UUID investorId) {
         return investorRepository.findById(investorId)
                 .orElseThrow(() -> new EntityNotFoundException("Investor not found"));
+    }
+
+    @Transactional
+    public Investor ensureMfInvestmentAccount(UUID investorId) {
+        Investor investor = getInvestor(investorId);
+        if (investor.getExternalMfInvestmentAccountId() != null && !investor.getExternalMfInvestmentAccountId().isBlank()) {
+            return investor;
+        }
+        if (investor.getCybrillaInvestorId() == null || investor.getCybrillaInvestorId().isBlank()) {
+            throw new IllegalStateException("Fintech Primitives investor profile is required before opening an MF investment account");
+        }
+        String externalMfInvestmentAccountId = cybrillaClient.createMfInvestmentAccount(investor);
+        investor.setExternalMfInvestmentAccountId(externalMfInvestmentAccountId);
+        return investorRepository.save(investor);
     }
 
     @Transactional
@@ -483,6 +552,42 @@ public class InvestorService {
             return "Unable to post bank data to Cybrilla/Fintech Primitives because the investor profile is still pending. Bank details were saved locally for retry.";
         }
         return "Unable to post bank data to Cybrilla/Fintech Primitives right now. Bank details were saved locally for retry.";
+    }
+
+    private void applyBankVerificationResponse(Investor investor, InvestorBankAccount bankAccount, JsonNode verification) {
+        String status = textOrNull(verification, "status");
+        String confidence = textOrNull(verification, "confidence");
+        bankAccount.setCybrillaBankVerificationStatus(status);
+        bankAccount.setCybrillaBankVerificationConfidence(confidence);
+
+        if ("completed".equalsIgnoreCase(status) && isVerifiedConfidence(confidence)) {
+            bankAccount.setVerificationStatus(BankVerificationStatus.VERIFIED);
+            investor.setBankVerificationStatus(BankVerificationStatus.VERIFIED);
+            if (investor.getKycStatus() == KycStatus.COMPLETED) {
+                investor.setInvestorStatus(InvestorStatus.READY_FOR_TRANSACTIONS);
+            }
+            return;
+        }
+
+        if ("failed".equalsIgnoreCase(status) || ("completed".equalsIgnoreCase(status) && !isVerifiedConfidence(confidence))) {
+            bankAccount.setVerificationStatus(BankVerificationStatus.VERIFICATION_FAILED);
+            investor.setBankVerificationStatus(BankVerificationStatus.VERIFICATION_FAILED);
+            return;
+        }
+
+        bankAccount.setVerificationStatus(BankVerificationStatus.VERIFICATION_PENDING);
+        investor.setBankVerificationStatus(BankVerificationStatus.VERIFICATION_PENDING);
+    }
+
+    private boolean isVerifiedConfidence(String confidence) {
+        return "very_high".equalsIgnoreCase(confidence) || "high".equalsIgnoreCase(confidence);
+    }
+
+    private String textOrNull(JsonNode node, String fieldName) {
+        if (node == null || node.path(fieldName).isMissingNode() || node.path(fieldName).isNull()) {
+            return null;
+        }
+        return node.path(fieldName).asText();
     }
 
     private String cleanText(String value) {

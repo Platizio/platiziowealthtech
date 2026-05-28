@@ -16,6 +16,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
+import org.springframework.util.StringUtils;
 
 @Component
 @ConditionalOnProperty(prefix = "cybrilla.integration", name = "real-client-enabled", havingValue = "false")
@@ -36,10 +37,30 @@ public class MockCybrillaClient implements CybrillaClient {
     }
 
     @Override
+    public String createMfInvestmentAccount(Investor investor) {
+        String mockId = "cyb-mfia-" + UUID.randomUUID();
+        logger.warn("cybrilla_client mode='mock' operation='create_mf_investment_account' local_investor_id='{}' mock_id='{}'", investor.getId(), mockId);
+        return mockId;
+    }
+
+    @Override
     public void captureBankAccount(Investor investor, InvestorBankAccount bankAccount) {
         String mockId = "cyb-bank-" + UUID.randomUUID();
+        String mockVerificationId = "cyb-bav-" + UUID.randomUUID();
         logger.warn("cybrilla_client mode='mock' operation='capture_bank_account' local_investor_id='{}' local_bank_id='{}' mock_id='{}'", investor.getId(), bankAccount.getId(), mockId);
         bankAccount.setCybrillaBankId(mockId);
+        bankAccount.setCybrillaBankVerificationId(mockVerificationId);
+        bankAccount.setCybrillaBankVerificationStatus("pending");
+    }
+
+    @Override
+    public JsonNode fetchBankAccountVerification(String bankAccountVerificationId) {
+        ObjectNode response = OBJECT_MAPPER.createObjectNode();
+        response.put("object", "bank_account_verification");
+        response.put("id", bankAccountVerificationId);
+        response.put("status", "completed");
+        response.put("confidence", "very_high");
+        return response;
     }
 
     @Override
@@ -170,17 +191,20 @@ public class MockCybrillaClient implements CybrillaClient {
     }
 
     @Override
-    public String createOrder(TransactionOrder order, Investor investor) {
+    public String createOrder(TransactionOrder order, Investor investor, ProductScheme productScheme) {
         return "cyb-order-" + UUID.randomUUID();
     }
 
     @Override
     public String generateInvestorActionUrl(TransactionOrder order) {
-        return "https://example.com/investor-action/" + order.getId();
+        String token = StringUtils.hasText(order.getInvestorActionToken())
+                ? order.getInvestorActionToken()
+                : String.valueOf(order.getId());
+        return "/investor-actions/" + token;
     }
 
     @Override
-    public String createRedemption(TransactionOrder order) {
+    public String createRedemption(TransactionOrder order, Investor investor, ProductScheme productScheme) {
         return "cyb-red-" + UUID.randomUUID();
     }
 

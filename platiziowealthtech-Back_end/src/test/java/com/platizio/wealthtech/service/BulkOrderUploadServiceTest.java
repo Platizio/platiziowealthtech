@@ -194,7 +194,7 @@ class BulkOrderUploadServiceTest {
         private OrderCreateRequest lastRequest;
 
         CapturingOrderService(TransactionOrder order) {
-            super(null, null, null, null, null, null, null);
+            super(null, null, null, null, null, null, null, null);
             this.order = order;
         }
 

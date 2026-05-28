@@ -3,8 +3,12 @@ package com.platizio.wealthtech.controller;
 import com.platizio.wealthtech.dto.AuthLoginRequest;
 import com.platizio.wealthtech.dto.AuthResponse;
 import com.platizio.wealthtech.dto.AuthSignupRequest;
+import com.platizio.wealthtech.dto.ForgotPasswordRequest;
+import com.platizio.wealthtech.dto.ForgotPasswordResponse;
+import com.platizio.wealthtech.dto.ResetPasswordRequest;
 import com.platizio.wealthtech.service.AuthCookieService;
 import com.platizio.wealthtech.service.AuthService;
+import com.platizio.wealthtech.service.PasswordResetService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.media.Schema;
@@ -26,10 +30,16 @@ public class AuthController {
 
     private final AuthService authService;
     private final AuthCookieService authCookieService;
+    private final PasswordResetService passwordResetService;
 
-    public AuthController(AuthService authService, AuthCookieService authCookieService) {
+    public AuthController(
+            AuthService authService,
+            AuthCookieService authCookieService,
+            PasswordResetService passwordResetService
+    ) {
         this.authService = authService;
         this.authCookieService = authCookieService;
+        this.passwordResetService = passwordResetService;
     }
 
     @Operation(summary = "Register a new distributor", description = "Creates a new distributor account and sets an HttpOnly JWT cookie.")
@@ -55,6 +65,16 @@ public class AuthController {
         UUID refreshToken = authService.createRefreshToken(authResponse.distributorId());
         authCookieService.writeRefreshToken(response, refreshToken);
         return authResponse;
+    }
+
+    @PostMapping("/forgot-password")
+    public ForgotPasswordResponse forgotPassword(@Valid @RequestBody ForgotPasswordRequest request) {
+        return passwordResetService.requestReset(request);
+    }
+
+    @PostMapping("/reset-password")
+    public Map<String, String> resetPassword(@Valid @RequestBody ResetPasswordRequest request) {
+        return passwordResetService.resetPassword(request);
     }
 
     @PostMapping("/refresh")

@@ -12,6 +12,9 @@ import static org.springframework.test.web.client.response.MockRestResponseCreat
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.platizio.wealthtech.domain.Investor;
+import com.platizio.wealthtech.domain.InvestorBankAccount;
+import com.platizio.wealthtech.domain.ProductCategory;
+import com.platizio.wealthtech.domain.ProductScheme;
 import com.platizio.wealthtech.domain.TransactionOrder;
 import com.platizio.wealthtech.domain.TransactionType;
 import com.platizio.wealthtech.integration.auth.CybrillaPreVerificationProperties;
@@ -107,12 +110,13 @@ class RealCybrillaClientTest {
     }
 
     @Test
-    void createOrderPostsToOrdersEndpointWithPayloadAndIdempotencyKey() {
+    void createOrderPostsToMfPurchasesEndpointWithPayloadAndIdempotencyKey() {
         ClientFixture fixture = clientFixture(new StaticBearerTokenService("tenant-token"));
         TransactionOrder order = order(TransactionType.LUMPSUM_PURCHASE);
-        Investor investor = investor("profile-1");
+        Investor investor = investor("profile-1", "mfia-1");
+        ProductScheme productScheme = productScheme("INF209KA1K47");
 
-        fixture.server.expect(once(), requestTo("https://finprim.test/v2/orders"))
+        fixture.server.expect(once(), requestTo("https://finprim.test/v2/mf_purchases"))
                 .andExpect(method(HttpMethod.POST))
                 .andExpect(header(HttpHeaders.AUTHORIZATION, "Bearer tenant-token"))
                 .andExpect(header("x-tenant-id", "tenant-123"))
@@ -120,59 +124,84 @@ class RealCybrillaClientTest {
                 .andExpect(content().json("""
                         {
                           "source_ref_id": "%s",
-                          "investor_profile": "profile-1",
-                          "investor_id": "%s",
-                          "distributor_id": "%s",
-                          "scheme": "%s",
-                          "type": "purchase",
-                          "amount": 1500.50,
-                          "payment_mode": "NET_BANKING"
+                          "mf_investment_account": "mfia-1",
+                          "scheme": "INF209KA1K47",
+                          "amount": 1500.50
                         }
                         """.formatted(
-                        order.getId(),
-                        order.getInvestorId(),
-                        order.getDistributorId(),
-                        order.getProductSchemeId()
+                        order.getId()
                 )))
-                .andRespond(withSuccess("{\"id\":\"fp-order-1\"}", MediaType.APPLICATION_JSON));
+                .andRespond(withSuccess("{\"id\":\"mfp_1\"}", MediaType.APPLICATION_JSON));
 
-        String externalOrderId = fixture.client.createOrder(order, investor);
+        String externalOrderId = fixture.client.createOrder(order, investor, productScheme);
 
         fixture.server.verify();
-        assertThat(externalOrderId).isEqualTo("fp-order-1");
+        assertThat(externalOrderId).isEqualTo("mfp_1");
     }
 
     @Test
-    void createRedemptionPostsRedemptionOrderPayload() {
+    void createSipOrderPostsToMfPurchasePlansEndpoint() {
+        ClientFixture fixture = clientFixture(new StaticBearerTokenService("tenant-token"));
+        TransactionOrder order = order(TransactionType.SIP);
+        order.setSipFrequency("MONTHLY");
+        order.setSipStartDate(LocalDate.of(2026, 7, 1));
+        order.setSipInstalments(12);
+        Investor investor = investor("profile-1", "mfia-1");
+        ProductScheme productScheme = productScheme("INF209KA1K47");
+
+        fixture.server.expect(once(), requestTo("https://finprim.test/v2/mf_purchase_plans"))
+                .andExpect(method(HttpMethod.POST))
+                .andExpect(header("Idempotency-Key", "order-" + order.getId()))
+                .andExpect(content().json("""
+                        {
+                          "source_ref_id": "%s",
+                          "mf_investment_account": "mfia-1",
+                          "scheme": "INF209KA1K47",
+                          "amount": 1500.50,
+                          "systematic": true,
+                          "frequency": "monthly",
+                          "start_date": "2026-07-01",
+                          "number_of_installments": 12,
+                          "auto_generate_installments": true
+                        }
+                        """.formatted(order.getId())))
+                .andRespond(withSuccess("{\"id\":\"mfpp_1\"}", MediaType.APPLICATION_JSON));
+
+        String externalOrderId = fixture.client.createOrder(order, investor, productScheme);
+
+        fixture.server.verify();
+        assertThat(externalOrderId).isEqualTo("mfpp_1");
+    }
+
+    @Test
+    void createRedemptionPostsMfRedemptionPayload() {
         ClientFixture fixture = clientFixture(new StaticBearerTokenService("tenant-token"));
         TransactionOrder order = order(TransactionType.REDEMPTION);
         order.setExternalOrderId("fp-order-1");
         order.setAmount(null);
         order.setUnits(new BigDecimal("10.25"));
+        Investor investor = investor("profile-1", "mfia-1");
+        ProductScheme productScheme = productScheme("INF209KA1K47");
 
-        fixture.server.expect(once(), requestTo("https://finprim.test/v2/orders"))
+        fixture.server.expect(once(), requestTo("https://finprim.test/v2/mf_redemptions"))
                 .andExpect(method(HttpMethod.POST))
                 .andExpect(header("Idempotency-Key", "redemption-" + order.getId()))
                 .andExpect(content().json("""
                         {
                           "source_ref_id": "redemption-%s",
-                          "source_order_id": "fp-order-1",
-                          "investor_id": "%s",
-                          "scheme": "%s",
-                          "type": "redemption",
+                          "mf_investment_account": "mfia-1",
+                          "scheme": "INF209KA1K47",
                           "units": 10.25
                         }
                         """.formatted(
-                        order.getId(),
-                        order.getInvestorId(),
-                        order.getProductSchemeId()
+                        order.getId()
                 )))
-                .andRespond(withSuccess("{\"id\":\"fp-redemption-1\"}", MediaType.APPLICATION_JSON));
+                .andRespond(withSuccess("{\"id\":\"mfr_1\"}", MediaType.APPLICATION_JSON));
 
-        String externalRedemptionId = fixture.client.createRedemption(order);
+        String externalRedemptionId = fixture.client.createRedemption(order, investor, productScheme);
 
         fixture.server.verify();
-        assertThat(externalRedemptionId).isEqualTo("fp-redemption-1");
+        assertThat(externalRedemptionId).isEqualTo("mfr_1");
     }
 
     @Test
@@ -180,13 +209,13 @@ class RealCybrillaClientTest {
         ClientFixture fixture = clientFixture(new StaticBearerTokenService("tenant-token"));
         TransactionOrder order = order(TransactionType.LUMPSUM_PURCHASE);
 
-        fixture.server.expect(once(), requestTo("https://finprim.test/v2/orders"))
+        fixture.server.expect(once(), requestTo("https://finprim.test/v2/mf_purchases"))
                 .andExpect(method(HttpMethod.POST))
                 .andRespond(withStatus(HttpStatus.INTERNAL_SERVER_ERROR)
                         .contentType(MediaType.APPLICATION_JSON)
                         .body("{\"error\":\"upstream failed\"}"));
 
-        assertThatThrownBy(() -> fixture.client.createOrder(order, investor("profile-1")))
+        assertThatThrownBy(() -> fixture.client.createOrder(order, investor("profile-1", "mfia-1"), productScheme("INF209KA1K47")))
                 .isInstanceOf(CybrillaApiException.class)
                 .hasMessageContaining("Unable to create order with Fintech Primitives")
                 .hasMessageContaining("500")
@@ -211,7 +240,7 @@ class RealCybrillaClientTest {
                 new SimpleMeterRegistry()
         );
 
-        assertThatThrownBy(() -> client.createOrder(order(TransactionType.LUMPSUM_PURCHASE), investor("profile-1")))
+        assertThatThrownBy(() -> client.createOrder(order(TransactionType.LUMPSUM_PURCHASE), investor("profile-1", "mfia-1"), productScheme("INF209KA1K47")))
                 .isInstanceOf(CybrillaApiException.class)
                 .hasMessageContaining("Unable to create order with Fintech Primitives")
                 .hasMessageContaining("DNS failure");
@@ -223,24 +252,80 @@ class RealCybrillaClientTest {
         ClientFixture fixture = clientFixture(tokenService);
         TransactionOrder order = order(TransactionType.LUMPSUM_PURCHASE);
 
-        fixture.server.expect(once(), requestTo("https://finprim.test/v2/orders"))
+        fixture.server.expect(once(), requestTo("https://finprim.test/v2/mf_purchases"))
                 .andExpect(method(HttpMethod.POST))
                 .andExpect(header(HttpHeaders.AUTHORIZATION, "Bearer stale-token"))
                 .andExpect(header("Idempotency-Key", "order-" + order.getId()))
                 .andRespond(withStatus(HttpStatus.UNAUTHORIZED)
                         .contentType(MediaType.APPLICATION_JSON)
                         .body("{\"error\":\"expired token\"}"));
-        fixture.server.expect(once(), requestTo("https://finprim.test/v2/orders"))
+        fixture.server.expect(once(), requestTo("https://finprim.test/v2/mf_purchases"))
                 .andExpect(method(HttpMethod.POST))
                 .andExpect(header(HttpHeaders.AUTHORIZATION, "Bearer fresh-token"))
                 .andExpect(header("Idempotency-Key", "order-" + order.getId()))
                 .andRespond(withSuccess("{\"id\":\"fp-order-2\"}", MediaType.APPLICATION_JSON));
 
-        String externalOrderId = fixture.client.createOrder(order, investor("profile-1"));
+        String externalOrderId = fixture.client.createOrder(order, investor("profile-1", "mfia-1"), productScheme("INF209KA1K47"));
 
         fixture.server.verify();
         assertThat(externalOrderId).isEqualTo("fp-order-2");
         assertThat(tokenService.invalidations).isEqualTo(1);
+    }
+
+    @Test
+    void createMfInvestmentAccountPostsProfileAndHoldingPattern() {
+        ClientFixture fixture = clientFixture(new StaticBearerTokenService("tenant-token"));
+        Investor investor = investor("profile-1", null);
+
+        fixture.server.expect(once(), requestTo("https://finprim.test/v2/mf_investment_accounts"))
+                .andExpect(method(HttpMethod.POST))
+                .andExpect(content().json("""
+                        {
+                          "primary_investor": "profile-1",
+                          "holding_pattern": "single"
+                        }
+                        """))
+                .andRespond(withSuccess("{\"id\":\"mfia_1\"}", MediaType.APPLICATION_JSON));
+
+        String accountId = fixture.client.createMfInvestmentAccount(investor);
+
+        fixture.server.verify();
+        assertThat(accountId).isEqualTo("mfia_1");
+    }
+
+    @Test
+    void captureBankAccountCreatesBankAccountAndVerificationRequest() {
+        ClientFixture fixture = clientFixture(new StaticBearerTokenService("tenant-token"));
+        Investor investor = investor("profile-1", "mfia-1");
+        InvestorBankAccount bankAccount = bankAccount();
+
+        fixture.server.expect(once(), requestTo("https://finprim.test/v2/bank_accounts"))
+                .andExpect(method(HttpMethod.POST))
+                .andExpect(content().json("""
+                        {
+                          "profile": "profile-1",
+                          "primary_account_holder_name": "Alice Investor",
+                          "account_number": "98123459204",
+                          "type": "savings",
+                          "ifsc_code": "HDFC0001330"
+                        }
+                        """))
+                .andRespond(withSuccess("{\"id\":\"bac_1\"}", MediaType.APPLICATION_JSON));
+        fixture.server.expect(once(), requestTo("https://finprim.test/v2/bank_account_verifications"))
+                .andExpect(method(HttpMethod.POST))
+                .andExpect(content().json("""
+                        {
+                          "bank_account": "bac_1"
+                        }
+                        """))
+                .andRespond(withSuccess("{\"id\":\"bav_1\",\"status\":\"pending\",\"confidence\":null}", MediaType.APPLICATION_JSON));
+
+        fixture.client.captureBankAccount(investor, bankAccount);
+
+        fixture.server.verify();
+        assertThat(bankAccount.getCybrillaBankId()).isEqualTo("bac_1");
+        assertThat(bankAccount.getCybrillaBankVerificationId()).isEqualTo("bav_1");
+        assertThat(bankAccount.getCybrillaBankVerificationStatus()).isEqualTo("pending");
     }
 
     private ClientFixture clientFixture(ExternalBearerTokenService tokenService) {
@@ -272,10 +357,29 @@ class RealCybrillaClientTest {
         return order;
     }
 
-    private Investor investor(String profileId) {
+    private Investor investor(String profileId, String mfInvestmentAccountId) {
         Investor investor = new Investor();
         investor.setCybrillaInvestorId(profileId);
+        investor.setExternalMfInvestmentAccountId(mfInvestmentAccountId);
         return investor;
+    }
+
+    private ProductScheme productScheme(String isin) {
+        ProductScheme productScheme = new ProductScheme();
+        productScheme.setSchemeName("Test Scheme");
+        productScheme.setAmcName("Test AMC");
+        productScheme.setCategory(ProductCategory.MF);
+        productScheme.setExternalSchemeCode(isin);
+        productScheme.setExternalIsin(isin);
+        return productScheme;
+    }
+
+    private InvestorBankAccount bankAccount() {
+        InvestorBankAccount bankAccount = new InvestorBankAccount();
+        bankAccount.setAccountHolderName("Alice Investor");
+        bankAccount.setAccountNumber("98123459204");
+        bankAccount.setIfscCode("HDFC0001330");
+        return bankAccount;
     }
 
     private record ClientFixture(RealCybrillaClient client, MockRestServiceServer server) {

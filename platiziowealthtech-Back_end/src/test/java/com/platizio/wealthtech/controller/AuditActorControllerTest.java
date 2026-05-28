@@ -166,7 +166,7 @@ class AuditActorControllerTest {
         private final java.util.ArrayList<UUID> actorIds = new java.util.ArrayList<>();
 
         RecordingOrderService() {
-            super(null, null, null, null, null, null, null);
+            super(null, null, null, null, null, null, null, null);
         }
 
         @Override

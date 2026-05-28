@@ -7,6 +7,7 @@ import java.math.BigDecimal;
 import java.time.OffsetDateTime;
 import java.util.Collection;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -30,6 +31,7 @@ public interface TransactionOrderRepository extends JpaRepository<TransactionOrd
 
     List<TransactionOrder> findByInvestorId(UUID investorId);
     List<TransactionOrder> findByDistributorId(UUID distributorId);
+    Optional<TransactionOrder> findByInvestorActionToken(String investorActionToken);
     List<TransactionOrder> findByDistributorIdAndOrderStatus(
             UUID distributorId,
             OrderStatus orderStatus,
