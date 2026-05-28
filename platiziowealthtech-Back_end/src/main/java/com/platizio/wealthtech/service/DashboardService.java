@@ -11,7 +11,6 @@ import com.platizio.wealthtech.dto.*;
 import com.platizio.wealthtech.repository.InvestorRepository;
 import com.platizio.wealthtech.repository.TransactionOrderRepository;
 import com.platizio.wealthtech.repository.ProductSchemeRepository;
-import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
@@ -68,12 +67,16 @@ public class DashboardService {
     }
 
     public SipDashboardDto getSipDashboard(UUID distributorId) {
+        // B-71: previously this used PageRequest.of(0, 50), which silently
+        // truncated the SIP list at 50 rows — a distributor with 51+ SIPs
+        // never saw orders 51..N in the dashboard. The new unbounded
+        // overload matches the sibling trend query in this same method
+        // (findByDistributorIdAndTransactionTypeAndCreatedAtAfter is also
+        // unpaginated) and is safe for realistic distributor SIP volumes
+        // (low hundreds at most). If true server-side pagination is wanted
+        // for scale, that's a separate API + UI feature.
         List<TransactionOrder> sipOrders = orderRepository
-                .findByDistributorIdAndTransactionType(
-                        distributorId,
-                        TransactionType.SIP,
-                        PageRequest.of(0, 50))
-                .getContent();
+                .findByDistributorIdAndTransactionType(distributorId, TransactionType.SIP);
 
         Map<UUID, Investor> investorMap = investorRepository.findByDistributorId(distributorId).stream()
                 .collect(Collectors.toMap(Investor::getId, i -> i));

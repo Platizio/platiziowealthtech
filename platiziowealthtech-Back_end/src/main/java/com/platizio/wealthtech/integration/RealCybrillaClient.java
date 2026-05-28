@@ -84,10 +84,19 @@ public class RealCybrillaClient implements CybrillaClient {
     }
 
     @Override
-    public List<ProductScheme> fetchProductSchemes() {
+    public SchemeFetchResult fetchProductSchemes() {
         int page = 0;
         int size = FUND_SCHEME_PAGE_SIZE;
         List<ProductScheme> schemes = new ArrayList<>();
+
+        // B-68: track whether we exited the loop via legitimate end-of-data
+        // (short page or isLastPage signal) versus the MAX_PAGES safety cap.
+        // The cap is the only branch that silently truncates without an
+        // exception, so it's the case the result flag has to carry upward.
+        // Other failure modes (mid-pagination 5xx, exhausted rate-limit
+        // retries, malformed response) already throw CybrillaApiException
+        // and abort the @Transactional caller atomically.
+        boolean truncatedAtPageCap = false;
 
         while (true) {
             int currentPage = page;
@@ -102,14 +111,27 @@ public class RealCybrillaClient implements CybrillaClient {
 
             logger.debug("cybrilla_workflow operation='fetch_fund_schemes' status='page_loaded' page='{}' count='{}'", page, pageCount);
 
-            if (pageCount < size || isLastPage(response) || page >= FUND_SCHEME_MAX_PAGES - 1) {
+            boolean naturalEnd = pageCount < size || isLastPage(response);
+            if (naturalEnd) {
+                break;
+            }
+            if (page >= FUND_SCHEME_MAX_PAGES - 1) {
+                truncatedAtPageCap = true;
+                logger.warn(
+                        "cybrilla_workflow operation='fetch_fund_schemes' status='truncated_at_page_cap' "
+                                + "page='{}' max_pages='{}' page_size='{}' partial_total='{}'",
+                        page, FUND_SCHEME_MAX_PAGES, size, schemes.size());
                 break;
             }
             page++;
         }
 
+        if (truncatedAtPageCap) {
+            // Partial — caller must NOT treat schemes as the canonical catalogue.
+            return SchemeFetchResult.partial(schemes, "max_pages_reached");
+        }
         logger.debug("cybrilla_workflow operation='fetch_fund_schemes' status='completed' total_count='{}'", schemes.size());
-        return schemes;
+        return SchemeFetchResult.complete(schemes);
     }
 
     @Override

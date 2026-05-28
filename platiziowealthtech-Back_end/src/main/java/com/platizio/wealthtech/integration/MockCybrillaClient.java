@@ -37,7 +37,7 @@ public class MockCybrillaClient implements CybrillaClient {
     }
 
     @Override
-    public List<ProductScheme> fetchProductSchemes() {
+    public SchemeFetchResult fetchProductSchemes() {
         ProductScheme equityScheme = new ProductScheme();
         equityScheme.setSchemeName("Bluechip Equity Fund");
         equityScheme.setAmcName("Platizio Assets");
@@ -65,7 +65,7 @@ public class MockCybrillaClient implements CybrillaClient {
         sifScheme.setProductType("SIF");
         sifScheme.setMetadataJson("{\"impact\":\"high\",\"returns\":{\"daily\":-0.1,\"ytd\":5.4,\"1y\":8.2,\"5y\":32.1}}");
 
-        return List.of(equityScheme, mfScheme, sifScheme);
+        return SchemeFetchResult.complete(List.of(equityScheme, mfScheme, sifScheme));
     }
 
     @Override

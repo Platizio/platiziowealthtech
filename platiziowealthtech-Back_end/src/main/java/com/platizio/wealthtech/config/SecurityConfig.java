@@ -109,8 +109,30 @@ public class SecurityConfig {
         CorsConfiguration config = new CorsConfiguration();
         config.setAllowedOrigins(allowedOrigins);
         config.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"));
-        config.setAllowedHeaders(List.of("*"));
-        config.setExposedHeaders(List.of("Set-Cookie"));
+        // B-73: pin allowed request headers to the actual set the app uses.
+        // Previously this was List.of("*"), which the Fetch spec treats as
+        // literal (not a wildcard) when allowCredentials=true — Spring papered
+        // over that by reflecting requested headers back, but the loose
+        // posture violated least-privilege.
+        //   • Content-Type      — apiFetch sends "application/json" on every
+        //                         JSON POST/PUT/PATCH.
+        //   • Authorization     — not used today (auth is via HttpOnly cookies)
+        //                         but standard and forward-compatible.
+        //   • X-Requested-With  — legacy AJAX convention; harmless to permit.
+        //   • X-Forwarded-For   — read by LoginRateLimitFilter (B-46) for
+        //                         per-IP rate limiting when behind a proxy.
+        config.setAllowedHeaders(List.of(
+                "Authorization",
+                "Content-Type",
+                "X-Requested-With",
+                "X-Forwarded-For"));
+        // B-73: do NOT expose Set-Cookie. It is on the Fetch spec's forbidden
+        // response-header list — JavaScript can never read it via
+        // response.headers.get('Set-Cookie') regardless of CORS exposure, so
+        // the prior setExposedHeaders(List.of("Set-Cookie")) was zero-effect
+        // misleading config. Auth in this app intentionally uses HttpOnly
+        // cookies so JS *cannot* see them; exposing Set-Cookie suggested the
+        // opposite.
         config.setAllowCredentials(true);
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
         source.registerCorsConfiguration("/**", config);
