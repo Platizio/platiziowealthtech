@@ -4,8 +4,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.platizio.wealthtech.domain.Distributor;
 import com.platizio.wealthtech.domain.Investor;
+import com.platizio.wealthtech.domain.KycStatus;
 import com.platizio.wealthtech.dto.InvestorCreateRequest;
 import com.platizio.wealthtech.integration.CybrillaClient;
+import com.platizio.wealthtech.integration.CybrillaApiException;
 import com.platizio.wealthtech.repository.InvestorRepository;
 import java.lang.reflect.Proxy;
 import java.time.LocalDate;
@@ -36,11 +38,18 @@ class InvestorServiceAuditTest {
                 "jane@example.com",
                 "ABCDE1234F",
                 LocalDate.of(1990, 1, 1),
+                null,
+                null,
                 "Address line 1",
                 null,
                 "Mumbai",
                 "Maharashtra",
                 "400001",
+                null,
+                null,
+                null,
+                null,
+                null,
                 "Sensitive onboarding note"
         ));
 
@@ -51,6 +60,48 @@ class InvestorServiceAuditTest {
                 .doesNotContain("9876543210")
                 .doesNotContain("jane@example.com")
                 .doesNotContain("Sensitive onboarding note");
+    }
+
+    @Test
+    void createInvestorKeepsLocalRecordPendingWhenExternalProfileFails() {
+        UUID distributorId = UUID.randomUUID();
+        AtomicReference<Investor> lastSaved = new AtomicReference<>();
+        InvestorService investorService = new InvestorService(
+                investorRepository(lastSaved),
+                null,
+                new FixedDistributorService(distributorId),
+                new NoopAuditService(),
+                failingCybrillaClient()
+        );
+
+        Investor saved = investorService.createInvestor(new InvestorCreateRequest(
+                distributorId,
+                "Pending Investor",
+                "9876543210",
+                "pending@example.com",
+                "ABCDE1234F",
+                LocalDate.of(1990, 1, 1),
+                null,
+                null,
+                "Address line 1",
+                null,
+                "Mumbai",
+                "Maharashtra",
+                "400001",
+                null,
+                null,
+                null,
+                null,
+                null,
+                "External verification pending"
+        ));
+
+        assertThat(saved).isSameAs(lastSaved.get());
+        assertThat(saved.getKycStatus()).isEqualTo(KycStatus.PENDING);
+        assertThat(saved.getCybrillaInvestorId()).isNull();
+        assertThat(saved.getExternalSyncPending()).isTrue();
+        assertThat(saved.getExternalSyncMessage()).contains("Unable to post investor data");
+        assertThat(saved.getHouseholdId()).isNotNull();
     }
 
     private InvestorRepository investorRepository() {
@@ -66,16 +117,47 @@ class InvestorServiceAuditTest {
         );
     }
 
+    private InvestorRepository investorRepository(AtomicReference<Investor> lastSaved) {
+        return (InvestorRepository) Proxy.newProxyInstance(
+                InvestorRepository.class.getClassLoader(),
+                new Class<?>[]{InvestorRepository.class},
+                (proxy, method, args) -> switch (method.getName()) {
+                    case "findByPan", "findByEmail" -> Optional.empty();
+                    case "save" -> {
+                        lastSaved.set((Investor) args[0]);
+                        yield args[0];
+                    }
+                    case "findAll", "findByDistributorId" -> List.of();
+                    default -> defaultValue(method.getReturnType());
+                }
+        );
+    }
+
     private CybrillaClient cybrillaClient() {
         return (CybrillaClient) Proxy.newProxyInstance(
                 CybrillaClient.class.getClassLoader(),
                 new Class<?>[]{CybrillaClient.class},
                 (proxy, method, args) -> switch (method.getName()) {
-                    case "createInvestorProfile" -> "cybrilla-investor-1";
+                    case "createInvestorProfile" -> {
+                        assertThat(((Investor) args[0]).getHouseholdId()).isNotNull();
+                        yield "cybrilla-investor-1";
+                    }
                     // B-68: signature changed from List<ProductScheme> to
                     // SchemeFetchResult — return an empty-but-complete result
                     // so any indirect invocation through this proxy still
                     // works (test method doesn't actually hit this path).
+                    case "fetchProductSchemes" -> CybrillaClient.SchemeFetchResult.complete(List.of());
+                    default -> defaultValue(method.getReturnType());
+                }
+        );
+    }
+
+    private CybrillaClient failingCybrillaClient() {
+        return (CybrillaClient) Proxy.newProxyInstance(
+                CybrillaClient.class.getClassLoader(),
+                new Class<?>[]{CybrillaClient.class},
+                (proxy, method, args) -> switch (method.getName()) {
+                    case "createInvestorProfile" -> throw new CybrillaApiException("PAN verification unavailable");
                     case "fetchProductSchemes" -> CybrillaClient.SchemeFetchResult.complete(List.of());
                     default -> defaultValue(method.getReturnType());
                 }
@@ -127,6 +209,16 @@ class InvestorServiceAuditTest {
             assertThat(entityType).isEqualTo("INVESTOR");
             assertThat(actionType).isEqualTo("CREATED");
             auditDetails.set(detailsJson);
+        }
+    }
+
+    private static class NoopAuditService extends AuditService {
+        NoopAuditService() {
+            super(null);
+        }
+
+        @Override
+        public void log(String entityType, UUID entityId, String actionType, UUID actorId, String detailsJson) {
         }
     }
 }

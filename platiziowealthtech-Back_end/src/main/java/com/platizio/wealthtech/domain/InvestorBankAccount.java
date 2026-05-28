@@ -28,6 +28,15 @@ public class InvestorBankAccount extends BaseEntity {
     private BankVerificationStatus verificationStatus = BankVerificationStatus.NOT_CAPTURED;
 
     private String cybrillaBankId;
+    private String cybrillaBankVerificationId;
+    private String cybrillaBankVerificationStatus;
+    private String cybrillaBankVerificationConfidence;
+
+    @Transient
+    private Boolean externalSyncPending = Boolean.FALSE;
+
+    @Transient
+    private String externalSyncMessage;
 
     public UUID getInvestorId() { return investorId; }
     public void setInvestorId(UUID investorId) { this.investorId = investorId; }
@@ -45,4 +54,14 @@ public class InvestorBankAccount extends BaseEntity {
     public void setVerificationStatus(BankVerificationStatus verificationStatus) { this.verificationStatus = verificationStatus; }
     public String getCybrillaBankId() { return cybrillaBankId; }
     public void setCybrillaBankId(String cybrillaBankId) { this.cybrillaBankId = cybrillaBankId; }
+    public String getCybrillaBankVerificationId() { return cybrillaBankVerificationId; }
+    public void setCybrillaBankVerificationId(String cybrillaBankVerificationId) { this.cybrillaBankVerificationId = cybrillaBankVerificationId; }
+    public String getCybrillaBankVerificationStatus() { return cybrillaBankVerificationStatus; }
+    public void setCybrillaBankVerificationStatus(String cybrillaBankVerificationStatus) { this.cybrillaBankVerificationStatus = cybrillaBankVerificationStatus; }
+    public String getCybrillaBankVerificationConfidence() { return cybrillaBankVerificationConfidence; }
+    public void setCybrillaBankVerificationConfidence(String cybrillaBankVerificationConfidence) { this.cybrillaBankVerificationConfidence = cybrillaBankVerificationConfidence; }
+    public Boolean getExternalSyncPending() { return externalSyncPending; }
+    public void setExternalSyncPending(Boolean externalSyncPending) { this.externalSyncPending = externalSyncPending; }
+    public String getExternalSyncMessage() { return externalSyncMessage; }
+    public void setExternalSyncMessage(String externalSyncMessage) { this.externalSyncMessage = externalSyncMessage; }
 }

@@ -40,6 +40,7 @@ public class TransactionOrder extends BaseEntity {
     private String externalOrderId;
     private String failureReason;
     private String investorActionUrl;
+    private String investorActionToken;
     private String sipFrequency;
     private LocalDate sipStartDate;
     private Integer sipInstalments;
@@ -71,6 +72,8 @@ public class TransactionOrder extends BaseEntity {
     public void setFailureReason(String failureReason) { this.failureReason = failureReason; }
     public String getInvestorActionUrl() { return investorActionUrl; }
     public void setInvestorActionUrl(String investorActionUrl) { this.investorActionUrl = investorActionUrl; }
+    public String getInvestorActionToken() { return investorActionToken; }
+    public void setInvestorActionToken(String investorActionToken) { this.investorActionToken = investorActionToken; }
     public String getSipFrequency() { return sipFrequency; }
     public void setSipFrequency(String sipFrequency) { this.sipFrequency = sipFrequency; }
     public LocalDate getSipStartDate() { return sipStartDate; }

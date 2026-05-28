@@ -1,4 +1,6 @@
 spring:
+  profiles:
+    active: ${SPRING_PROFILES_ACTIVE:local}
   config:
     import: optional:file:./.env[.properties]
   application:
@@ -6,7 +8,7 @@ spring:
   datasource:
     url: ${DB_URL:jdbc:postgresql://localhost:5432/postgres}
     username: ${DB_USERNAME:postgres}
-    password: ${DB_PASSWORD:1234}
+    password: ${DB_PASSWORD}
     driverClassName: org.postgresql.Driver
   jpa:
     hibernate:
@@ -25,7 +27,7 @@ management:
   endpoints:
     web:
       exposure:
-        include: health,info
+        include: health,info,prometheus
 
 server:
   port: 8081
@@ -65,7 +67,7 @@ external-auth:
     log-raw-tokens: ${EXTERNAL_AUTH_LOG_RAW_TOKENS:false}
 
 jwt:
-  secret: ${JWT_SECRET:local-dev-jwt-secret-32-bytes-minimum-not-for-prod}
+  secret: ${JWT_SECRET}
   expiration-ms: 900000  # 15 minutes
 
 app:
@@ -75,5 +77,11 @@ app:
     cookie-name: ${AUTH_COOKIE_NAME:access_token}
     refresh-cookie-name: ${AUTH_REFRESH_COOKIE_NAME:refresh_token}
     refresh-token-expiration-ms: ${AUTH_REFRESH_TOKEN_EXPIRATION_MS:604800000}  # 7 days
-    cookie-secure: ${AUTH_COOKIE_SECURE:false}
+    cookie-secure: ${AUTH_COOKIE_SECURE}
     cookie-same-site: ${AUTH_COOKIE_SAME_SITE:Lax}
+    blocked-token-purge-interval-ms: ${AUTH_BLOCKED_TOKEN_PURGE_INTERVAL_MS:3600000}
+    blocked-token-purge-initial-delay-ms: ${AUTH_BLOCKED_TOKEN_PURGE_INITIAL_DELAY_MS:${random.int[30000,90000]}}
+
+logging:
+  pattern:
+    level: "%5p [requestId:%X{requestId:-}]"

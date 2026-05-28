@@ -14,7 +14,6 @@ import org.springframework.data.repository.query.Param;
 public interface ProductSchemeRepository extends JpaRepository<ProductScheme, UUID> {
     List<ProductScheme> findByAmcNameContainingIgnoreCaseAndCategory(String amcName, ProductCategory category);
     Optional<ProductScheme> findByExternalSchemeCode(String externalSchemeCode);
-
     /**
      * B-69: bulk-deactivate active schemes whose external_scheme_code is NOT
      * in the supplied refreshed-set. Replaces a previous
@@ -47,4 +46,8 @@ public interface ProductSchemeRepository extends JpaRepository<ProductScheme, UU
                AND LENGTH(TRIM(p.externalSchemeCode)) > 0
             """)
     int deactivateActiveSchemesNotIn(@Param("codes") Collection<String> codes);
+
+    Optional<ProductScheme> findFirstByExternalSchemeCodeIgnoreCase(String externalSchemeCode);
+    Optional<ProductScheme> findFirstByExternalIsinIgnoreCase(String externalIsin);
+    Optional<ProductScheme> findFirstBySchemeNameIgnoreCase(String schemeName);
 }

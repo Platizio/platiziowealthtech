@@ -22,7 +22,7 @@ class AuthControllerRefreshTest {
     void loginWritesAccessAndRefreshCookies() {
         UUID refreshToken = UUID.randomUUID();
         RecordingAuthService authService = new RecordingAuthService(refreshToken);
-        AuthController controller = new AuthController(authService, cookieService());
+        AuthController controller = new AuthController(authService, cookieService(), null);
         MockHttpServletResponse response = new MockHttpServletResponse();
 
         controller.login(new AuthLoginRequest("user@example.com", "password"), response);
@@ -45,7 +45,7 @@ class AuthControllerRefreshTest {
         UUID refreshToken = UUID.randomUUID();
         UUID rotatedRefreshToken = UUID.randomUUID();
         RecordingAuthService authService = new RecordingAuthService(refreshToken, rotatedRefreshToken);
-        AuthController controller = new AuthController(authService, cookieService());
+        AuthController controller = new AuthController(authService, cookieService(), null);
         MockHttpServletRequest request = new MockHttpServletRequest();
         request.setCookies(new Cookie("refresh_token", refreshToken.toString()));
         MockHttpServletResponse response = new MockHttpServletResponse();
@@ -64,7 +64,7 @@ class AuthControllerRefreshTest {
     void logoutRevokesRefreshTokenAndClearsBothCookies() {
         UUID refreshToken = UUID.randomUUID();
         RecordingAuthService authService = new RecordingAuthService(refreshToken);
-        AuthController controller = new AuthController(authService, cookieService());
+        AuthController controller = new AuthController(authService, cookieService(), null);
         MockHttpServletRequest request = new MockHttpServletRequest();
         request.setCookies(
                 new Cookie("access_token", "access.jwt"),
@@ -80,16 +80,6 @@ class AuthControllerRefreshTest {
                 .anySatisfy(cookie -> assertThat(cookie).contains("access_token=").contains("Max-Age=0"));
         assertThat(response.getHeaders(HttpHeaders.SET_COOKIE))
                 .anySatisfy(cookie -> assertThat(cookie).contains("refresh_token=").contains("Max-Age=0"));
-    }
-
-    @Test
-    void scheduledPurgeDelegatesToAuthService() {
-        RecordingAuthService authService = new RecordingAuthService(UUID.randomUUID());
-        AuthController controller = new AuthController(authService, cookieService());
-
-        controller.purgeExpiredBlockedTokens();
-
-        assertThat(authService.purgeCalled).isTrue();
     }
 
     private AuthCookieService cookieService() {
@@ -110,7 +100,6 @@ class AuthControllerRefreshTest {
         private String refreshedToken;
         private String revokedToken;
         private String blockedAccessToken;
-        private boolean purgeCalled;
 
         RecordingAuthService(UUID refreshToken) {
             this(refreshToken, UUID.randomUUID());
@@ -146,12 +135,6 @@ class AuthControllerRefreshTest {
         @Override
         public void blockAccessToken(String accessToken) {
             blockedAccessToken = accessToken;
-        }
-
-        @Override
-        public long purgeExpiredBlockedTokens() {
-            purgeCalled = true;
-            return 0;
         }
 
         private AuthResponse response(String token, String message) {

@@ -1,11 +1,15 @@
 package com.platizio.wealthtech.controller;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.platizio.wealthtech.dto.AuditLogResponse;
 import com.platizio.wealthtech.service.AuditService;
 import java.lang.reflect.Method;
+import java.time.Clock;
+import java.time.Instant;
 import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.springframework.data.domain.Page;
@@ -52,6 +56,29 @@ class AuditControllerTest {
         assertThat(auditService.toDate).isEqualTo(toDate);
         assertThat(auditService.page).isEqualTo(2);
         assertThat(auditService.size).isEqualTo(25);
+    }
+
+    @Test
+    void auditSearchRejectsDateRangeLongerThanNinetyDays() {
+        AuditController controller = new AuditController(new RecordingAuditService());
+        OffsetDateTime fromDate = OffsetDateTime.parse("2026-01-01T00:00:00Z");
+        OffsetDateTime toDate = OffsetDateTime.parse("2026-04-02T00:00:01Z");
+
+        assertThatThrownBy(() -> controller.searchAuditLogs(null, null, fromDate, toDate, 0, 50))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("Audit date range cannot exceed 90 days");
+    }
+
+    @Test
+    void auditSearchDefaultsMissingDatesToLastNinetyDays() {
+        RecordingAuditService auditService = new RecordingAuditService();
+        Clock clock = Clock.fixed(Instant.parse("2026-05-21T10:00:00Z"), ZoneOffset.UTC);
+        AuditController controller = new AuditController(auditService, clock);
+
+        controller.searchAuditLogs(null, null, null, null, 0, 50);
+
+        assertThat(auditService.fromDate).isEqualTo(OffsetDateTime.parse("2026-02-20T10:00:00Z"));
+        assertThat(auditService.toDate).isEqualTo(OffsetDateTime.parse("2026-05-21T10:00:00Z"));
     }
 
     private static class RecordingAuditService extends AuditService {

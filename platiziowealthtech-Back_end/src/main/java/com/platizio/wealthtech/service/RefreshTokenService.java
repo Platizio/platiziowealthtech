@@ -10,6 +10,7 @@ import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.util.HexFormat;
+import java.util.List;
 import java.util.UUID;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.authentication.BadCredentialsException;
@@ -73,6 +74,15 @@ public class RefreshTokenService {
         } catch (BadCredentialsException ignored) {
             // Logout should be idempotent even when the refresh cookie is absent or malformed.
         }
+    }
+
+    @Transactional
+    public void revokeAllForDistributor(UUID distributorId) {
+        if (distributorId == null) {
+            return;
+        }
+        List<AuthRefreshToken> activeTokens = refreshTokenRepository.findByDistributorIdAndRevokedFalse(distributorId);
+        activeTokens.forEach(this::revoke);
     }
 
     private AuthRefreshToken findUsableToken(String rawToken) {

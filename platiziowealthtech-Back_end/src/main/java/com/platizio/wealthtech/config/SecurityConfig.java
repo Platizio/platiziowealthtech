@@ -69,6 +69,8 @@ public class SecurityConfig {
                     "/swagger-ui/**",
                     "/swagger-ui.html",
                     "/swagger-ui/index.html",
+                    "/investor-actions/**",
+                    "/investor-action/**",
                     "/favicon.ico",
                     "/"
                 ).permitAll()

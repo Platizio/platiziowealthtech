@@ -3,8 +3,12 @@ package com.platizio.wealthtech.controller;
 import com.platizio.wealthtech.dto.AuthLoginRequest;
 import com.platizio.wealthtech.dto.AuthResponse;
 import com.platizio.wealthtech.dto.AuthSignupRequest;
+import com.platizio.wealthtech.dto.ForgotPasswordRequest;
+import com.platizio.wealthtech.dto.ForgotPasswordResponse;
+import com.platizio.wealthtech.dto.ResetPasswordRequest;
 import com.platizio.wealthtech.service.AuthCookieService;
 import com.platizio.wealthtech.service.AuthService;
+import com.platizio.wealthtech.service.PasswordResetService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.media.Schema;
@@ -17,7 +21,6 @@ import java.security.Principal;
 import java.util.Map;
 import java.util.UUID;
 import org.springframework.security.authentication.BadCredentialsException;
-import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.web.bind.annotation.*;
 
 @RestController
@@ -27,10 +30,16 @@ public class AuthController {
 
     private final AuthService authService;
     private final AuthCookieService authCookieService;
+    private final PasswordResetService passwordResetService;
 
-    public AuthController(AuthService authService, AuthCookieService authCookieService) {
+    public AuthController(
+            AuthService authService,
+            AuthCookieService authCookieService,
+            PasswordResetService passwordResetService
+    ) {
         this.authService = authService;
         this.authCookieService = authCookieService;
+        this.passwordResetService = passwordResetService;
     }
 
     @Operation(summary = "Register a new distributor", description = "Creates a new distributor account and sets an HttpOnly JWT cookie.")
@@ -58,6 +67,16 @@ public class AuthController {
         return authResponse;
     }
 
+    @PostMapping("/forgot-password")
+    public ForgotPasswordResponse forgotPassword(@Valid @RequestBody ForgotPasswordRequest request) {
+        return passwordResetService.requestReset(request);
+    }
+
+    @PostMapping("/reset-password")
+    public Map<String, String> resetPassword(@Valid @RequestBody ResetPasswordRequest request) {
+        return passwordResetService.resetPassword(request);
+    }
+
     @PostMapping("/refresh")
     public AuthResponse refresh(HttpServletRequest request, HttpServletResponse response) {
         String refreshToken = authCookieService.readRefreshToken(request)
@@ -83,10 +102,5 @@ public class AuthController {
         authCookieService.clearAccessToken(response);
         authCookieService.clearRefreshToken(response);
         return Map.of("status", "logged_out");
-    }
-
-    @Scheduled(fixedDelayString = "${app.auth.blocked-token-purge-interval-ms:3600000}")
-    public void purgeExpiredBlockedTokens() {
-        authService.purgeExpiredBlockedTokens();
     }
 }

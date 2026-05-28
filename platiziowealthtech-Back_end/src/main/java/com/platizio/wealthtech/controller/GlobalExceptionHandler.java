@@ -4,6 +4,8 @@ import com.platizio.wealthtech.common.AccountNotApprovedException;
 import com.platizio.wealthtech.common.ConflictException;
 import com.platizio.wealthtech.common.DuplicateResourceException;
 import com.platizio.wealthtech.dto.ApiErrorResponse;
+import com.platizio.wealthtech.integration.CybrillaApiException;
+import com.platizio.wealthtech.integration.auth.ExternalApiAuthenticationException;
 import jakarta.persistence.EntityNotFoundException;
 import jakarta.servlet.http.HttpServletRequest;
 import java.time.OffsetDateTime;
@@ -146,6 +148,19 @@ public class GlobalExceptionHandler {
                 .orElse("A duplicate or invalid record was detected");
         logger.warn("Data integrity violation at {}: {}", request.getRequestURI(), causeChain);
         return new ApiErrorResponse(OffsetDateTime.now(), 409, "CONFLICT", friendly, request.getRequestURI());
+    }
+
+    @ExceptionHandler({CybrillaApiException.class, ExternalApiAuthenticationException.class})
+    @ResponseStatus(HttpStatus.BAD_GATEWAY)
+    public ApiErrorResponse handleCybrillaApiException(RuntimeException ex, HttpServletRequest request) {
+        logger.error("External investment platform call failed at {}: {}", request.getRequestURI(), ex.getMessage(), ex);
+        return new ApiErrorResponse(
+                OffsetDateTime.now(),
+                502,
+                "EXTERNAL_PLATFORM_ERROR",
+                "Unable to post data to Cybrilla/Fintech Primitives right now. Please check external platform connectivity and retry.",
+                request.getRequestURI()
+        );
     }
 
     @ExceptionHandler(Exception.class)

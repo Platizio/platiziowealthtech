@@ -37,18 +37,12 @@ Spring Boot backend starter for the PRD "Stage-1 MVP - Distributor led MF and SI
 
 ## Local run
 
-Create a small local PostgreSQL database and set credentials through environment variables, or use the defaults from `src/main/resources/application.yml`:
+Create a small local PostgreSQL database and set credentials through environment variables. The base `application.yml` has no fallback for `DB_PASSWORD`, `JWT_SECRET`, or `AUTH_COOKIE_SECURE`, so non-local starts fail fast if those values are missing.
 
 ```sql
 create database wealthtech;
 create user wealthtech with encrypted password 'wealthtech';
 grant all privileges on database wealthtech to wealthtech;
-```
-
-For normal local startup, run:
-
-```bash
-.\mvnw.cmd spring-boot:run
 ```
 
 For local HTTP-only development, run with the `local` Spring profile:
@@ -57,9 +51,9 @@ For local HTTP-only development, run with the `local` Spring profile:
 .\mvnw.cmd spring-boot:run "-Dspring-boot.run.profiles=local"
 ```
 
-The default config currently includes a local-only JWT secret fallback so the backend starts without extra environment setup. Set `JWT_SECRET` to a strong random value before using any shared, staging, or production environment. The `local` profile also sets `app.auth.cookie-secure: false` for HTTP development; do not use that profile outside local development.
+The `local` profile is the only place that supplies local fallbacks for `DB_PASSWORD`, `JWT_SECRET`, and `AUTH_COOKIE_SECURE=false`. Do not use that profile outside local development. Set `JWT_SECRET` to a strong random value before using any shared, staging, or production environment.
 
-JWT cookies are `Secure` by default via `AUTH_COOKIE_SECURE=true`, so browsers only send them over HTTPS unless explicitly overridden.
+For shared, staging, and production environments, set `AUTH_COOKIE_SECURE=true` so browsers only send auth cookies over HTTPS.
 
 Default database variables:
 
@@ -75,6 +69,11 @@ Default database variables:
 - `GET /api/v1/investors/by-distributor/{distributorId}` returns investors assigned to one distributor.
 - `GET /api/v1/investors/by-distributor/{distributorId}/visible-to/{requesterId}` returns investors for a distributor only when the requester is allowed to view them.
 - `GET /api/v1/investors/visible-to/{requesterId}` returns all investors for an admin, the master distributor plus sub distributor book for a master distributor, or the direct investor book for a sub distributor.
+
+## Reports APIs
+
+- `GET /api/v1/reports/distributor/{distributorId}/capital-gains?financialYear=2024-2025` returns the FY capital gains statement with FIFO cost allocation, STCG/LTCG split, and grandfathering when scheme metadata contains an FMV/NAV field such as `grandfatheredNav` or `nav_2018_01_31`.
+- `GET /api/v1/reports/distributor/{distributorId}/capital-gains/export?financialYear=2024-2025&format=QUICKO` exports a CSV. `format` supports `QUICKO` and `CLEARTAX`.
 
 ## Cybrilla integration handoff
 

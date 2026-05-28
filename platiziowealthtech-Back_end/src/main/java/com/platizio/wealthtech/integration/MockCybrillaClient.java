@@ -1,22 +1,29 @@
 package com.platizio.wealthtech.integration;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.platizio.wealthtech.domain.Investor;
 import com.platizio.wealthtech.domain.InvestorBankAccount;
 import com.platizio.wealthtech.domain.ProductCategory;
 import com.platizio.wealthtech.domain.ProductScheme;
 import com.platizio.wealthtech.domain.TransactionOrder;
+import java.time.LocalDate;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
+import org.springframework.util.StringUtils;
 
 @Component
 @ConditionalOnProperty(prefix = "cybrilla.integration", name = "real-client-enabled", havingValue = "false")
 public class MockCybrillaClient implements CybrillaClient {
 
     private static final Logger logger = LoggerFactory.getLogger(MockCybrillaClient.class);
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
     public MockCybrillaClient() {
         logger.warn("cybrilla_client mode='mock' external_calls='disabled' reason='CYBRILLA_REAL_CLIENT_ENABLED=false'");
@@ -30,10 +37,125 @@ public class MockCybrillaClient implements CybrillaClient {
     }
 
     @Override
+    public String createMfInvestmentAccount(Investor investor) {
+        String mockId = "cyb-mfia-" + UUID.randomUUID();
+        logger.warn("cybrilla_client mode='mock' operation='create_mf_investment_account' local_investor_id='{}' mock_id='{}'", investor.getId(), mockId);
+        return mockId;
+    }
+
+    @Override
     public void captureBankAccount(Investor investor, InvestorBankAccount bankAccount) {
         String mockId = "cyb-bank-" + UUID.randomUUID();
+        String mockVerificationId = "cyb-bav-" + UUID.randomUUID();
         logger.warn("cybrilla_client mode='mock' operation='capture_bank_account' local_investor_id='{}' local_bank_id='{}' mock_id='{}'", investor.getId(), bankAccount.getId(), mockId);
         bankAccount.setCybrillaBankId(mockId);
+        bankAccount.setCybrillaBankVerificationId(mockVerificationId);
+        bankAccount.setCybrillaBankVerificationStatus("pending");
+    }
+
+    @Override
+    public JsonNode fetchBankAccountVerification(String bankAccountVerificationId) {
+        ObjectNode response = OBJECT_MAPPER.createObjectNode();
+        response.put("object", "bank_account_verification");
+        response.put("id", bankAccountVerificationId);
+        response.put("status", "completed");
+        response.put("confidence", "very_high");
+        return response;
+    }
+
+    @Override
+    public JsonNode createKycCheck(String pan, LocalDate dateOfBirth) {
+        ObjectNode response = OBJECT_MAPPER.createObjectNode();
+        response.put("id", "kyc-check-" + UUID.randomUUID());
+        response.put("pan", pan);
+        response.put("status", true);
+        response.putObject("entity_details").put("name", "Mock Investor");
+        return response;
+    }
+
+    @Override
+    public JsonNode fetchKycCheck(String kycCheckId) {
+        ObjectNode response = OBJECT_MAPPER.createObjectNode();
+        response.put("id", kycCheckId);
+        response.put("status", true);
+        return response;
+    }
+
+    @Override
+    public JsonNode refetchKycCheck(String kycCheckId) {
+        return fetchKycCheck(kycCheckId);
+    }
+
+    @Override
+    public JsonNode listKycRequests(String pan, String status) {
+        ObjectNode response = OBJECT_MAPPER.createObjectNode();
+        response.put("object", "list");
+        response.putArray("data");
+        return response;
+    }
+
+    @Override
+    public JsonNode createKycRequest(Map<String, Object> payload) {
+        ObjectNode response = OBJECT_MAPPER.valueToTree(payload);
+        response.put("object", "kyc_request");
+        response.put("id", "kycr_" + UUID.randomUUID().toString().replace("-", ""));
+        response.put("status", "pending");
+        return response;
+    }
+
+    @Override
+    public JsonNode fetchKycRequest(String kycRequestId) {
+        ObjectNode response = OBJECT_MAPPER.createObjectNode();
+        response.put("object", "kyc_request");
+        response.put("id", kycRequestId);
+        response.put("status", "pending");
+        return response;
+    }
+
+    @Override
+    public JsonNode updateKycRequest(String kycRequestId, Map<String, Object> payload) {
+        ObjectNode response = OBJECT_MAPPER.valueToTree(payload);
+        response.put("object", "kyc_request");
+        response.put("id", kycRequestId);
+        response.put("status", "pending");
+        return response;
+    }
+
+    @Override
+    public JsonNode simulateKycRequest(String kycRequestId, String status) {
+        ObjectNode response = OBJECT_MAPPER.createObjectNode();
+        response.put("object", "kyc_request");
+        response.put("id", kycRequestId);
+        response.put("status", status);
+        return response;
+    }
+
+    @Override
+    public JsonNode createIdentityDocument(Map<String, Object> payload) {
+        ObjectNode response = OBJECT_MAPPER.valueToTree(payload);
+        response.put("object", "identity_document");
+        response.put("id", "iddoc_" + UUID.randomUUID().toString().replace("-", ""));
+        ObjectNode fetch = response.putObject("fetch");
+        fetch.put("redirect_url", "https://example.com/digilocker");
+        fetch.put("status", "pending");
+        return response;
+    }
+
+    @Override
+    public JsonNode fetchIdentityDocument(String identityDocumentId) {
+        ObjectNode response = OBJECT_MAPPER.createObjectNode();
+        response.put("object", "identity_document");
+        response.put("id", identityDocumentId);
+        response.putObject("fetch").put("status", "pending");
+        return response;
+    }
+
+    @Override
+    public JsonNode listIdentityDocuments(String kycRequestId, String fetchStatus) {
+        ObjectNode response = OBJECT_MAPPER.createObjectNode();
+        response.put("object", "list");
+        response.putArray("data");
+        return response;
     }
 
     @Override
@@ -69,17 +191,20 @@ public class MockCybrillaClient implements CybrillaClient {
     }
 
     @Override
-    public String createOrder(TransactionOrder order, Investor investor) {
+    public String createOrder(TransactionOrder order, Investor investor, ProductScheme productScheme) {
         return "cyb-order-" + UUID.randomUUID();
     }
 
     @Override
     public String generateInvestorActionUrl(TransactionOrder order) {
-        return "https://example.com/investor-action/" + order.getId();
+        String token = StringUtils.hasText(order.getInvestorActionToken())
+                ? order.getInvestorActionToken()
+                : String.valueOf(order.getId());
+        return "/investor-actions/" + token;
     }
 
     @Override
-    public String createRedemption(TransactionOrder order) {
+    public String createRedemption(TransactionOrder order, Investor investor, ProductScheme productScheme) {
         return "cyb-red-" + UUID.randomUUID();
     }
 

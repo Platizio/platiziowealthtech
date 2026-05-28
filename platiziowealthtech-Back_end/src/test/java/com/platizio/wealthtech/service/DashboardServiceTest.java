@@ -8,6 +8,8 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.platizio.wealthtech.domain.BankVerificationStatus;
+import com.platizio.wealthtech.domain.KycStatus;
 import com.platizio.wealthtech.domain.OrderStatus;
 import com.platizio.wealthtech.domain.TransactionOrder;
 import com.platizio.wealthtech.domain.TransactionType;
@@ -21,6 +23,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import org.springframework.test.util.ReflectionTestUtils;
 
 class DashboardServiceTest {
@@ -65,6 +71,7 @@ class DashboardServiceTest {
         verify(orderRepository).findByDistributorIdAndTransactionType(
                 eq(distributorId), eq(TransactionType.SIP));
         verify(orderRepository, never()).findByDistributorId(distributorId);
+        verify(investorRepository, never()).findByDistributorId(distributorId);
     }
 
     @Test
@@ -88,7 +95,7 @@ class DashboardServiceTest {
                         order(OrderStatus.COMPLETED),
                         order(OrderStatus.FAILED)
                 ));
-        when(investorRepository.findByDistributorId(distributorId)).thenReturn(List.of());
+        when(investorRepository.findAllById(any())).thenReturn(List.of());
         when(schemeRepository.findAllById(any())).thenReturn(List.of());
         when(orderRepository.findByDistributorIdAndTransactionTypeAndCreatedAtAfter(
                 eq(distributorId),
@@ -118,6 +125,121 @@ class DashboardServiceTest {
                 "Completed SIPs", 5L,
                 "Failed SIPs", 6L
         ));
+    }
+
+    @Test
+    void getActionCenterUsesBoundedStatusQueriesInsteadOfDistributorScans() {
+        UUID distributorId = UUID.randomUUID();
+        InvestorRepository investorRepository = mock(InvestorRepository.class);
+        TransactionOrderRepository orderRepository = mock(TransactionOrderRepository.class);
+        ProductSchemeRepository schemeRepository = mock(ProductSchemeRepository.class);
+        DashboardService dashboardService = new DashboardService(
+                investorRepository,
+                orderRepository,
+                schemeRepository
+        );
+
+        when(investorRepository.findByDistributorIdAndKycStatusNot(
+                eq(distributorId),
+                eq(KycStatus.COMPLETED),
+                any(Pageable.class)))
+                .thenReturn(List.of());
+        when(investorRepository.findByDistributorIdAndBankVerificationStatusNot(
+                eq(distributorId),
+                eq(BankVerificationStatus.VERIFIED),
+                any(Pageable.class)))
+                .thenReturn(List.of());
+        when(orderRepository.findByDistributorIdAndOrderStatus(
+                eq(distributorId),
+                eq(OrderStatus.FAILED),
+                any(Pageable.class)))
+                .thenReturn(List.of());
+
+        dashboardService.getActionCenter(distributorId);
+
+        ArgumentCaptor<Pageable> kycPageCaptor = ArgumentCaptor.forClass(Pageable.class);
+        ArgumentCaptor<Pageable> bankPageCaptor = ArgumentCaptor.forClass(Pageable.class);
+        ArgumentCaptor<Pageable> failedOrderPageCaptor = ArgumentCaptor.forClass(Pageable.class);
+        verify(investorRepository).findByDistributorIdAndKycStatusNot(
+                eq(distributorId),
+                eq(KycStatus.COMPLETED),
+                kycPageCaptor.capture());
+        verify(investorRepository).findByDistributorIdAndBankVerificationStatusNot(
+                eq(distributorId),
+                eq(BankVerificationStatus.VERIFIED),
+                bankPageCaptor.capture());
+        verify(orderRepository).findByDistributorIdAndOrderStatus(
+                eq(distributorId),
+                eq(OrderStatus.FAILED),
+                failedOrderPageCaptor.capture());
+        assertDashboardPage(kycPageCaptor.getValue());
+        assertDashboardPage(bankPageCaptor.getValue());
+        assertDashboardPage(failedOrderPageCaptor.getValue());
+        verify(investorRepository, never()).findByDistributorId(distributorId);
+        verify(orderRepository, never()).findByDistributorId(distributorId);
+    }
+
+    @Test
+    void getOnboardingPipelineUsesBoundedStatusQueriesInsteadOfDistributorScan() {
+        UUID distributorId = UUID.randomUUID();
+        InvestorRepository investorRepository = mock(InvestorRepository.class);
+        TransactionOrderRepository orderRepository = mock(TransactionOrderRepository.class);
+        ProductSchemeRepository schemeRepository = mock(ProductSchemeRepository.class);
+        DashboardService dashboardService = new DashboardService(
+                investorRepository,
+                orderRepository,
+                schemeRepository
+        );
+
+        when(investorRepository.findByDistributorIdAndKycStatusNot(
+                eq(distributorId),
+                eq(KycStatus.COMPLETED),
+                any(Pageable.class)))
+                .thenReturn(List.of());
+        when(investorRepository.findByDistributorIdAndKycStatusAndBankVerificationStatusNot(
+                eq(distributorId),
+                eq(KycStatus.COMPLETED),
+                eq(BankVerificationStatus.VERIFIED),
+                any(Pageable.class)))
+                .thenReturn(List.of());
+        when(investorRepository.findByDistributorIdAndKycStatusAndBankVerificationStatus(
+                eq(distributorId),
+                eq(KycStatus.COMPLETED),
+                eq(BankVerificationStatus.VERIFIED),
+                any(Pageable.class)))
+                .thenReturn(List.of());
+
+        dashboardService.getOnboardingPipeline(distributorId);
+
+        ArgumentCaptor<Pageable> kycPageCaptor = ArgumentCaptor.forClass(Pageable.class);
+        ArgumentCaptor<Pageable> bankPageCaptor = ArgumentCaptor.forClass(Pageable.class);
+        ArgumentCaptor<Pageable> readyPageCaptor = ArgumentCaptor.forClass(Pageable.class);
+        verify(investorRepository).findByDistributorIdAndKycStatusNot(
+                eq(distributorId),
+                eq(KycStatus.COMPLETED),
+                kycPageCaptor.capture());
+        verify(investorRepository).findByDistributorIdAndKycStatusAndBankVerificationStatusNot(
+                eq(distributorId),
+                eq(KycStatus.COMPLETED),
+                eq(BankVerificationStatus.VERIFIED),
+                bankPageCaptor.capture());
+        verify(investorRepository).findByDistributorIdAndKycStatusAndBankVerificationStatus(
+                eq(distributorId),
+                eq(KycStatus.COMPLETED),
+                eq(BankVerificationStatus.VERIFIED),
+                readyPageCaptor.capture());
+        assertDashboardPage(kycPageCaptor.getValue());
+        assertDashboardPage(bankPageCaptor.getValue());
+        assertDashboardPage(readyPageCaptor.getValue());
+        verify(investorRepository, never()).findByDistributorId(distributorId);
+    }
+
+    private void assertDashboardPage(Pageable pageable) {
+        assertThat(pageable.getPageNumber()).isZero();
+        assertThat(pageable.getPageSize()).isEqualTo(50);
+        Sort.Order createdAtOrder = pageable.getSort().getOrderFor("createdAt");
+        assertThat(createdAtOrder).isNotNull();
+        assertThat(createdAtOrder.getDirection()).isEqualTo(Sort.Direction.DESC);
     }
 
     private TransactionOrder order(OrderStatus status) {

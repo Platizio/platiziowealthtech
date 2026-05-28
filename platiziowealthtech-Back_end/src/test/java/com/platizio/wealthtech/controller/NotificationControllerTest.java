@@ -22,9 +22,12 @@ class NotificationControllerTest {
     @Test
     void notificationEndpointsRequirePreAuthorization() throws NoSuchMethodException {
         Method list = NotificationController.class.getMethod("list", UUID.class, Authentication.class);
+        Method unreadCount = NotificationController.class.getMethod("unreadCount", UUID.class, Authentication.class);
         Method markRead = NotificationController.class.getMethod("markRead", UUID.class, Authentication.class);
 
         assertThat(list.getAnnotation(PreAuthorize.class).value())
+                .isEqualTo("#distributorId == principal.distributorId");
+        assertThat(unreadCount.getAnnotation(PreAuthorize.class).value())
                 .isEqualTo("#distributorId == principal.distributorId");
         assertThat(markRead.getAnnotation(PreAuthorize.class).value())
                 .isEqualTo("isAuthenticated()");
@@ -68,6 +71,22 @@ class NotificationControllerTest {
         assertThat(notificationService.listedDistributorId).isNotEqualTo(attackerSuppliedPathId);
     }
 
+    @Test
+    void unreadCountQueriesByAuthenticatedPrincipalNotPathVariable() {
+        UUID principalDistributorId = UUID.randomUUID();
+        UUID attackerSuppliedPathId = UUID.randomUUID();
+        RecordingNotificationService notificationService =
+                new RecordingNotificationService(notification(principalDistributorId));
+        NotificationController controller = new NotificationController(notificationService);
+
+        NotificationController.UnreadNotificationCountResponse response =
+                controller.unreadCount(attackerSuppliedPathId, auth(principalDistributorId));
+
+        assertThat(response.unreadCount()).isEqualTo(3);
+        assertThat(notificationService.unreadCountDistributorId).isEqualTo(principalDistributorId);
+        assertThat(notificationService.unreadCountDistributorId).isNotEqualTo(attackerSuppliedPathId);
+    }
+
     private Notification notification(UUID distributorId) {
         Notification notification = new Notification();
         notification.setDistributorId(distributorId);
@@ -90,6 +109,7 @@ class NotificationControllerTest {
         private final Notification notification;
         private Notification markedNotification;
         private UUID listedDistributorId;
+        private UUID unreadCountDistributorId;
 
         RecordingNotificationService(Notification notification) {
             super(null);
@@ -105,6 +125,12 @@ class NotificationControllerTest {
         @Override
         public Notification getNotification(UUID notificationId) {
             return notification;
+        }
+
+        @Override
+        public long countUnreadByDistributor(UUID distributorId) {
+            this.unreadCountDistributorId = distributorId;
+            return 3;
         }
 
         @Override

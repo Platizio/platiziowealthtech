@@ -7,10 +7,16 @@ import com.platizio.wealthtech.domain.TransactionOrder;
 import com.platizio.wealthtech.domain.TransactionType;
 import com.platizio.wealthtech.domain.OrderStatus;
 import com.platizio.wealthtech.domain.ProductScheme;
+import com.platizio.wealthtech.domain.LifeEventReminder;
+import com.platizio.wealthtech.domain.LifeEventType;
 import com.platizio.wealthtech.dto.*;
 import com.platizio.wealthtech.repository.InvestorRepository;
 import com.platizio.wealthtech.repository.TransactionOrderRepository;
 import com.platizio.wealthtech.repository.ProductSchemeRepository;
+import com.platizio.wealthtech.repository.LifeEventReminderRepository;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
@@ -27,6 +33,9 @@ import java.util.stream.IntStream;
 
 @Service
 public class DashboardService {
+
+    private static final int ACTION_CENTER_BUCKET_LIMIT = 50;
+    private static final int ONBOARDING_COLUMN_LIMIT = 50;
 
     private static final Map<OrderStatus, String> SIP_STATUS_LABEL = Map.of(
             OrderStatus.ACTIVE, "Active SIPs",
@@ -59,11 +68,26 @@ public class DashboardService {
     private final InvestorRepository investorRepository;
     private final TransactionOrderRepository orderRepository;
     private final ProductSchemeRepository schemeRepository;
+    private final LifeEventReminderRepository lifeEventReminderRepository;
+
+    @Autowired
+    public DashboardService(
+            InvestorRepository investorRepository,
+            TransactionOrderRepository orderRepository,
+            ProductSchemeRepository schemeRepository,
+            LifeEventReminderRepository lifeEventReminderRepository
+    ) {
+        this.investorRepository = investorRepository;
+        this.orderRepository = orderRepository;
+        this.schemeRepository = schemeRepository;
+        this.lifeEventReminderRepository = lifeEventReminderRepository;
+    }
 
     public DashboardService(InvestorRepository investorRepository, TransactionOrderRepository orderRepository, ProductSchemeRepository schemeRepository) {
         this.investorRepository = investorRepository;
         this.orderRepository = orderRepository;
         this.schemeRepository = schemeRepository;
+        this.lifeEventReminderRepository = null;
     }
 
     public SipDashboardDto getSipDashboard(UUID distributorId) {
@@ -78,8 +102,14 @@ public class DashboardService {
         List<TransactionOrder> sipOrders = orderRepository
                 .findByDistributorIdAndTransactionType(distributorId, TransactionType.SIP);
 
-        Map<UUID, Investor> investorMap = investorRepository.findByDistributorId(distributorId).stream()
-                .collect(Collectors.toMap(Investor::getId, i -> i));
+        Set<UUID> sipInvestorIds = sipOrders.stream()
+                .map(TransactionOrder::getInvestorId)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toSet());
+        Map<UUID, Investor> investorMap = sipInvestorIds.isEmpty()
+                ? Map.of()
+                : investorRepository.findAllById(sipInvestorIds).stream()
+                        .collect(Collectors.toMap(Investor::getId, i -> i));
 
         // Collect only the scheme IDs actually referenced by this distributor's SIP orders,
         // then fetch just those rows — avoids a full table scan of all 482+ schemes.
@@ -163,27 +193,41 @@ public class DashboardService {
 
     public List<ActionItemDto> getActionCenter(UUID distributorId) {
         List<ActionItemDto> actions = new ArrayList<>();
-        List<Investor> investors = investorRepository.findByDistributorId(distributorId);
-        List<TransactionOrder> orders = orderRepository.findByDistributorId(distributorId);
+        PageRequest actionPage = dashboardPage(ACTION_CENTER_BUCKET_LIMIT);
+        List<Investor> kycPendingInvestors = investorRepository.findByDistributorIdAndKycStatusNot(
+                distributorId,
+                KycStatus.COMPLETED,
+                actionPage);
+        List<Investor> bankPendingInvestors = investorRepository.findByDistributorIdAndBankVerificationStatusNot(
+                distributorId,
+                BankVerificationStatus.VERIFIED,
+                actionPage);
+        List<TransactionOrder> failedOrders = orderRepository.findByDistributorIdAndOrderStatus(
+                distributorId,
+                OrderStatus.FAILED,
+                actionPage);
 
-        // O(1) investor lookup keyed by id. Replaces the previous per-order
-        // investors.stream().filter().findFirst() linear scan, which made the
-        // failed-order loop O(orders ├ù investors). Same idiom as getSipDashboard().
-        Map<UUID, Investor> investorById = investors.stream()
-                .collect(Collectors.toMap(Investor::getId, i -> i));
+        // Load only investors referenced by the bounded failed-order page.
+        Set<UUID> failedOrderInvestorIds = failedOrders.stream()
+                .map(TransactionOrder::getInvestorId)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toSet());
+        Map<UUID, Investor> investorById = failedOrderInvestorIds.isEmpty()
+                ? Map.of()
+                : investorRepository.findAllById(failedOrderInvestorIds).stream()
+                        .collect(Collectors.toMap(Investor::getId, i -> i));
 
         int idCounter = 1;
 
-        for (Investor inv : investors) {
-            if (inv.getKycStatus() != KycStatus.COMPLETED) {
-                actions.add(new ActionItemDto(String.valueOf(idCounter++), "KYC", "High", inv.getFullName(), "KYC verification is pending.", "Today"));
-            }
-            if (inv.getBankVerificationStatus() != BankVerificationStatus.VERIFIED) {
-                actions.add(new ActionItemDto(String.valueOf(idCounter++), "Bank", "Medium", inv.getFullName(), "Bank account not verified.", "1 day"));
-            }
+        for (Investor inv : kycPendingInvestors) {
+            actions.add(new ActionItemDto(String.valueOf(idCounter++), "KYC", "High", inv.getFullName(), "KYC verification is pending.", "Today"));
         }
 
-        for (TransactionOrder o : orders) {
+        for (Investor inv : bankPendingInvestors) {
+            actions.add(new ActionItemDto(String.valueOf(idCounter++), "Bank", "Medium", inv.getFullName(), "Bank account not verified.", "1 day"));
+        }
+
+        for (TransactionOrder o : failedOrders) {
             if (o.getOrderStatus() == OrderStatus.FAILED) {
                 Investor inv = investorById.get(o.getInvestorId());
                 String name = inv != null ? inv.getFullName() : "Unknown";
@@ -192,30 +236,79 @@ public class DashboardService {
             }
         }
 
+        if (lifeEventReminderRepository != null) {
+            List<LifeEventReminder> lifeEventReminders = lifeEventReminderRepository
+                    .findByDistributorIdAndStatusOrderByEventDateAsc(
+                            distributorId,
+                            com.platizio.wealthtech.domain.LifeEventReminderStatus.OPEN,
+                            actionPage);
+            Set<UUID> reminderInvestorIds = lifeEventReminders.stream()
+                    .map(LifeEventReminder::getInvestorId)
+                    .filter(Objects::nonNull)
+                    .collect(Collectors.toSet());
+            Map<UUID, Investor> reminderInvestorById = reminderInvestorIds.isEmpty()
+                    ? Map.of()
+                    : investorRepository.findAllById(reminderInvestorIds).stream()
+                            .collect(Collectors.toMap(Investor::getId, i -> i));
+            for (LifeEventReminder reminder : lifeEventReminders) {
+                Investor inv = reminderInvestorById.get(reminder.getInvestorId());
+                String name = inv != null ? inv.getFullName() : "Unknown";
+                actions.add(new ActionItemDto(
+                        String.valueOf(idCounter++),
+                        lifeEventCategory(reminder.getEventType()),
+                        lifeEventPriority(reminder.getEventDate()),
+                        name,
+                        reminder.getMessage(),
+                        dueIn(reminder.getEventDate())));
+            }
+        }
+
         return actions;
     }
 
     public OnboardingPipelineDto getOnboardingPipeline(UUID distributorId) {
-        List<Investor> investors = investorRepository.findByDistributorId(distributorId);
-        
-        List<OnboardingCardDto> kycPending = new ArrayList<>();
-        List<OnboardingCardDto> bankPending = new ArrayList<>();
-        List<OnboardingCardDto> ready = new ArrayList<>();
+        PageRequest columnPage = dashboardPage(ONBOARDING_COLUMN_LIMIT);
 
-        for (Investor inv : investors) {
-            long daysAgo = ChronoUnit.DAYS.between(inv.getCreatedAt().toLocalDate(), LocalDate.now());
-            String daysStr = daysAgo == 0 ? "Today" : daysAgo + " days ago";
-            
-            if (inv.getKycStatus() != KycStatus.COMPLETED) {
-                kycPending.add(new OnboardingCardDto(inv.getId().toString(), inv.getFullName(), "KYC Pending", daysStr, "kyc"));
-            } else if (inv.getBankVerificationStatus() != BankVerificationStatus.VERIFIED) {
-                bankPending.add(new OnboardingCardDto(inv.getId().toString(), inv.getFullName(), "Bank Pending", daysStr, "bank"));
-            } else {
-                ready.add(new OnboardingCardDto(inv.getId().toString(), inv.getFullName(), "Ready to Invest", daysStr, "ready"));
-            }
-        }
+        List<OnboardingCardDto> kycPending = investorRepository
+                .findByDistributorIdAndKycStatusNot(distributorId, KycStatus.COMPLETED, columnPage)
+                .stream()
+                .map(inv -> onboardingCard(inv, "KYC Pending", "kyc"))
+                .collect(Collectors.toList());
+        List<OnboardingCardDto> bankPending = investorRepository
+                .findByDistributorIdAndKycStatusAndBankVerificationStatusNot(
+                        distributorId,
+                        KycStatus.COMPLETED,
+                        BankVerificationStatus.VERIFIED,
+                        columnPage)
+                .stream()
+                .map(inv -> onboardingCard(inv, "Bank Pending", "bank"))
+                .collect(Collectors.toList());
+        List<OnboardingCardDto> ready = investorRepository
+                .findByDistributorIdAndKycStatusAndBankVerificationStatus(
+                        distributorId,
+                        KycStatus.COMPLETED,
+                        BankVerificationStatus.VERIFIED,
+                        columnPage)
+                .stream()
+                .map(inv -> onboardingCard(inv, "Ready to Invest", "ready"))
+                .collect(Collectors.toList());
 
         return new OnboardingPipelineDto(kycPending, bankPending, ready);
+    }
+
+    private PageRequest dashboardPage(int size) {
+        return PageRequest.of(0, size, Sort.by(Sort.Direction.DESC, "createdAt"));
+    }
+
+    private OnboardingCardDto onboardingCard(Investor investor, String detail, String status) {
+        long daysAgo = ChronoUnit.DAYS.between(investor.getCreatedAt().toLocalDate(), LocalDate.now());
+        String daysStr = daysAgo == 0 ? "Today" : daysAgo + " days ago";
+        return new OnboardingCardDto(
+                investor.getId().toString(),
+                investor.getFullName(),
+                detail,
+                daysStr,
+                status);
     }
 
     private Map<String, Long> sipStatusCounts(UUID distributorId) {
@@ -230,5 +323,25 @@ public class DashboardService {
     private String sipStatusLabel(OrderStatus orderStatus) {
         OrderStatus groupedStatus = SIP_STATUS_GROUP.getOrDefault(orderStatus, OrderStatus.PROCESSING);
         return SIP_STATUS_LABEL.get(groupedStatus);
+    }
+
+    private String lifeEventCategory(LifeEventType eventType) {
+        return eventType == LifeEventType.GOAL_MATURITY ? "Maturing" : "Life Event";
+    }
+
+    private String lifeEventPriority(LocalDate eventDate) {
+        long daysUntil = ChronoUnit.DAYS.between(LocalDate.now(), eventDate);
+        return daysUntil <= 1 ? "High" : "Medium";
+    }
+
+    private String dueIn(LocalDate eventDate) {
+        long daysUntil = ChronoUnit.DAYS.between(LocalDate.now(), eventDate);
+        if (daysUntil <= 0) {
+            return "Today";
+        }
+        if (daysUntil == 1) {
+            return "1 day";
+        }
+        return daysUntil + " days";
     }
 }

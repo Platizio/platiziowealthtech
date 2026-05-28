@@ -4,19 +4,17 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.platizio.wealthtech.service.AuthCookieService;
 import com.platizio.wealthtech.service.BlockedTokenService;
-import com.platizio.wealthtech.service.CustomUserDetailsService;
 import com.platizio.wealthtech.service.JwtService;
+import io.jsonwebtoken.Claims;
+import io.jsonwebtoken.Jwts;
 import jakarta.servlet.FilterChain;
-import java.io.IOException;
-import java.util.List;
+import java.util.Date;
+import java.util.UUID;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.security.core.context.SecurityContextHolder;
-import org.springframework.security.core.authority.SimpleGrantedAuthority;
-import org.springframework.security.core.userdetails.User;
-import org.springframework.security.core.userdetails.UserDetails;
 
 class JwtAuthFilterTest {
 
@@ -48,7 +46,6 @@ class JwtAuthFilterTest {
     private JwtAuthFilter filter(boolean blocked) {
         return new JwtAuthFilter(
                 new TestJwtService(),
-                new TestUserDetailsService(),
                 new AuthCookieService("access_token", "refresh_token", false, "Lax", 1_800_000, 604_800_000),
                 new TestBlockedTokenService(blocked)
         );
@@ -69,34 +66,14 @@ class JwtAuthFilterTest {
     private static class TestJwtService extends JwtService {
 
         @Override
-        public boolean isTokenValid(String token) {
-            return true;
-        }
-
-        @Override
-        public String extractJti(String token) {
-            return "test-jti";
-        }
-
-        @Override
-        public String extractEmail(String token) {
-            return "user@example.com";
-        }
-    }
-
-    private static class TestUserDetailsService extends CustomUserDetailsService {
-
-        TestUserDetailsService() {
-            super(null);
-        }
-
-        @Override
-        public UserDetails loadUserByUsername(String username) {
-            return new User(
-                    username,
-                    "",
-                    List.of(new SimpleGrantedAuthority("ROLE_SUB_DISTRIBUTOR"))
-            );
+        public Claims extractAllClaims(String token) {
+            return Jwts.claims()
+                    .id("test-jti")
+                    .subject(UUID.randomUUID().toString())
+                    .add("email", "user@example.com")
+                    .add("role", "SUB_DISTRIBUTOR")
+                    .expiration(new Date(System.currentTimeMillis() + 60_000))
+                    .build();
         }
     }
 

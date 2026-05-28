@@ -18,10 +18,17 @@ public class NotificationService {
         this.notificationRepository = notificationRepository;
     }
 
+    @Transactional(readOnly = true)
     public List<Notification> listByDistributor(UUID distributorId) {
         return notificationRepository.findByDistributorIdOrderByCreatedAtDesc(distributorId);
     }
 
+    @Transactional(readOnly = true)
+    public long countUnreadByDistributor(UUID distributorId) {
+        return notificationRepository.countByDistributorIdAndReadFlagFalse(distributorId);
+    }
+
+    @Transactional(readOnly = true)
     public Notification getNotification(UUID notificationId) {
         // EntityNotFoundException is the codebase-wide convention for 404s and is
         // already mapped to HTTP 404 by GlobalExceptionHandler. Including the id

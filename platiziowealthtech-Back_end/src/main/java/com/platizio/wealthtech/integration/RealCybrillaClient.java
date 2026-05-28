@@ -6,14 +6,19 @@ import com.platizio.wealthtech.domain.InvestorBankAccount;
 import com.platizio.wealthtech.domain.ProductCategory;
 import com.platizio.wealthtech.domain.ProductScheme;
 import com.platizio.wealthtech.domain.TransactionOrder;
+import com.platizio.wealthtech.domain.TransactionType;
+import com.platizio.wealthtech.integration.auth.ExternalApiAuthenticationException;
 import com.platizio.wealthtech.integration.auth.ExternalBearerTokenService;
 import com.platizio.wealthtech.integration.auth.FinprimTenantProperties;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.function.Supplier;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -23,6 +28,7 @@ import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 import org.springframework.web.client.RestClient;
+import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestClientResponseException;
 
 @Component
@@ -35,21 +41,28 @@ public class RealCybrillaClient implements CybrillaClient {
     private static final int FUND_SCHEME_MAX_PAGES = 50;
     private static final int FUND_SCHEME_RATE_LIMIT_RETRIES = 3;
     private static final long FUND_SCHEME_RATE_LIMIT_BACKOFF_MILLIS = 5_000L;
+    private static final String IDEMPOTENCY_KEY_HEADER = "Idempotency-Key";
+    private static final String MF_PURCHASES_PATH = "/v2/mf_purchases";
+    private static final String MF_PURCHASE_PLANS_PATH = "/v2/mf_purchase_plans";
+    private static final String MF_REDEMPTIONS_PATH = "/v2/mf_redemptions";
 
     private final RestClient restClient;
     private final ExternalBearerTokenService tokenService;
     private final FinprimTenantProperties finprimProperties;
+    private final MeterRegistry meterRegistry;
 
     public RealCybrillaClient(
             RestClient.Builder restClientBuilder,
             ExternalBearerTokenService tokenService,
-            FinprimTenantProperties finprimProperties
+            FinprimTenantProperties finprimProperties,
+            MeterRegistry meterRegistry
     ) {
         this.restClient = restClientBuilder
                 .baseUrl(finprimProperties.getBaseUrl())
                 .build();
         this.tokenService = tokenService;
         this.finprimProperties = finprimProperties;
+        this.meterRegistry = meterRegistry;
         logger.info("cybrilla_client mode='real' base_url='{}' tenant_header_configured='{}'", finprimProperties.getBaseUrl(), StringUtils.hasText(finprimProperties.tenantHeaderValue()));
     }
 
@@ -57,7 +70,7 @@ public class RealCybrillaClient implements CybrillaClient {
     public String createInvestorProfile(Investor investor) {
         logger.info("cybrilla_workflow operation='create_investor_profile' status='started' local_investor_id='{}'", investor.getId());
         String profileId = executeWithTenantTokenRetry("create investor profile", () -> {
-            JsonNode response = post("/v2/investor_profiles", investorProfilePayload(investor));
+            JsonNode response = post("create_investor_profile", "/v2/investor_profiles", investorProfilePayload(investor));
             return extractId(response, "investor profile");
         });
         logger.info("cybrilla_workflow operation='create_investor_profile' status='completed' local_investor_id='{}' external_profile_id='{}'", investor.getId(), profileId);
@@ -70,17 +83,147 @@ public class RealCybrillaClient implements CybrillaClient {
     }
 
     @Override
+    public String createMfInvestmentAccount(Investor investor) {
+        if (!StringUtils.hasText(investor.getCybrillaInvestorId())) {
+            throw new CybrillaApiException("Investor must have a Cybrilla/FP investor profile id before opening an MF investment account");
+        }
+
+        String investmentAccountId = executeWithTenantTokenRetry("create MF investment account", () -> {
+            JsonNode response = post("create_mf_investment_account", "/v2/mf_investment_accounts", mfInvestmentAccountPayload(investor));
+            return extractId(response, "MF investment account");
+        });
+        logger.info("cybrilla_workflow operation='create_mf_investment_account' status='completed' local_investor_id='{}' external_mf_investment_account_id='{}'", investor.getId(), investmentAccountId);
+        return investmentAccountId;
+    }
+
+    @Override
     public void captureBankAccount(Investor investor, InvestorBankAccount bankAccount) {
         if (!StringUtils.hasText(investor.getCybrillaInvestorId())) {
             throw new CybrillaApiException("Investor must have a Cybrilla/FP investor profile id before adding a bank account");
         }
 
         String bankAccountId = executeWithTenantTokenRetry("create bank account", () -> {
-            JsonNode response = post("/v2/bank_accounts", bankAccountPayload(investor, bankAccount));
+            JsonNode response = post("create_bank_account", "/v2/bank_accounts", bankAccountPayload(investor, bankAccount));
             return extractId(response, "bank account");
         });
         logger.info("cybrilla_workflow operation='create_bank_account' status='completed' local_investor_id='{}' local_bank_id='{}' external_bank_id='{}'", investor.getId(), bankAccount.getId(), bankAccountId);
         bankAccount.setCybrillaBankId(bankAccountId);
+
+        try {
+            JsonNode verification = executeWithTenantTokenRetry("create bank account verification", () ->
+                    post("create_bank_account_verification", "/v2/bank_account_verifications", bankAccountVerificationPayload(bankAccountId)));
+            bankAccount.setCybrillaBankVerificationId(extractId(verification, "bank account verification"));
+            bankAccount.setCybrillaBankVerificationStatus(firstText(verification, "status"));
+            bankAccount.setCybrillaBankVerificationConfidence(firstText(verification, "confidence"));
+            logger.info("cybrilla_workflow operation='create_bank_account_verification' status='completed' local_bank_id='{}' external_verification_id='{}'", bankAccount.getId(), bankAccount.getCybrillaBankVerificationId());
+        } catch (CybrillaApiException ex) {
+            bankAccount.setExternalSyncPending(true);
+            bankAccount.setExternalSyncMessage("Bank account was captured in Fintech Primitives, but bank verification could not be started. Please confirm bank verification is enabled for this tenant.");
+            logger.warn("cybrilla_workflow operation='create_bank_account_verification' status='pending' local_bank_id='{}' external_bank_id='{}' reason='{}'", bankAccount.getId(), bankAccountId, ex.getMessage());
+        }
+    }
+
+    @Override
+    public JsonNode fetchBankAccountVerification(String bankAccountVerificationId) {
+        if (!StringUtils.hasText(bankAccountVerificationId)) {
+            throw new CybrillaApiException("Bank account verification id is required");
+        }
+        return executeWithTenantTokenRetry("fetch bank account verification", () ->
+                get("fetch_bank_account_verification", "/v2/bank_account_verifications/" + bankAccountVerificationId.trim()));
+    }
+
+    @Override
+    public JsonNode createKycCheck(String pan, LocalDate dateOfBirth) {
+        return executeWithTenantTokenRetry("create KYC check", () ->
+                post("create_kyc_check", "/api/kyc/check", kycCheckPayload(pan, dateOfBirth)));
+    }
+
+    @Override
+    public JsonNode fetchKycCheck(String kycCheckId) {
+        return executeWithTenantTokenRetry("fetch KYC check", () ->
+                get("fetch_kyc_check", "/api/kyc/" + kycCheckId));
+    }
+
+    @Override
+    public JsonNode refetchKycCheck(String kycCheckId) {
+        return executeWithTenantTokenRetry("refetch KYC check", () ->
+                put("refetch_kyc_check", "/api/kyc/" + kycCheckId + "/refetch"));
+    }
+
+    @Override
+    public JsonNode listKycRequests(String pan, String status) {
+        return executeWithTenantTokenRetry("list KYC requests", () ->
+                recordApiRequest("list_kyc_requests", () -> restClient.get()
+                        .uri(uriBuilder -> {
+                            var builder = uriBuilder.path("/v2/kyc_requests");
+                            if (StringUtils.hasText(pan)) {
+                                builder.queryParam("pan", pan.trim().toUpperCase());
+                            }
+                            if (StringUtils.hasText(status)) {
+                                builder.queryParam("status", status.trim());
+                            }
+                            return builder.build();
+                        })
+                        .headers(this::setTenantAuthHeaders)
+                        .retrieve()
+                        .body(JsonNode.class)));
+    }
+
+    @Override
+    public JsonNode createKycRequest(Map<String, Object> payload) {
+        return executeWithTenantTokenRetry("create KYC request", () ->
+                post("create_kyc_request", "/v2/kyc_requests", payload));
+    }
+
+    @Override
+    public JsonNode fetchKycRequest(String kycRequestId) {
+        return executeWithTenantTokenRetry("fetch KYC request", () ->
+                get("fetch_kyc_request", "/v2/kyc_requests/" + kycRequestId));
+    }
+
+    @Override
+    public JsonNode updateKycRequest(String kycRequestId, Map<String, Object> payload) {
+        return executeWithTenantTokenRetry("update KYC request", () ->
+                patch("update_kyc_request", "/v2/kyc_requests/" + kycRequestId, payload));
+    }
+
+    @Override
+    public JsonNode simulateKycRequest(String kycRequestId, String status) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        put(payload, "status", status);
+        return executeWithTenantTokenRetry("simulate KYC request", () ->
+                post("simulate_kyc_request", "/v2/kyc_requests/" + kycRequestId + "/simulate", payload));
+    }
+
+    @Override
+    public JsonNode createIdentityDocument(Map<String, Object> payload) {
+        return executeWithTenantTokenRetry("create identity document", () ->
+                post("create_identity_document", "/v2/identity_documents", payload));
+    }
+
+    @Override
+    public JsonNode fetchIdentityDocument(String identityDocumentId) {
+        return executeWithTenantTokenRetry("fetch identity document", () ->
+                get("fetch_identity_document", "/v2/identity_documents/" + identityDocumentId));
+    }
+
+    @Override
+    public JsonNode listIdentityDocuments(String kycRequestId, String fetchStatus) {
+        return executeWithTenantTokenRetry("list identity documents", () ->
+                recordApiRequest("list_identity_documents", () -> restClient.get()
+                        .uri(uriBuilder -> {
+                            var builder = uriBuilder.path("/v2/identity_documents");
+                            if (StringUtils.hasText(kycRequestId)) {
+                                builder.queryParam("kyc_request", kycRequestId.trim());
+                            }
+                            if (StringUtils.hasText(fetchStatus)) {
+                                builder.queryParam("fetch.status", fetchStatus.trim());
+                            }
+                            return builder.build();
+                        })
+                        .headers(this::setTenantAuthHeaders)
+                        .retrieve()
+                        .body(JsonNode.class)));
     }
 
     @Override
@@ -135,18 +278,52 @@ public class RealCybrillaClient implements CybrillaClient {
     }
 
     @Override
-    public String createOrder(TransactionOrder order, Investor investor) {
-        return "cyb-order-" + UUID.randomUUID();
+    public String createOrder(TransactionOrder order, Investor investor, ProductScheme productScheme) {
+        if (!StringUtils.hasText(investor.getCybrillaInvestorId())) {
+            throw new CybrillaApiException("Investor must have a Cybrilla/FP investor profile id before order creation");
+        }
+        if (!StringUtils.hasText(investor.getExternalMfInvestmentAccountId())) {
+            throw new CybrillaApiException("Investor must have a Fintech Primitives MF investment account id before order creation");
+        }
+
+        return executeWithTenantTokenRetry("create order", () -> {
+            boolean sipOrder = order.getTransactionType() == TransactionType.SIP;
+            JsonNode response = post(
+                    sipOrder ? "create_mf_purchase_plan" : "create_mf_purchase",
+                    sipOrder ? MF_PURCHASE_PLANS_PATH : MF_PURCHASES_PATH,
+                    sipOrder ? mfPurchasePlanPayload(order, investor, productScheme) : mfPurchasePayload(order, investor, productScheme),
+                    idempotencyKey("order", order.getId())
+            );
+            return extractId(response, "order");
+        });
     }
 
     @Override
     public String generateInvestorActionUrl(TransactionOrder order) {
-        return "https://example.com/investor-action/" + order.getId();
+        String token = StringUtils.hasText(order.getInvestorActionToken())
+                ? order.getInvestorActionToken()
+                : String.valueOf(order.getId());
+        return "/investor-actions/" + token;
     }
 
     @Override
-    public String createRedemption(TransactionOrder order) {
-        return "cyb-red-" + UUID.randomUUID();
+    public String createRedemption(TransactionOrder order, Investor investor, ProductScheme productScheme) {
+        if (!StringUtils.hasText(order.getExternalOrderId())) {
+            throw new CybrillaApiException("Order must have a Cybrilla/FP external order id before redemption");
+        }
+        if (!StringUtils.hasText(investor.getExternalMfInvestmentAccountId())) {
+            throw new CybrillaApiException("Investor must have a Fintech Primitives MF investment account id before redemption");
+        }
+
+        return executeWithTenantTokenRetry("create redemption", () -> {
+            JsonNode response = post(
+                    "create_mf_redemption",
+                    MF_REDEMPTIONS_PATH,
+                    redemptionPayload(order, investor, productScheme),
+                    idempotencyKey("redemption", order.getId())
+            );
+            return extractId(response, "redemption");
+        });
     }
 
     @Override
@@ -157,7 +334,10 @@ public class RealCybrillaClient implements CybrillaClient {
         }
 
         executeWithTenantTokenRetry("cancel order", () -> {
-            delete("/v2/orders/" + order.getExternalOrderId());
+            String path = (order.getTransactionType() == TransactionType.SIP ? MF_PURCHASE_PLANS_PATH : MF_PURCHASES_PATH)
+                    + "/" + order.getExternalOrderId()
+                    + "/cancel";
+            post("cancel_order", path, idempotencyKey("cancel-order", order.getId()));
             logger.info("cybrilla_workflow operation='cancel_order' status='completed' local_order_id='{}' external_order_id='{}'", order.getId(), order.getExternalOrderId());
             return null;
         });
@@ -169,7 +349,7 @@ public class RealCybrillaClient implements CybrillaClient {
         }
 
         executeWithTenantTokenRetry("create investor address", () -> {
-            post("/v2/addresses", addressPayload(profileId, investor));
+            post("create_investor_address", "/v2/addresses", addressPayload(profileId, investor));
             logger.info("cybrilla_workflow operation='create_investor_address' status='completed' external_profile_id='{}'", profileId);
             return null;
         });
@@ -181,7 +361,7 @@ public class RealCybrillaClient implements CybrillaClient {
         }
 
         executeWithTenantTokenRetry("create investor email", () -> {
-            post("/v2/email_addresses", emailPayload(profileId, investor));
+            post("create_investor_email", "/v2/email_addresses", emailPayload(profileId, investor));
             logger.info("cybrilla_workflow operation='create_investor_email' status='completed' external_profile_id='{}'", profileId);
             return null;
         });
@@ -193,44 +373,94 @@ public class RealCybrillaClient implements CybrillaClient {
         }
 
         executeWithTenantTokenRetry("create investor phone number", () -> {
-            post("/v2/phone_numbers", phonePayload(profileId, investor));
+            post("create_investor_phone", "/v2/phone_numbers", phonePayload(profileId, investor));
             logger.info("cybrilla_workflow operation='create_investor_phone' status='completed' external_profile_id='{}'", profileId);
             return null;
         });
     }
 
-    private JsonNode post(String path, Map<String, Object> payload) {
+    private JsonNode post(String operation, String path, Map<String, Object> payload) {
+        return post(operation, path, payload, null);
+    }
+
+    private JsonNode post(String operation, String path, Map<String, Object> payload, String idempotencyKey) {
         logger.info("cybrilla_api direction='backend_to_finprim' method='POST' path='{}' payload_fields='{}'", path, payload.keySet());
-        return restClient.post()
-                .uri(path)
-                .contentType(MediaType.APPLICATION_JSON)
-                .headers(this::setTenantAuthHeaders)
-                .body(payload)
-                .retrieve()
-                .body(JsonNode.class);
+        return recordApiRequest(operation, () -> restClient.post()
+                    .uri(path)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .headers(headers -> setTenantAuthHeaders(headers, idempotencyKey))
+                    .body(payload)
+                    .retrieve()
+                    .body(JsonNode.class));
+    }
+
+    private JsonNode post(String operation, String path, String idempotencyKey) {
+        logger.info("cybrilla_api direction='backend_to_finprim' method='POST' path='{}' payload_fields='none'", path);
+        return recordApiRequest(operation, () -> restClient.post()
+                    .uri(path)
+                    .headers(headers -> setTenantAuthHeaders(headers, idempotencyKey))
+                    .retrieve()
+                    .body(JsonNode.class));
+    }
+
+    private JsonNode patch(String operation, String path, Map<String, Object> payload) {
+        logger.info("cybrilla_api direction='backend_to_finprim' method='PATCH' path='{}' payload_fields='{}'", path, payload.keySet());
+        return recordApiRequest(operation, () -> restClient.patch()
+                    .uri(path)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .headers(this::setTenantAuthHeaders)
+                    .body(payload)
+                    .retrieve()
+                    .body(JsonNode.class));
+    }
+
+    private JsonNode put(String operation, String path) {
+        logger.info("cybrilla_api direction='backend_to_finprim' method='PUT' path='{}'", path);
+        return recordApiRequest(operation, () -> restClient.put()
+                    .uri(path)
+                    .headers(this::setTenantAuthHeaders)
+                    .retrieve()
+                    .body(JsonNode.class));
+    }
+
+    private JsonNode get(String operation, String path) {
+        logger.info("cybrilla_api direction='backend_to_finprim' method='GET' path='{}'", path);
+        return recordApiRequest(operation, () -> restClient.get()
+                    .uri(path)
+                    .headers(this::setTenantAuthHeaders)
+                    .retrieve()
+                    .body(JsonNode.class));
     }
 
     private void delete(String path) {
         logger.info("cybrilla_api direction='backend_to_finprim' method='DELETE' path='{}'", path);
-        restClient.delete()
-                .uri(path)
-                .headers(this::setTenantAuthHeaders)
-                .retrieve()
-                .toBodilessEntity();
+        recordApiRequest("cancel_order", () -> restClient.delete()
+                    .uri(path)
+                    .headers(this::setTenantAuthHeaders)
+                    .retrieve()
+                    .toBodilessEntity());
     }
 
     private JsonNode getFundSchemesPage(int page, int size) {
         logger.debug("cybrilla_api direction='backend_to_finprim' method='GET' path='/v2/mf_scheme_plans/cybrillapoa' page='{}' size='{}'", page, size);
-        return restClient.get()
-                .uri(uriBuilder -> uriBuilder
-                        .path("/v2/mf_scheme_plans/cybrillapoa")
-                        .queryParam("expand", "mf_scheme,mf_fund")
-                        .queryParam("page", page)
-                        .queryParam("size", size)
-                        .build())
-                .headers(this::setTenantAuthHeaders)
-                .retrieve()
-                .body(JsonNode.class);
+        return recordApiRequest("fetch_fund_schemes", () -> restClient.get()
+                    .uri(uriBuilder -> uriBuilder
+                            .path("/v2/mf_scheme_plans/cybrillapoa")
+                            .queryParam("expand", "mf_scheme,mf_fund")
+                            .queryParam("page", page)
+                            .queryParam("size", size)
+                            .build())
+                    .headers(this::setTenantAuthHeaders)
+                    .retrieve()
+                    .body(JsonNode.class));
+    }
+
+    private <T> T recordApiRequest(String operation, Supplier<T> requestSupplier) {
+        return Timer.builder("cybrilla.api.request")
+                .description("Latency of Cybrilla/Fintech Primitives API requests")
+                .tag("operation", operation)
+                .register(meterRegistry)
+                .record(requestSupplier);
     }
 
     private JsonNode getFundSchemesPageWithRateLimitRetry(int page, int size) {
@@ -274,9 +504,16 @@ public class RealCybrillaClient implements CybrillaClient {
     }
 
     private void setTenantAuthHeaders(HttpHeaders headers) {
+        setTenantAuthHeaders(headers, null);
+    }
+
+    private void setTenantAuthHeaders(HttpHeaders headers, String idempotencyKey) {
         headers.setBearerAuth(tokenService.getFinprimTenantAccessToken());
         if (StringUtils.hasText(finprimProperties.tenantHeaderValue())) {
             headers.set(TENANT_HEADER, finprimProperties.tenantHeaderValue());
+        }
+        if (StringUtils.hasText(idempotencyKey)) {
+            headers.set(IDEMPOTENCY_KEY_HEADER, idempotencyKey);
         }
     }
 
@@ -293,6 +530,10 @@ public class RealCybrillaClient implements CybrillaClient {
                 }
             }
             throw apiException(operation, ex);
+        } catch (RestClientException ex) {
+            throw apiException(operation, ex);
+        } catch (ExternalApiAuthenticationException ex) {
+            throw new CybrillaApiException("Unable to authenticate with Fintech Primitives while trying to " + operation, ex);
         }
     }
 
@@ -303,6 +544,23 @@ public class RealCybrillaClient implements CybrillaClient {
                 "Unable to " + operation + " with Fintech Primitives: " + ex.getStatusCode() + detail,
                 ex
         );
+    }
+
+    private CybrillaApiException apiException(String operation, RestClientException ex) {
+        return new CybrillaApiException(
+                "Unable to " + operation + " with Fintech Primitives: " + rootCauseMessage(ex),
+                ex
+        );
+    }
+
+    private String rootCauseMessage(Throwable throwable) {
+        Throwable current = throwable;
+        Throwable root = throwable;
+        while (current != null) {
+            root = current;
+            current = current.getCause();
+        }
+        return root.getMessage() == null ? throwable.getClass().getSimpleName() : root.getMessage();
     }
 
     private Map<String, Object> investorProfilePayload(Investor investor) {
@@ -363,6 +621,87 @@ public class RealCybrillaClient implements CybrillaClient {
         put(payload, "type", "savings");
         put(payload, "ifsc_code", bankAccount.getIfscCode());
         return payload;
+    }
+
+    private Map<String, Object> mfInvestmentAccountPayload(Investor investor) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        put(payload, "primary_investor", investor.getCybrillaInvestorId());
+        put(payload, "holding_pattern", "single");
+        return payload;
+    }
+
+    private Map<String, Object> bankAccountVerificationPayload(String bankAccountId) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        put(payload, "bank_account", bankAccountId);
+        return payload;
+    }
+
+    private Map<String, Object> kycCheckPayload(String pan, LocalDate dateOfBirth) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        put(payload, "pan", pan == null ? null : pan.trim().toUpperCase());
+        if (dateOfBirth != null) {
+            put(payload, "date_of_birth", dateOfBirth.toString());
+        }
+        return payload;
+    }
+
+    private Map<String, Object> mfPurchasePayload(TransactionOrder order, Investor investor, ProductScheme productScheme) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        put(payload, "source_ref_id", order.getId() == null ? null : order.getId().toString());
+        put(payload, "mf_investment_account", investor.getExternalMfInvestmentAccountId());
+        put(payload, "scheme", schemeIdentifier(productScheme));
+        put(payload, "amount", order.getAmount());
+        return payload;
+    }
+
+    private Map<String, Object> mfPurchasePlanPayload(TransactionOrder order, Investor investor, ProductScheme productScheme) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        put(payload, "source_ref_id", order.getId() == null ? null : order.getId().toString());
+        put(payload, "mf_investment_account", investor.getExternalMfInvestmentAccountId());
+        put(payload, "scheme", schemeIdentifier(productScheme));
+        put(payload, "amount", order.getAmount());
+        put(payload, "systematic", true);
+        put(payload, "frequency", externalFrequency(order.getSipFrequency()));
+        put(payload, "start_date", order.getSipStartDate() == null ? null : order.getSipStartDate().toString());
+        put(payload, "number_of_installments", order.getSipInstalments());
+        put(payload, "auto_generate_installments", true);
+        return payload;
+    }
+
+    private Map<String, Object> redemptionPayload(TransactionOrder order, Investor investor, ProductScheme productScheme) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        put(payload, "source_ref_id", order.getId() == null ? null : "redemption-" + order.getId());
+        put(payload, "mf_investment_account", investor.getExternalMfInvestmentAccountId());
+        put(payload, "scheme", schemeIdentifier(productScheme));
+        put(payload, "amount", order.getAmount());
+        put(payload, "units", order.getUnits());
+        return payload;
+    }
+
+    private String schemeIdentifier(ProductScheme productScheme) {
+        if (productScheme == null) {
+            throw new CybrillaApiException("Product scheme is required before order creation");
+        }
+        String scheme = defaultText(productScheme.getExternalIsin(), productScheme.getExternalSchemeCode());
+        if (!StringUtils.hasText(scheme)) {
+            throw new CybrillaApiException("Product scheme must have an external ISIN or scheme code before order creation");
+        }
+        return scheme;
+    }
+
+    private String externalFrequency(String sipFrequency) {
+        if (!StringUtils.hasText(sipFrequency)) {
+            return null;
+        }
+        return switch (sipFrequency.trim().toUpperCase()) {
+            case "MONTHLY" -> "monthly";
+            case "QUARTERLY" -> "quarterly";
+            default -> sipFrequency.trim().toLowerCase();
+        };
+    }
+
+    private String idempotencyKey(String prefix, UUID id) {
+        return id == null ? null : prefix + "-" + id;
     }
 
     private ProductScheme toProductScheme(JsonNode schemeNode) {
