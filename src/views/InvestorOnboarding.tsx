@@ -444,20 +444,18 @@ export default function InvestorOnboarding({ prospect, userData, onComplete, onB
     setKycValidationErrors({});
 
     try {
+      const investor = await ensureInvestorDraftForKyc();
       console.log('poa_pre_verification_request=', {
-        endpoint: 'POST /api/v1/investors/pre-verifications',
+        endpoint: `POST /api/v1/investors/${investor.id}/kyc-checks`,
+        localInvestorId: investor.id,
         pan: normalizePan(s1.pan),
         name: fullName,
         dateOfBirth: s1.dob,
       });
-      const response = await apiFetch('/investors/pre-verifications', {
+      const response = await apiFetch(`/investors/${investor.id}/kyc-checks`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          fullName,
-          pan: normalizePan(s1.pan),
-          dateOfBirth: s1.dob || null,
-        }),
+        body: JSON.stringify({ dateOfBirth: s1.dob || null }),
       });
       const result = await readJsonSafely(response);
       console.log('poa_pre_verification_response=', {
@@ -492,8 +490,13 @@ export default function InvestorOnboarding({ prospect, userData, onComplete, onB
 
   const refreshPoaPreVerification = async () => {
     const kycCheckId = kycPreVerification?.id;
+    const investorId = draftInvestor?.id;
     if (!kycCheckId) {
       setKycActionError('Run POA pre-verification before refreshing the status.');
+      return;
+    }
+    if (!investorId) {
+      setKycActionError('Create the investor draft by running POA pre-verification first.');
       return;
     }
 
@@ -503,9 +506,10 @@ export default function InvestorOnboarding({ prospect, userData, onComplete, onB
 
     try {
       console.log('poa_pre_verification_fetch_request=', {
-        endpoint: `GET /api/v1/investors/pre-verifications/${kycCheckId}`,
+        endpoint: `GET /api/v1/investors/${investorId}/kyc-checks/${kycCheckId}`,
+        localInvestorId: investorId,
       });
-      const response = await apiFetch(`/investors/pre-verifications/${kycCheckId}`);
+      const response = await apiFetch(`/investors/${investorId}/kyc-checks/${kycCheckId}`);
       const result = await readJsonSafely(response);
       console.log('poa_pre_verification_fetch_response=', {
         status: response.status,

@@ -342,6 +342,9 @@ export default function Investors({
   const [size, setSize] = useState(20);
   const [totalPages, setTotalPages] = useState(1);
   const [totalElements, setTotalElements] = useState(0);
+  const [kycRefreshingIds, setKycRefreshingIds] = useState<Record<string, boolean>>({});
+  const [bulkKycRefreshing, setBulkKycRefreshing] = useState(false);
+  const [kycRefreshNotice, setKycRefreshNotice] = useState('');
   const hasLoadedRef = React.useRef(false);
   const baseInvestorsRef = React.useRef<any[]>([]);
   const distributorId = userData?.id;
@@ -420,6 +423,96 @@ export default function Investors({
     const matchStatus = statusFilter === 'All' || inv.investorStatus === statusFilter;
     return matchSearch && matchKyc && matchStatus;
   });
+  const syncableVisibleInvestors = filtered.filter(inv => inv.externalKycCheckId || inv.externalKycRequestId);
+
+  const updateInvestorInState = (updatedInvestor: any) => {
+    if (!updatedInvestor?.id) return;
+    setInvestors(prev => prev.map(inv => inv.id === updatedInvestor.id ? { ...inv, ...updatedInvestor } : inv));
+    baseInvestorsRef.current = baseInvestorsRef.current.map(inv =>
+      inv.id === updatedInvestor.id ? { ...inv, ...updatedInvestor } : inv,
+    );
+    setSelectedInvestor(prev => prev?.id === updatedInvestor.id ? { ...prev, ...updatedInvestor } : prev);
+  };
+
+  const readKycActionResponse = async (response: Response, fallbackMessage: string) => {
+    const data = await response.json().catch(() => null);
+    if (!response.ok) {
+      const error = new Error(data?.message || `${fallbackMessage} failed with HTTP ${response.status}.`);
+      (error as any).status = response.status;
+      (error as any).data = data;
+      throw error;
+    }
+    return data;
+  };
+
+  const refreshInvestorKycWithSavedIds = async (investor: any) => {
+    let latestInvestor = investor;
+    let latestData: any = null;
+
+    if (investor.externalKycCheckId) {
+      const response = await apiFetch(`/investors/${investor.id}/kyc-checks/${investor.externalKycCheckId}`);
+      latestData = await readKycActionResponse(response, 'KYC check refresh');
+      if (latestData?.investor) {
+        latestInvestor = { ...latestInvestor, ...latestData.investor };
+      }
+    }
+
+    if (latestInvestor.kycStatus !== 'COMPLETED' && investor.externalKycRequestId) {
+      const response = await apiFetch(`/investors/${investor.id}/kyc-requests/${investor.externalKycRequestId}`);
+      latestData = await readKycActionResponse(response, 'KYC request refresh');
+    }
+
+    if (!latestData) {
+      throw new Error('This investor does not have a saved Cybrilla KYC check or KYC request id.');
+    }
+    return latestData;
+  };
+
+  const refreshInvestorKycStatus = async (investor: any, showNotice = true) => {
+    if (!investor?.id) return null;
+    setKycRefreshingIds(prev => ({ ...prev, [investor.id]: true }));
+    if (showNotice) setKycRefreshNotice('');
+    try {
+      const data = await refreshInvestorKycWithSavedIds(investor);
+      if (data?.investor) {
+        updateInvestorInState(data.investor);
+      }
+      if (showNotice) {
+        const status = data?.investor?.kycStatus || 'updated';
+        setKycRefreshNotice(`${investor.fullName || 'Investor'} KYC refreshed: ${String(status).replace(/_/g, ' ')}.`);
+      }
+      return data;
+    } finally {
+      setKycRefreshingIds(prev => {
+        const next = { ...prev };
+        delete next[investor.id];
+        return next;
+      });
+    }
+  };
+
+  const refreshVisibleKycStatuses = async () => {
+    if (syncableVisibleInvestors.length === 0) {
+      setKycRefreshNotice('No visible investors have saved Cybrilla KYC IDs to refresh.');
+      return;
+    }
+    setBulkKycRefreshing(true);
+    setKycRefreshNotice('');
+    try {
+      const results = await Promise.allSettled(
+        syncableVisibleInvestors.map(inv => refreshInvestorKycStatus(inv, false)),
+      );
+      const refreshed = results.filter(result => result.status === 'fulfilled').length;
+      const failed = results.length - refreshed;
+      setKycRefreshNotice(
+        failed > 0
+          ? `KYC refresh completed for ${refreshed}; ${failed} need attention.`
+          : `KYC refresh completed for ${refreshed} visible investor${refreshed === 1 ? '' : 's'}.`,
+      );
+    } finally {
+      setBulkKycRefreshing(false);
+    }
+  };
 
   // ─── Investor Detail view ────────────────────────────────────────────────
   if (selectedInvestor) {
@@ -428,6 +521,7 @@ export default function Investors({
         investor={selectedInvestor}
         onBack={() => setSelectedInvestor(null)}
         onInvest={onInvest}
+        onInvestorUpdated={updateInvestorInState}
       />
     );
   }
@@ -443,7 +537,22 @@ export default function Investors({
             {loading ? 'Loading…' : `${filtered.length} of ${investors.length} investors`}
           </p>
         </div>
+        <button
+          onClick={refreshVisibleKycStatuses}
+          disabled={bulkKycRefreshing || syncableVisibleInvestors.length === 0}
+          className="inline-flex items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700 transition-colors hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50"
+          title="Fetch latest KYC status from Cybrilla for the currently visible investors"
+        >
+          <RefreshCw className={`h-4 w-4 ${bulkKycRefreshing ? 'animate-spin' : ''}`} />
+          Refresh visible KYC
+        </button>
       </div>
+
+      {kycRefreshNotice && (
+        <div className="mb-4 rounded-xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm font-medium text-blue-700">
+          {kycRefreshNotice}
+        </div>
+      )}
 
       {/* Search + filters */}
       <div className="bg-white rounded-2xl shadow-sm border border-slate-200 mb-4">
@@ -549,6 +658,22 @@ export default function Investors({
                       <td className="px-6 py-4 text-sm text-slate-500">{inv.city || '—'}</td>
                       <td className="px-6 py-4 text-right">
                         <div className="flex items-center gap-2 justify-end opacity-0 group-hover:opacity-100 transition-opacity">
+                          {(inv.externalKycCheckId || inv.externalKycRequestId) && (
+                            <button
+                              onClick={() => {
+                                refreshInvestorKycStatus(inv).catch(err => {
+                                  console.error('KYC refresh failed:', err);
+                                  setKycRefreshNotice(err instanceof Error ? err.message : 'KYC refresh failed.');
+                                });
+                              }}
+                              disabled={Boolean(kycRefreshingIds[inv.id])}
+                              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-700 border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors disabled:opacity-50"
+                              title="Fetch latest KYC status from Cybrilla and update this investor"
+                            >
+                              <RefreshCw className={`w-3.5 h-3.5 ${kycRefreshingIds[inv.id] ? 'animate-spin' : ''}`} />
+                              KYC
+                            </button>
+                          )}
                           <button
                             onClick={() => setSelectedInvestor(inv)}
                             className="px-3 py-1.5 text-xs font-semibold text-blue-600 border border-blue-200 rounded-lg hover:bg-blue-50 transition-colors"
@@ -582,10 +707,12 @@ function InvestorDetail({
   investor,
   onBack,
   onInvest,
+  onInvestorUpdated,
 }: {
   investor: any;
   onBack: () => void;
   onInvest?: (investor: any) => void;
+  onInvestorUpdated?: (investor: any) => void;
 }) {
   const [activeTab, setActiveTab] = useState('overview');
   const [currentInvestor, setCurrentInvestor] = useState(investor);
@@ -671,15 +798,7 @@ function InvestorDetail({
       if (!response.ok) {
         throw new Error(data?.message || `KYC action failed with HTTP ${response.status}.`);
       }
-      if (data?.investor) {
-        setCurrentInvestor((prev: any) => ({ ...prev, ...data.investor }));
-      }
-      const preVerification = extractPreVerification(data);
-      if (preVerification) {
-        setKycPreVerification(preVerification);
-      }
-      const redirectUrl = data?.externalResponse?.fetch?.redirect_url;
-      if (redirectUrl) setIdentityRedirectUrl(redirectUrl);
+      applyKycActionData(data);
       setKycActionMessage(successMessage);
     } catch (err) {
       console.error('KYC action failed:', err);
@@ -689,7 +808,29 @@ function InvestorDetail({
     }
   };
 
-  const createKycCheck = () => {
+  const applyKycActionData = (data: any) => {
+    if (data?.investor) {
+      setCurrentInvestor((prev: any) => ({ ...prev, ...data.investor }));
+      onInvestorUpdated?.(data.investor);
+    }
+    const preVerification = extractPreVerification(data);
+    if (preVerification) {
+      setKycPreVerification(preVerification);
+    }
+    const redirectUrl = data?.externalResponse?.fetch?.redirect_url;
+    if (redirectUrl) setIdentityRedirectUrl(redirectUrl);
+    return data?.investor;
+  };
+
+  const shouldCreateFreshKycRequest = (data: any, updatedInvestor: any) => {
+    const preVerification = extractPreVerification(data);
+    const readinessCode = String(preVerification?.readiness?.code || '').toLowerCase();
+    return updatedInvestor?.kycStatus === 'NOT_STARTED'
+      || readinessCode === 'kyc_unavailable'
+      || readinessCode === 'unavailable';
+  };
+
+  const createKycCheck = async () => {
     const errors = validateInvestorIdentityForKyc({
       fullName: currentInvestor.fullName,
       pan: currentInvestor.pan,
@@ -701,16 +842,90 @@ function InvestorDetail({
       return;
     }
 
-    runKycAction(
-      'kyc-check',
-      () => apiFetch(`/investors/${currentInvestor.id}/kyc-checks`, {
+    setKycActionLoading('kyc-check');
+    setKycActionError('');
+    setKycActionMessage('');
+    try {
+      const checkResponse = await apiFetch(`/investors/${currentInvestor.id}/kyc-checks`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ dateOfBirth: currentInvestor.dateOfBirth || null }),
-      }),
-      'POA pre-verification submitted. Refresh if the response is still accepted.',
-    );
+      });
+      const checkData = await checkResponse.json().catch(() => null);
+      if (!checkResponse.ok) {
+        throw new Error(checkData?.message || `KYC check failed with HTTP ${checkResponse.status}.`);
+      }
+
+      let updatedInvestor = applyKycActionData(checkData);
+      let message = 'POA pre-verification submitted. Refresh if the response is still accepted.';
+
+      if (shouldCreateFreshKycRequest(checkData, updatedInvestor || currentInvestor)) {
+        const requestResponse = await apiFetch(`/investors/${currentInvestor.id}/kyc-requests`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name: currentInvestor.fullName,
+            pan: currentInvestor.pan,
+            email: currentInvestor.email,
+            mobile: currentInvestor.mobileNumber,
+            dateOfBirth: currentInvestor.dateOfBirth || null,
+            fields: {},
+          }),
+        });
+        const requestData = await requestResponse.json().catch(() => null);
+        if (!requestResponse.ok) {
+          throw new Error(requestData?.message || `KYC request failed with HTTP ${requestResponse.status}.`);
+        }
+        updatedInvestor = applyKycActionData(requestData) || updatedInvestor;
+        message = 'POA says fresh KYC is required, so a Cybrilla KYC request was created and saved.';
+      }
+
+      if (updatedInvestor?.kycStatus === 'COMPLETED') {
+        message = 'KYC verified by Cybrilla and saved in your database.';
+      }
+      setKycActionMessage(message);
+    } catch (err) {
+      console.error('KYC action failed:', err);
+      setKycActionError(err instanceof Error ? err.message : 'KYC action failed.');
+    } finally {
+      setKycActionLoading('');
+    }
   };
+
+  const syncSavedKycStatus = () => runKycAction(
+    'kyc-sync',
+    async () => {
+      const checkId = currentInvestor.externalKycCheckId || kycPreVerification?.id;
+      let latestData: any = null;
+      let latestInvestor: any = currentInvestor;
+      if (checkId) {
+        const checkResponse = await apiFetch(`/investors/${currentInvestor.id}/kyc-checks/${checkId}`);
+        latestData = await checkResponse.clone().json().catch(() => null);
+        if (!checkResponse.ok) {
+          return checkResponse;
+        }
+        if (latestData?.investor) {
+          latestInvestor = { ...latestInvestor, ...latestData.investor };
+        }
+      }
+      if (latestInvestor.kycStatus !== 'COMPLETED' && currentInvestor.externalKycRequestId) {
+        return apiFetch(`/investors/${currentInvestor.id}/kyc-requests/${currentInvestor.externalKycRequestId}`);
+      }
+      if (latestData) {
+        return new Response(JSON.stringify(latestData), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      return new Response(JSON.stringify({
+        message: 'This investor does not have a saved Cybrilla KYC check or KYC request id.',
+      }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    },
+    'KYC status refreshed from saved Cybrilla IDs.',
+  );
 
   const fetchKycCheck = () => {
     const checkId = currentInvestor.externalKycCheckId || kycPreVerification?.id;
@@ -882,6 +1097,7 @@ function InvestorDetail({
                 investor={currentInvestor}
                 onSaved={updated => {
                   setCurrentInvestor((prev: any) => ({ ...prev, ...updated }));
+                  onInvestorUpdated?.(updated);
                   setIsEditing(false);
                   setSavedFlash(true);
                 }}
@@ -970,6 +1186,7 @@ function InvestorDetail({
               investorId={currentInvestor.id}
               onBankUpdated={patch => {
                 setCurrentInvestor((prev: any) => ({ ...prev, ...patch }));
+                if (patch?.id) onInvestorUpdated?.(patch);
               }}
             />
 
@@ -1018,6 +1235,13 @@ function InvestorDetail({
               )}
 
               <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                <button
+                  onClick={syncSavedKycStatus}
+                  disabled={Boolean(kycActionLoading) || !(currentInvestor.externalKycCheckId || currentInvestor.externalKycRequestId)}
+                  className="rounded-lg border border-blue-200 px-3 py-2 text-xs font-semibold text-blue-700 transition-colors hover:bg-blue-50 disabled:opacity-50"
+                >
+                  Refresh saved KYC
+                </button>
                 <button
                   onClick={fetchKycCheck}
                   disabled={Boolean(kycActionLoading)}
