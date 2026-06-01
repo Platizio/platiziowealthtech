@@ -4,7 +4,7 @@ import {
   LayoutDashboard, Users, BookOpen, Search, Bell, Menu,
   ArrowLeftRight, UserCircle2, TrendingUp, Target,
   BarChart3, Network, Layers, UserCheck, ShieldCheck, X, AlertTriangle,
-  PieChart, RefreshCw, FileBarChart2, MessageSquare, ClipboardList, Wrench
+  PieChart, RefreshCw, FileBarChart2, MessageSquare, ClipboardList, Calculator, Wrench
 } from 'lucide-react';
 import { apiFetch } from '../config/api';
 import { useFocusTrap } from '../hooks/useFocusTrap';
@@ -21,6 +21,7 @@ const DIST_NAV_PRIMARY = [
   { id: '/distributor/tools',          icon: <Wrench className="w-4 h-4" />,         label: 'Tools' },
   { id: '/distributor/action-center',  icon: <ClipboardList className="w-4 h-4" />,  label: 'Action Centre' },
   { id: '/distributor/communications', icon: <MessageSquare className="w-4 h-4" />,  label: 'Communications' },
+  { id: '/distributor/calculators',    icon: <Calculator className="w-4 h-4" />,     label: 'Calculators' },
 ];
 
 const DIST_NAV_ACCOUNT = [

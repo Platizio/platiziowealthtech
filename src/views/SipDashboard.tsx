@@ -26,6 +26,8 @@ const statusCfg: Record<string, { icon: React.ReactNode; cls: string }> = {
   Paused: { icon: <Clock        className="w-3.5 h-3.5" />, cls: 'bg-amber-100 text-amber-700' },
 };
 
+const statusFallback = { icon: <Clock className="w-3.5 h-3.5" />, cls: 'bg-slate-100 text-slate-600' };
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Loading skeleton — shown while the first fetch is in-flight.
 // Defined at module scope so its identity is stable across re-renders.
@@ -390,7 +392,7 @@ export default function SipDashboard({ onBack, userData }: { onBack: () => void;
           </thead>
           <tbody className="divide-y divide-slate-100">
             {visible.map(sip => {
-              const cfg = statusCfg[sip.status];
+              const cfg = statusCfg[sip.status] ?? statusFallback;
               const isMF = sip.category === 'MF';
               return (
                 <tr key={sip.id} className="hover:bg-slate-50 transition-colors">

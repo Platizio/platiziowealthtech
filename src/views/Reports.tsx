@@ -10,6 +10,7 @@ import {
   Search,
   TrendingUp,
 } from 'lucide-react';
+import { AnimatePresence, motion } from 'motion/react';
 import { apiFetch } from '../config/api';
 import { formatDate } from '../utils/formatDate';
 import EmptyState from '../components/EmptyState';
@@ -336,7 +337,7 @@ export default function Reports({ userData }: { userData?: any }) {
         {REPORT_TYPES.map(rt => (
           <button
             key={rt.id}
-            onClick={() => fetchReport(rt.id)}
+            onClick={() => selected === rt.id ? setSelected(null) : fetchReport(rt.id)}
             className={`text-left p-4 rounded-2xl border transition-all ${
               selected === rt.id
                 ? 'bg-blue-50 border-blue-300 shadow-sm'
@@ -353,7 +354,7 @@ export default function Reports({ userData }: { userData?: any }) {
       </div>
 
       {selected === 'capital-gains' && (
-        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3 mb-6">
           <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm">
             <FileSpreadsheet className="w-4 h-4 text-blue-500 mb-2" />
             <p className="text-xs text-slate-400">Sale Value</p>
@@ -377,8 +378,18 @@ export default function Reports({ userData }: { userData?: any }) {
         </div>
       )}
 
+      {/* Results table */}
+      <AnimatePresence>
       {selected && (
-        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm">
+        <motion.div
+          key={selected}
+          initial={{ opacity: 0, y: -6 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: -6 }}
+          transition={{ duration: 0.18 }}
+          className="bg-white rounded-2xl border border-slate-100 shadow-sm"
+        >
+          {/* Toolbar */}
           <div className="p-4 border-b border-slate-100 flex items-center justify-between gap-3 flex-wrap">
             <div className="flex items-center gap-3 flex-wrap flex-1">
               <div className="relative w-60">
@@ -492,8 +503,9 @@ export default function Reports({ userData }: { userData?: any }) {
               )}
             </>
           )}
-        </div>
+        </motion.div>
       )}
+      </AnimatePresence>
     </div>
   );
 }
