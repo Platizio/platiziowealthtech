@@ -32,7 +32,12 @@ import org.springframework.test.util.ReflectionTestUtils;
 class DashboardServiceTest {
 
     @Test
-    void getSipDashboardFetchesSipOrdersAtDatabaseLevelWithLimit() {
+    void getSipDashboardFetchesSipOrdersAtDatabaseLevel() {
+        // B-71: this used to assert PageRequest.of(0, 50) was used, locking
+        // in the silent 50-row truncation. The valuable invariant the test
+        // was guarding — that filtering by transaction type happens at the
+        // DB layer rather than via a fetch-all-then-filter-in-Java pattern
+        // — is preserved here via the verify(...never()) on findByDistributorId.
         UUID distributorId = UUID.randomUUID();
         InvestorRepository investorRepository = mock(InvestorRepository.class);
         TransactionOrderRepository orderRepository = mock(TransactionOrderRepository.class);
@@ -45,9 +50,9 @@ class DashboardServiceTest {
 
         when(orderRepository.findByDistributorIdAndTransactionType(
                 eq(distributorId),
-                eq(TransactionType.SIP),
-                any(Pageable.class)))
-                .thenReturn(new PageImpl<>(List.of()));
+                eq(TransactionType.SIP)))
+                .thenReturn(List.of());
+        when(investorRepository.findByDistributorId(distributorId)).thenReturn(List.of());
         when(schemeRepository.findAllById(any())).thenReturn(List.of());
         when(orderRepository.findByDistributorIdAndTransactionTypeAndCreatedAtAfter(
                 eq(distributorId),
@@ -61,13 +66,10 @@ class DashboardServiceTest {
 
         dashboardService.getSipDashboard(distributorId);
 
-        org.mockito.ArgumentCaptor<Pageable> pageableCaptor = org.mockito.ArgumentCaptor.forClass(Pageable.class);
+        // The service must hit the type-filtered DB query, not pull every
+        // order for the distributor and filter SIPs in-memory.
         verify(orderRepository).findByDistributorIdAndTransactionType(
-                eq(distributorId),
-                eq(TransactionType.SIP),
-                pageableCaptor.capture());
-        assertThat(pageableCaptor.getValue().getPageNumber()).isZero();
-        assertThat(pageableCaptor.getValue().getPageSize()).isEqualTo(50);
+                eq(distributorId), eq(TransactionType.SIP));
         verify(orderRepository, never()).findByDistributorId(distributorId);
         verify(investorRepository, never()).findByDistributorId(distributorId);
     }
@@ -86,14 +88,13 @@ class DashboardServiceTest {
 
         when(orderRepository.findByDistributorIdAndTransactionType(
                 eq(distributorId),
-                eq(TransactionType.SIP),
-                any(Pageable.class)))
-                .thenReturn(new PageImpl<>(List.of(
+                eq(TransactionType.SIP)))
+                .thenReturn(List.of(
                         order(OrderStatus.PROCESSING),
                         order(OrderStatus.DRAFT),
                         order(OrderStatus.COMPLETED),
                         order(OrderStatus.FAILED)
-                )));
+                ));
         when(investorRepository.findAllById(any())).thenReturn(List.of());
         when(schemeRepository.findAllById(any())).thenReturn(List.of());
         when(orderRepository.findByDistributorIdAndTransactionTypeAndCreatedAtAfter(

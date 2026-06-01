@@ -142,7 +142,11 @@ class InvestorServiceAuditTest {
                         assertThat(((Investor) args[0]).getHouseholdId()).isNotNull();
                         yield "cybrilla-investor-1";
                     }
-                    case "fetchProductSchemes" -> List.of();
+                    // B-68: signature changed from List<ProductScheme> to
+                    // SchemeFetchResult — return an empty-but-complete result
+                    // so any indirect invocation through this proxy still
+                    // works (test method doesn't actually hit this path).
+                    case "fetchProductSchemes" -> CybrillaClient.SchemeFetchResult.complete(List.of());
                     default -> defaultValue(method.getReturnType());
                 }
         );
@@ -154,7 +158,7 @@ class InvestorServiceAuditTest {
                 new Class<?>[]{CybrillaClient.class},
                 (proxy, method, args) -> switch (method.getName()) {
                     case "createInvestorProfile" -> throw new CybrillaApiException("PAN verification unavailable");
-                    case "fetchProductSchemes" -> List.of();
+                    case "fetchProductSchemes" -> CybrillaClient.SchemeFetchResult.complete(List.of());
                     default -> defaultValue(method.getReturnType());
                 }
         );

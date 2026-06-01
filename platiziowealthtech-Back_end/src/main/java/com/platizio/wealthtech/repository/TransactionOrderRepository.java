@@ -31,6 +31,17 @@ public interface TransactionOrderRepository extends JpaRepository<TransactionOrd
 
     List<TransactionOrder> findByInvestorId(UUID investorId);
     List<TransactionOrder> findByDistributorId(UUID distributorId);
+    /**
+     * Unbounded variant used by the SIP dashboard service (B-71). Realistic
+     * per-distributor SIP volume is in the low hundreds, well within memory
+     * limits, and consistent with the unpaginated
+     * findByDistributorIdAndTransactionTypeAndCreatedAtAfter query below.
+     */
+    List<TransactionOrder> findByDistributorIdAndTransactionType(
+            UUID distributorId,
+            TransactionType transactionType);
+
+    /** Paginated variant retained for any consumer that legitimately needs paging. */
     Optional<TransactionOrder> findByInvestorActionToken(String investorActionToken);
     List<TransactionOrder> findByDistributorIdAndOrderStatus(
             UUID distributorId,

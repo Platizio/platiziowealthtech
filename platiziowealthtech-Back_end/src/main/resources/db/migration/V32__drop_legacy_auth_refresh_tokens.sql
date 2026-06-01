@@ -1,0 +1,37 @@
+-- B-64: drop the legacy auth_refresh_tokens table.
+--
+-- Verified before writing this migration:
+--   • V13__add_auth_refresh_tokens.sql created `auth_refresh_tokens(token uuid)`.
+--   • V20__add_hashed_refresh_tokens.sql created a NEW `refresh_tokens` table
+--     keyed by `token_hash varchar(64) not null unique`; V20 deliberately did
+--     NOT drop or rename the old table.
+--   • The JPA entity (`AuthRefreshToken.java`) maps to `refresh_tokens` —
+--     line 11: @Table(name = "refresh_tokens"). The repository operates via
+--     `findByTokenHash(...)` and RefreshTokenService stores SHA-256 hashes.
+--   • Grep across the entire backend tree finds the literal
+--     `auth_refresh_tokens` ONLY inside V13 itself. No service, repository,
+--     controller, or other migration references it. Genuinely orphaned.
+--   • Any rows still in `auth_refresh_tokens` are dead from the application's
+--     perspective: they are pre-V20 raw UUID rows that the post-V20 code path
+--     (which hashes the cookie value and looks it up in `refresh_tokens`)
+--     cannot validate. Affected users were forced to re-authenticate at the
+--     V20 cutover and have entries in `refresh_tokens` already.
+--   • FK direction: `auth_refresh_tokens.distributor_id` references
+--     `distributors(id)` — dropping the legacy table removes that constraint
+--     cleanly and does NOT affect `distributors`. Nothing references *into*
+--     `auth_refresh_tokens` from elsewhere, so CASCADE here is belt-and-
+--     suspenders, not load-bearing.
+--
+-- ⚠ OPTIONAL PRE-DEPLOYMENT SANITY CHECK (informational only — these rows
+-- are dead and dropping them is safe regardless of the count; this is just
+-- to know how many stale rows are being discarded):
+--
+--   SELECT COUNT(*)                                       AS total_rows,
+--          COUNT(*) FILTER (WHERE revoked = false
+--                            AND expires_at > now())      AS not_yet_invalidated
+--   FROM auth_refresh_tokens;
+--
+-- IF EXISTS keeps the migration idempotent if a DBA dropped the table
+-- out-of-band. CASCADE is included for consistency with V16's drop pattern.
+
+DROP TABLE IF EXISTS auth_refresh_tokens CASCADE;

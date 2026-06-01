@@ -64,13 +64,28 @@ public class ProductService {
 
     @Transactional
     public List<ProductScheme> refreshFromCybrilla() {
-        List<ProductScheme> latest = dedupeByExternalSchemeCode(cybrillaClient.fetchProductSchemes());
+        CybrillaClient.SchemeFetchResult fetched = cybrillaClient.fetchProductSchemes();
+        List<ProductScheme> latest = dedupeByExternalSchemeCode(fetched.schemes());
         Set<String> refreshedSchemeCodes = externalSchemeCodes(latest);
         List<ProductScheme> merged = latest.stream()
                 .map(this::mergeByExternalSchemeCode)
                 .toList();
         List<ProductScheme> saved = productSchemeRepository.saveAll(merged);
-        deactivateSchemesMissingFromLatestRefresh(refreshedSchemeCodes);
+
+        // B-68: only run the "deactivate schemes missing from this refresh"
+        // pass when the upstream fetch was complete. A partial fetch (e.g.
+        // truncated at the page cap) does NOT represent the full catalogue,
+        // so subtracting from it would incorrectly deactivate every scheme
+        // that simply landed beyond the truncation point. Upsert-only is
+        // the safe behaviour for partials.
+        if (fetched.complete()) {
+            deactivateSchemesMissingFromLatestRefresh(refreshedSchemeCodes);
+        } else {
+            logger.warn(
+                    "product_scheme_refresh status='deactivation_skipped' reason='partial_fetch' "
+                            + "incomplete_reason='{}' fetched_count='{}'",
+                    fetched.incompleteReason(), latest.size());
+        }
         return saved;
     }
 
@@ -171,20 +186,21 @@ public class ProductService {
     }
 
     private void deactivateSchemesMissingFromLatestRefresh(Set<String> refreshedSchemeCodes) {
+        // The bulk UPDATE uses NOT IN :codes, which JPA providers treat as
+        // ill-defined when the collection is empty (Hibernate logs a warning
+        // and Postgres rejects an empty IN list). The early return preserves
+        // the previous behaviour and protects the bulk query.
         if (refreshedSchemeCodes.isEmpty()) {
             return;
         }
 
-        List<ProductScheme> staleSchemes = productSchemeRepository.findAll().stream()
-                .filter(scheme -> Boolean.TRUE.equals(scheme.getActive()))
-                .filter(scheme -> StringUtils.hasText(scheme.getExternalSchemeCode()))
-                .filter(scheme -> !refreshedSchemeCodes.contains(scheme.getExternalSchemeCode()))
-                .peek(scheme -> scheme.setActive(Boolean.FALSE))
-                .toList();
-
-        if (!staleSchemes.isEmpty()) {
-            productSchemeRepository.saveAll(staleSchemes);
-            logger.info("product_scheme_refresh status='stale_schemes_deactivated' count='{}'", staleSchemes.size());
+        // B-69: single DB-side UPDATE replaces the previous
+        // findAll().stream().filter(...).saveAll() pipeline, which pulled
+        // every ProductScheme row (including the metadataJson blob — often
+        // several KB each) into the JVM just to compute set difference.
+        int deactivated = productSchemeRepository.deactivateActiveSchemesNotIn(refreshedSchemeCodes);
+        if (deactivated > 0) {
+            logger.info("product_scheme_refresh status='stale_schemes_deactivated' count='{}'", deactivated);
         }
     }
 }
