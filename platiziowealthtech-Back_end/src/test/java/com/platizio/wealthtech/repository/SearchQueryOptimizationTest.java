@@ -32,9 +32,9 @@ class SearchQueryOptimizationTest {
     @Test
     void migrationAddsPgTrgmIndexesForSearchedColumns() throws Exception {
         String migration = Files.readString(Path.of(
-                "src/main/resources/db/migration/V19__add_pg_trgm_search_indexes.sql"));
+                "src/main/resources/db/migration/V2__indexes.sql"));
 
-        assertThat(migration).contains("CREATE EXTENSION IF NOT EXISTS pg_trgm");
+        assertThat(migration.toLowerCase()).contains("create extension if not exists pg_trgm");
         assertThat(migration).contains("idx_investor_full_name_trgm");
         assertThat(migration).contains("idx_investor_email_trgm");
         assertThat(migration).contains("idx_investor_mobile_number_trgm");

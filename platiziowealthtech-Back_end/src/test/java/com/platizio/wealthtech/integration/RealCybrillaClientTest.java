@@ -17,6 +17,7 @@ import com.platizio.wealthtech.domain.ProductCategory;
 import com.platizio.wealthtech.domain.ProductScheme;
 import com.platizio.wealthtech.domain.TransactionOrder;
 import com.platizio.wealthtech.domain.TransactionType;
+import com.platizio.wealthtech.integration.CybrillaUnavailableException;
 import com.platizio.wealthtech.integration.auth.CybrillaPreVerificationProperties;
 import com.platizio.wealthtech.integration.auth.ExternalBearerTokenService;
 import com.platizio.wealthtech.integration.auth.FinprimTenantProperties;
@@ -402,8 +403,8 @@ class RealCybrillaClientTest {
         );
 
         assertThatThrownBy(() -> client.createOrder(order(TransactionType.LUMPSUM_PURCHASE), investor("profile-1", "mfia-1"), productScheme("INF209KA1K47")))
-                .isInstanceOf(CybrillaApiException.class)
-                .hasMessageContaining("Unable to create order with Fintech Primitives")
+                .isInstanceOf(CybrillaUnavailableException.class)
+                .hasMessageContaining("Unable to reach the external investment platform to create order")
                 .hasMessageContaining("DNS failure");
     }
 

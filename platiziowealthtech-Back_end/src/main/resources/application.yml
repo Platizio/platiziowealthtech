@@ -88,9 +88,10 @@ finprim:
 
 external-auth:
   auto-refresh:
-    enabled: ${EXTERNAL_AUTH_AUTO_REFRESH_ENABLED:false}
-    check-interval-ms: ${EXTERNAL_AUTH_AUTO_REFRESH_CHECK_INTERVAL_MS:60000}
-    startup-delay-ms: ${EXTERNAL_AUTH_AUTO_REFRESH_STARTUP_DELAY_MS:60000}
+    # Startup always acquires tokens; scheduled refresh runs every ~30 minutes by default.
+    enabled: ${EXTERNAL_AUTH_AUTO_REFRESH_ENABLED:true}
+    check-interval-ms: ${EXTERNAL_AUTH_AUTO_REFRESH_CHECK_INTERVAL_MS:1800000}
+    startup-delay-ms: ${EXTERNAL_AUTH_AUTO_REFRESH_STARTUP_DELAY_MS:1800000}
   token-cache:
     enabled: ${EXTERNAL_AUTH_TOKEN_CACHE_ENABLED:true}
     file: ${EXTERNAL_AUTH_TOKEN_CACHE_FILE:${user.home}/.platizio-wealthtech/external-auth-token-cache.json}

@@ -169,7 +169,7 @@ class ExternalBearerTokenServiceTest {
     }
 
     @Test
-    void scheduledRefreshDoesNotGenerateTokenWhenNoCacheExists() throws Exception {
+    void scheduledRefreshGeneratesTokenWhenNoCacheExists() throws Exception {
         AtomicInteger tokenRequests = new AtomicInteger();
         HttpServer server = createTokenServer(tokenRequests);
         server.start();
@@ -190,8 +190,8 @@ class ExternalBearerTokenServiceTest {
 
             boolean refreshed = tokenService.refreshCybrillaPreVerificationTokenIfCachedAndDue();
 
-            assertThat(refreshed).isFalse();
-            assertThat(tokenRequests).hasValue(0);
+            assertThat(refreshed).isTrue();
+            assertThat(tokenRequests).hasValue(1);
         } finally {
             server.stop(0);
         }

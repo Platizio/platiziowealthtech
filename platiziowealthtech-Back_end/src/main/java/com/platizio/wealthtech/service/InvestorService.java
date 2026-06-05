@@ -47,7 +47,6 @@ public class InvestorService implements BankVerificationStarter {
     private final CybrillaClient cybrillaClient;
     private final long scheduledBankSyncFailureBackoffMs;
     private volatile long scheduledBankSyncBackoffUntilEpochMillis;
-    private InvestorKycService investorKycService;
 
     public InvestorService(
             InvestorRepository investorRepository,
@@ -74,11 +73,6 @@ public class InvestorService implements BankVerificationStarter {
         this.auditService = auditService;
         this.cybrillaClient = cybrillaClient;
         this.scheduledBankSyncFailureBackoffMs = Math.max(0, scheduledBankSyncFailureBackoffMs);
-    }
-
-    @Autowired(required = false)
-    public void setInvestorKycService(InvestorKycService investorKycService) {
-        this.investorKycService = investorKycService;
     }
 
     public List<Investor> listByDistributor(UUID distributorId) {
@@ -833,8 +827,8 @@ public class InvestorService implements BankVerificationStarter {
             );
         }
         if (request.onboardingNotes() != null) investor.setOnboardingNotes(request.onboardingNotes());
-        if (identityChanged && investor.getKycStatus() != KycStatus.COMPLETED && investorKycService != null) {
-            investorKycService.resetKycStateForIdentityChange(investor);
+        if (identityChanged) {
+            InvestorKycStateReset.resetForIdentityChange(investor);
         }
         Investor saved = investorRepository.save(investor);
         try {

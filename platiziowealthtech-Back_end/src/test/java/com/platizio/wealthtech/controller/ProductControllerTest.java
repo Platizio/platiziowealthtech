@@ -38,11 +38,11 @@ class ProductControllerTest {
         );
         Method deleteScheme = ProductController.class.getMethod("deleteScheme", UUID.class);
 
-        assertThat(createScheme.getAnnotation(PreAuthorize.class).value()).isEqualTo("hasRole('ADMIN')");
-        assertThat(updateScheme.getAnnotation(PreAuthorize.class).value()).isEqualTo("hasRole('ADMIN')");
-        assertThat(updateSchemeStatus.getAnnotation(PreAuthorize.class).value()).isEqualTo("hasRole('ADMIN')");
-        assertThat(refreshSchemes.getAnnotation(PreAuthorize.class).value()).isEqualTo("hasRole('ADMIN')");
-        assertThat(syncFundsFromCybrilla.getAnnotation(PreAuthorize.class).value()).isEqualTo("hasRole('ADMIN')");
-        assertThat(deleteScheme.getAnnotation(PreAuthorize.class).value()).isEqualTo("hasRole('ADMIN')");
+        assertThat(createScheme.getAnnotation(PreAuthorize.class).value()).isEqualTo("hasAnyRole('ADMIN','MASTER_DISTRIBUTOR')");
+        assertThat(updateScheme.getAnnotation(PreAuthorize.class).value()).isEqualTo("hasAnyRole('ADMIN','MASTER_DISTRIBUTOR')");
+        assertThat(updateSchemeStatus.getAnnotation(PreAuthorize.class).value()).isEqualTo("hasAnyRole('ADMIN','MASTER_DISTRIBUTOR')");
+        assertThat(refreshSchemes.getAnnotation(PreAuthorize.class).value()).isEqualTo("hasAnyRole('ADMIN','MASTER_DISTRIBUTOR')");
+        assertThat(syncFundsFromCybrilla.getAnnotation(PreAuthorize.class).value()).isEqualTo("hasAnyRole('ADMIN','MASTER_DISTRIBUTOR')");
+        assertThat(deleteScheme.getAnnotation(PreAuthorize.class).value()).isEqualTo("hasAnyRole('ADMIN','MASTER_DISTRIBUTOR')");
     }
 }

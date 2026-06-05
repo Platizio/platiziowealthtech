@@ -149,13 +149,6 @@ public class ExternalBearerTokenService {
             }
 
             CachedBearerToken storedToken = loadStoredToken(audience);
-            if (storedToken == null && cachedToken == null) {
-                logger.info(
-                        "external_auth_auto_refresh status='skipped_no_cached_token' provider='{}'",
-                        audience.label()
-                );
-                return false;
-            }
             if (storedToken != null && storedToken.isUsable(clock)) {
                 tokenCache.put(audience, storedToken);
                 logTokenState(audience, storedToken, "cached_after_restart");

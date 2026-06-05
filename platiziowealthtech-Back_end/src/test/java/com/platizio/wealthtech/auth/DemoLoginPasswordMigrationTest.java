@@ -14,22 +14,24 @@ class DemoLoginPasswordMigrationTest {
     @Test
     void demoPasswordHashMatchesFrontendDemoPassword() throws Exception {
         String migration = Files.readString(Path.of(
-                "src/main/resources/db/migration/V22__align_demo_login_password.sql"));
-        Matcher matcher = Pattern.compile("password_hash = '([^']+)'").matcher(migration);
+                "src/main/resources/db/migration/V3__seed_data.sql"));
+        assertThat(migration).contains("alice@example.com");
 
+        String aliceSection = migration.substring(0, migration.indexOf("a@a.com"));
+        Matcher matcher = Pattern.compile("'(\\$2a\\$[^']+)'").matcher(aliceSection);
         assertThat(matcher.find()).isTrue();
         assertThat(new BCryptPasswordEncoder().matches("Platizio@2024", matcher.group(1))).isTrue();
-        assertThat(migration).contains("alice@example.com");
     }
 
     @Test
     void localTestLoginPasswordHashMatchesSharedTestPassword() throws Exception {
         String migration = Files.readString(Path.of(
-                "src/main/resources/db/migration/V23__seed_local_test_login.sql"));
-        Matcher matcher = Pattern.compile("'(\\$2a\\$[^']+)'").matcher(migration);
+                "src/main/resources/db/migration/V3__seed_data.sql"));
+        assertThat(migration).contains("a@a.com");
 
+        String testSection = migration.substring(migration.indexOf("a@a.com"));
+        Matcher matcher = Pattern.compile("'(\\$2a\\$[^']+)'").matcher(testSection);
         assertThat(matcher.find()).isTrue();
         assertThat(new BCryptPasswordEncoder().matches("Ok@123456", matcher.group(1))).isTrue();
-        assertThat(migration).contains("a@a.com");
     }
 }

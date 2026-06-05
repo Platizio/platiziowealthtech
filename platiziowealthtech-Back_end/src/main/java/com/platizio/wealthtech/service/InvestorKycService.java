@@ -114,10 +114,7 @@ public class InvestorKycService {
      */
     @Transactional
     public void resetKycStateForIdentityChange(Investor investor) {
-        if (investor == null || investor.getKycStatus() == KycStatus.COMPLETED) {
-            return;
-        }
-        resetKycAttemptState(investor);
+        InvestorKycStateReset.resetForIdentityChange(investor);
     }
 
     @Transactional
@@ -514,27 +511,7 @@ public class InvestorKycService {
     }
 
     private void resetKycAttemptState(Investor investor) {
-        investor.setExternalKycCheckId(null);
-        investor.setExternalKycRequestId(null);
-        investor.setExternalKycStatus(null);
-        investor.setKycReadinessStatus(null);
-        investor.setKycReadinessCode(null);
-        investor.setKycReadinessReason(null);
-        investor.setPanVerificationStatus(null);
-        investor.setPanVerificationCode(null);
-        investor.setPanVerificationReason(null);
-        investor.setPanAadhaarLinkStatus(null);
-        investor.setPanAadhaarLinkReason(null);
-        investor.setExternalKycComplianceId(null);
-        investor.setKycComplianceStatus(null);
-        investor.setKycComplianceReason(null);
-        investor.setKycComplianceAction(null);
-        investor.setKycConstraintsJson(null);
-        investor.setExternalKycPayloadJson(null);
-        investor.setKycStatus(KycStatus.IN_PROGRESS);
-        if (investor.getInvestorStatus() == InvestorStatus.READY_FOR_TRANSACTIONS) {
-            investor.setInvestorStatus(InvestorStatus.ONBOARDING);
-        }
+        InvestorKycStateReset.resetAttemptState(investor);
     }
 
     private boolean shouldStartFreshKycRequest(Investor investor) {
