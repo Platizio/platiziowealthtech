@@ -2,13 +2,13 @@ import React, { useEffect } from 'react';
 import { useForm, type SubmitHandler } from 'react-hook-form';
 import { Save, X, AlertCircle } from 'lucide-react';
 import { apiFetch } from '../config/api';
+import { normalizePan, PAN_REGEX } from '../utils/kycPreVerification';
 
 /**
  * F-10: edit form for an existing investor.
  *
- * Field set is exactly the backend's InvestorUpdateRequest DTO — PAN and
- * KYC/bank/risk fields are intentionally excluded (immutable / owned by
- * separate workflows on the backend).
+ * Field set matches the backend InvestorUpdateRequest DTO. PAN is editable
+ * only while KYC is not verified — after that it stays locked.
  *
  * On save: calls PUT /investors/{id} via apiFetch (which prefixes /api/v1
  * and forwards auth cookies). On HTTP 200, `onSaved(updatedInvestor)` is
@@ -21,6 +21,7 @@ import { apiFetch } from '../config/api';
 
 interface FormValues {
   fullName: string;
+  pan: string;
   mobileNumber: string;
   email: string;
   dateOfBirth: string; // ISO yyyy-MM-dd for <input type="date">
@@ -52,6 +53,7 @@ function dateInputValue(value: any): string {
 function toDefaults(investor: any): FormValues {
   return {
     fullName:        investor?.fullName        ?? '',
+    pan:             normalizePan(investor?.pan),
     mobileNumber:    investor?.mobileNumber    ?? '',
     email:           investor?.email           ?? '',
     dateOfBirth:     dateInputValue(investor?.dateOfBirth),
@@ -99,7 +101,13 @@ interface Props {
   onCancel: () => void;
 }
 
+const isKycVerified = (investor: any) => {
+  const status = String(investor?.kycStatus || '').toUpperCase();
+  return status === 'COMPLETED' || status === 'VERIFIED';
+};
+
 export default function InvestorEditForm({ investor, onSaved, onCancel }: Props) {
+  const identityLocked = isKycVerified(investor);
   const {
     register,
     handleSubmit,
@@ -136,6 +144,9 @@ export default function InvestorEditForm({ investor, onSaved, onCancel }: Props)
       postalCode:      values.postalCode.trim() || null,
       onboardingNotes: values.onboardingNotes.trim() || null,
     };
+    if (!identityLocked) {
+      payload.pan = normalizePan(values.pan);
+    }
 
     let response: Response;
     try {
@@ -195,6 +206,23 @@ export default function InvestorEditForm({ investor, onSaved, onCancel }: Props)
             className={`${INPUT_CLS} ${errors.fullName ? ERR_INPUT_CLS : ''}`}
           />
           {errors.fullName && <p className={ERR_TEXT_CLS}><AlertCircle className="w-3 h-3" />{errors.fullName.message}</p>}
+        </div>
+
+        <div>
+          <label className={LABEL_CLS}>PAN</label>
+          <input
+            {...register('pan', {
+              required: identityLocked ? false : 'PAN is required',
+              validate: value => identityLocked || PAN_REGEX.test(normalizePan(value)) || 'Invalid PAN format',
+            })}
+            readOnly={identityLocked}
+            maxLength={10}
+            className={`${INPUT_CLS} font-mono tracking-widest uppercase ${errors.pan ? ERR_INPUT_CLS : ''} ${identityLocked ? 'opacity-60 cursor-not-allowed' : ''}`}
+          />
+          {errors.pan && <p className={ERR_TEXT_CLS}><AlertCircle className="w-3 h-3" />{errors.pan.message}</p>}
+          {!identityLocked && (
+            <p className="mt-1 text-[11px] text-slate-400">Changing PAN clears the previous KYC attempt — run pre-check again after saving.</p>
+          )}
         </div>
 
         <div>

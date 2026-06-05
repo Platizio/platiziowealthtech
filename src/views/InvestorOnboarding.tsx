@@ -14,6 +14,8 @@ import {
   normalizePan,
   parseStoredPreVerification,
   preVerificationStatusClasses,
+  computeIdentityFingerprint,
+  shouldForceNewKycCheck,
   validateInvestorIdentityForKyc,
 } from '../utils/kycPreVerification';
 
@@ -206,16 +208,19 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
   const [demoOtp, setDemoOtp] = useState('');
   const [countdown, setCountdown] = useState(0);
   const otpRefs = useRef<(HTMLInputElement | null)[]>([]);
+  const kycCheckInFlightRef = useRef(false);
 
   // ── Step 3 — KYC ────────────────────────────────────────────────────────────
   const [kycPhase, setKycPhase] = useState<'idle' | 'checking' | 'accepted' | 'verified' | 'failed' | 'retry' | 'pending'>('idle');
   const [draftInvestor, setDraftInvestor] = useState<any | null>(null);
   const [draftIdentityFingerprint, setDraftIdentityFingerprint] = useState('');
+  const [lastKycIdentityFingerprint, setLastKycIdentityFingerprint] = useState('');
   const [kycPreVerification, setKycPreVerification] = useState<any | null>(null);
   const [kycValidationErrors, setKycValidationErrors] = useState<Record<string, string>>({});
   const [kycActionError, setKycActionError] = useState('');
   const [kycActionMessage, setKycActionMessage] = useState('');
   const [creatingKycRequest, setCreatingKycRequest] = useState(false);
+  const [autoRunKycOnStep3, setAutoRunKycOnStep3] = useState(false);
 
   // ── Step 4 — Personal ───────────────────────────────────────────────────────
   const [s4, setS4] = useState({
@@ -254,14 +259,15 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
 
   const distributorId = userData?.id || userData?.distributorId;
   const fullName = `${s1.firstName} ${s1.lastName}`.replace(/\s+/g, ' ').trim();
-  const identityFingerprint = JSON.stringify({
-    fullName: fullName.toUpperCase(),
-    pan: normalizePan(s1.pan),
-    dob: s1.dob || '',
-    mobile: normalizeMobile(s1.mobile),
-    email: s1.email.trim().toLowerCase(),
+  const identityFingerprint = computeIdentityFingerprint({
+    firstName: s1.firstName,
+    lastName: s1.lastName,
+    pan: s1.pan,
+    dob: s1.dob,
+    mobile: s1.mobile,
+    email: s1.email,
     relationshipType: s1.relationshipType,
-    guardianPan: normalizePan(s1.guardianPan),
+    guardianPan: s1.guardianPan,
   });
   const kycDecision = getPreVerificationDecision(kycPreVerification);
   const currentKycStatus = normalizeStatus(draftInvestor?.kycStatus || resumeInvestor?.kycStatus);
@@ -333,6 +339,19 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
     });
     setDraftInvestor(investor);
     setDraftIdentityFingerprint('');
+    setLastKycIdentityFingerprint(
+      external
+        ? computeIdentityFingerprint({
+          fullName: investor.fullName || investor.name || '',
+          pan: investor.pan,
+          dateOfBirth: investor.dateOfBirth || investor.dob,
+          mobile: investor.mobileNumber || investor.mobile,
+          email: investor.email,
+          relationshipType: investor.relationshipType,
+          guardianPan: investor.guardianPan,
+        })
+        : '',
+    );
     setKycPreVerification(external);
     setKycPhase(
       status === 'COMPLETED' || status === 'VERIFIED'
@@ -384,7 +403,7 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
 
   const buildInvestorUpdatePayload = () => {
     const payload = buildInvestorPayload();
-    const { distributorId: _distributorId, pan: _pan, ...updatablePayload } = payload;
+    const { distributorId: _distributorId, ...updatablePayload } = payload;
     return updatablePayload;
   };
 
@@ -474,15 +493,12 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
   // Reset the POA pre-verification result if identity fields change.
   useEffect(() => {
     if (!draftIdentityFingerprint || draftIdentityFingerprint === identityFingerprint) return;
-    if (!isResumeMode) {
-      setDraftInvestor(null);
-    }
     setDraftIdentityFingerprint('');
     setKycPreVerification(null);
     setKycPhase('idle');
     setKycActionError('');
     setKycActionMessage('Identity details changed. Run POA pre-verification again.');
-  }, [draftIdentityFingerprint, identityFingerprint, isResumeMode]);
+  }, [draftIdentityFingerprint, identityFingerprint]);
 
   // ── OTP helpers ──────────────────────────────────────────────────────────────
   const sendOtp = () => {
@@ -660,12 +676,26 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
     return true;
   };
 
+  const logKycApiCall = (action: 'create' | 'refresh', details: Record<string, unknown>) => {
+    console.log(`kyc_api_call action=${action}`, {
+      timestamp: new Date().toISOString(),
+      identityFingerprint,
+      lastKycIdentityFingerprint,
+      ...details,
+    });
+  };
+
   const ensureInvestorDraftForKyc = async () => {
     if (draftInvestor?.id && draftIdentityFingerprint === identityFingerprint) {
       return draftInvestor;
     }
-    if (draftInvestor?.id && isResumeMode) {
+    if (draftInvestor?.id) {
       const updatePayload = buildInvestorUpdatePayload();
+      console.log('kyc_investor_update_request=', {
+        endpoint: `PUT /api/v1/investors/${draftInvestor.id}`,
+        pan: normalizePan(s1.pan),
+        fullName,
+      });
       const response = await apiFetch(`/investors/${draftInvestor.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
@@ -740,15 +770,22 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
     setKycPreVerification(external);
     setKycPhase(decision.state);
     setKycActionMessage(decision.message);
+    setLastKycIdentityFingerprint(identityFingerprint);
     if (result?.investor) {
       setDraftInvestor(result.investor);
+      setDraftIdentityFingerprint(identityFingerprint);
     }
     return decision;
   };
 
   const runPoaPreVerification = async () => {
     if (!validateIdentityBeforePreVerification()) return;
+    if (kycCheckInFlightRef.current) {
+      console.log('kyc_api_call action=skipped reason=in_flight');
+      return;
+    }
 
+    kycCheckInFlightRef.current = true;
     setKycPhase('checking');
     setKycActionError('');
     setKycActionMessage('');
@@ -756,29 +793,44 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
 
     try {
       const investor = await ensureInvestorDraftForKyc();
-      console.log('poa_pre_verification_request=', {
-        endpoint: `POST /api/v1/investors/${investor.id}/kyc-checks`,
+      const shouldForceNew = shouldForceNewKycCheck(
+        lastKycIdentityFingerprint,
+        identityFingerprint,
+        investor,
+      );
+      const kycEndpoint = shouldForceNew
+        ? `/investors/${investor.id}/kyc/reapply`
+        : `/investors/${investor.id}/kyc-checks`;
+
+      logKycApiCall('create', {
+        endpoint: `POST /api/v1${kycEndpoint}`,
         localInvestorId: investor.id,
         pan: normalizePan(s1.pan),
         name: fullName,
         dateOfBirth: s1.dob,
+        forceNewCheck: shouldForceNew,
       });
-      const response = await apiFetch(`/investors/${investor.id}/kyc-checks`, {
+
+      const response = await apiFetch(kycEndpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ dateOfBirth: s1.dob || null }),
+        body: JSON.stringify({
+          dateOfBirth: s1.dob || null,
+          forceNewCheck: shouldForceNew,
+        }),
       });
       const result = await readJsonSafely(response);
-      console.log('poa_pre_verification_response=', {
+      console.log('kyc_api_call action=create_response', {
         status: response.status,
         ok: response.ok,
+        forceNewCheck: shouldForceNew,
         body: result,
       });
       if (!response.ok) {
         const errorMessage = typeof result === 'string'
           ? result
           : result?.message || `POA pre-verification failed with HTTP ${response.status}`;
-        console.error('poa_pre_verification_failed_response=', {
+        console.error('kyc_api_call action=create_failed', {
           status: response.status,
           error: typeof result === 'string' ? result : result?.error,
           message: errorMessage,
@@ -793,14 +845,23 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
       }
       applyPreVerificationResponse(result);
     } catch (err) {
-      console.error('poa_pre_verification_error=', err);
+      console.error('kyc_api_call action=create_error', err);
       setKycPhase('failed');
       setKycActionError(err instanceof Error ? err.message : 'POA pre-verification failed.');
+    } finally {
+      kycCheckInFlightRef.current = false;
     }
   };
 
+  // After editing identity post-KYC failure, auto-run one fresh check on return to step 3.
+  useEffect(() => {
+    if (step !== 3 || !autoRunKycOnStep3) return;
+    setAutoRunKycOnStep3(false);
+    void runPoaPreVerification();
+  }, [step, autoRunKycOnStep3]);
+
   const refreshPoaPreVerification = async () => {
-    const kycCheckId = kycPreVerification?.id;
+    const kycCheckId = kycPreVerification?.id || draftInvestor?.externalKycCheckId;
     const investorId = draftInvestor?.id;
     if (!kycCheckId) {
       setKycActionError('Run POA pre-verification before refreshing the status.');
@@ -810,19 +871,25 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
       setKycActionError('Create the investor draft by running POA pre-verification first.');
       return;
     }
+    if (kycCheckInFlightRef.current) {
+      console.log('kyc_api_call action=skipped reason=in_flight');
+      return;
+    }
 
+    kycCheckInFlightRef.current = true;
     setKycPhase('checking');
     setKycActionError('');
     setKycActionMessage('');
 
     try {
-      console.log('poa_pre_verification_fetch_request=', {
+      logKycApiCall('refresh', {
         endpoint: `GET /api/v1/investors/${investorId}/kyc-checks/${kycCheckId}`,
         localInvestorId: investorId,
+        kycCheckId,
       });
       const response = await apiFetch(`/investors/${investorId}/kyc-checks/${kycCheckId}`);
       const result = await readJsonSafely(response);
-      console.log('poa_pre_verification_fetch_response=', {
+      console.log('kyc_api_call action=refresh_response', {
         status: response.status,
         ok: response.ok,
         body: result,
@@ -832,9 +899,11 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
       }
       applyPreVerificationResponse(result);
     } catch (err) {
-      console.error('poa_pre_verification_fetch_error=', err);
+      console.error('kyc_api_call action=refresh_error', err);
       setKycPhase('retry');
       setKycActionError(err instanceof Error ? err.message : 'POA pre-verification refresh failed.');
+    } finally {
+      kycCheckInFlightRef.current = false;
     }
   };
 
@@ -1166,7 +1235,11 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
       return;
     }
     if (step === 1) {
+      const returningToKycAfterEdit = consentCompleted && isKycFailed;
       setEditingForKycRetry(false);
+      if (returningToKycAfterEdit) {
+        setAutoRunKycOnStep3(true);
+      }
       setStep(consentCompleted ? 3 : 2);
       return;
     }

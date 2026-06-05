@@ -23,6 +23,9 @@ import {
   getPreVerificationRows,
   parseStoredPreVerification,
   preVerificationStatusClasses,
+  computeIdentityFingerprint,
+  normalizePan,
+  shouldForceNewKycCheck,
   validateInvestorIdentityForKyc,
 } from '../utils/kycPreVerification';
 
@@ -1079,6 +1082,18 @@ function InvestorDetail({
   const [kycPreVerification, setKycPreVerification] = useState(() =>
     parseStoredPreVerification(investor.externalKycPayloadJson),
   );
+  const [lastKycIdentityFingerprint, setLastKycIdentityFingerprint] = useState(() =>
+    investor.externalKycPayloadJson
+      ? computeIdentityFingerprint({
+        fullName: investor.fullName,
+        pan: investor.pan,
+        dateOfBirth: investor.dateOfBirth,
+        mobile: investor.mobileNumber,
+        email: investor.email,
+      })
+      : '',
+  );
+  const kycCheckInFlightRef = React.useRef(false);
   const kycDecision = getPreVerificationDecision(kycPreVerification);
 
   // F-10: edit-form toggle for the Overview tab + a transient "Saved" pill
@@ -1089,6 +1104,17 @@ function InvestorDetail({
   useEffect(() => {
     setCurrentInvestor(investor);
     setKycPreVerification(parseStoredPreVerification(investor.externalKycPayloadJson));
+    setLastKycIdentityFingerprint(
+      investor.externalKycPayloadJson
+        ? computeIdentityFingerprint({
+          fullName: investor.fullName,
+          pan: investor.pan,
+          dateOfBirth: investor.dateOfBirth,
+          mobile: investor.mobileNumber,
+          email: investor.email,
+        })
+        : '',
+    );
   }, [investor]);
 
   useEffect(() => {
@@ -1190,6 +1216,13 @@ function InvestorDetail({
     const preVerification = extractPreVerification(data);
     if (preVerification) {
       setKycPreVerification(preVerification);
+      setLastKycIdentityFingerprint(computeIdentityFingerprint({
+        fullName: data?.investor?.fullName || currentInvestor.fullName,
+        pan: data?.investor?.pan || currentInvestor.pan,
+        dateOfBirth: data?.investor?.dateOfBirth || currentInvestor.dateOfBirth,
+        mobile: data?.investor?.mobileNumber || currentInvestor.mobileNumber,
+        email: data?.investor?.email || currentInvestor.email,
+      }));
     }
     const redirectUrl = data?.externalResponse?.fetch?.redirect_url;
     if (redirectUrl) setIdentityRedirectUrl(redirectUrl);
@@ -1215,25 +1248,69 @@ function InvestorDetail({
       setKycActionMessage('');
       return;
     }
+    if (kycCheckInFlightRef.current) {
+      console.log('kyc_api_call action=skipped reason=in_flight');
+      return;
+    }
 
+    kycCheckInFlightRef.current = true;
     setKycActionLoading('kyc-check');
     setKycActionError('');
     setKycActionMessage('');
     try {
-      const checkResponse = await apiFetch(`/investors/${currentInvestor.id}/kyc-checks`, {
+      const currentFingerprint = computeIdentityFingerprint({
+        fullName: currentInvestor.fullName,
+        pan: currentInvestor.pan,
+        dateOfBirth: currentInvestor.dateOfBirth,
+        mobile: currentInvestor.mobileNumber,
+        email: currentInvestor.email,
+      });
+      const forceNewCheck = shouldForceNewKycCheck(
+        lastKycIdentityFingerprint,
+        currentFingerprint,
+        currentInvestor,
+      );
+      const kycEndpoint = forceNewCheck
+        ? `/investors/${currentInvestor.id}/kyc/reapply`
+        : `/investors/${currentInvestor.id}/kyc-checks`;
+
+      console.log('kyc_api_call action=create', {
+        timestamp: new Date().toISOString(),
+        endpoint: `POST /api/v1${kycEndpoint}`,
+        investorId: currentInvestor.id,
+        pan: normalizePan(currentInvestor.pan),
+        forceNewCheck,
+      });
+
+      const checkResponse = await apiFetch(kycEndpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ dateOfBirth: currentInvestor.dateOfBirth || null }),
+        body: JSON.stringify({
+          dateOfBirth: currentInvestor.dateOfBirth || null,
+          forceNewCheck,
+        }),
       });
       const checkData = await checkResponse.json().catch(() => null);
+      console.log('kyc_api_call action=create_response', {
+        status: checkResponse.status,
+        ok: checkResponse.ok,
+        forceNewCheck,
+        body: checkData,
+      });
       if (!checkResponse.ok) {
         throw new Error(checkData?.message || `KYC check failed with HTTP ${checkResponse.status}.`);
       }
 
       let updatedInvestor = applyKycActionData(checkData);
-      let message = 'POA pre-verification submitted. Refresh if the response is still accepted.';
+      let message = forceNewCheck
+        ? 'Fresh POA pre-verification started with updated identity details.'
+        : 'POA pre-verification submitted. Refresh if the response is still accepted.';
 
       if (shouldCreateFreshKycRequest(checkData, updatedInvestor || currentInvestor)) {
+        console.log('kyc_api_call action=kyc_request_create', {
+          endpoint: `POST /api/v1/investors/${currentInvestor.id}/kyc-requests`,
+          investorId: currentInvestor.id,
+        });
         const requestResponse = await apiFetch(`/investors/${currentInvestor.id}/kyc-requests`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -1259,9 +1336,10 @@ function InvestorDetail({
       }
       setKycActionMessage(message);
     } catch (err) {
-      console.error('KYC action failed:', err);
+      console.error('kyc_api_call action=create_error', err);
       setKycActionError(err instanceof Error ? err.message : 'KYC action failed.');
     } finally {
+      kycCheckInFlightRef.current = false;
       setKycActionLoading('');
     }
   };
@@ -1481,8 +1559,27 @@ function InvestorDetail({
               <InvestorEditForm
                 investor={currentInvestor}
                 onSaved={updated => {
+                  const previousFingerprint = computeIdentityFingerprint({
+                    fullName: currentInvestor.fullName,
+                    pan: currentInvestor.pan,
+                    dateOfBirth: currentInvestor.dateOfBirth,
+                    mobile: currentInvestor.mobileNumber,
+                    email: currentInvestor.email,
+                  });
+                  const nextFingerprint = computeIdentityFingerprint({
+                    fullName: updated.fullName,
+                    pan: updated.pan,
+                    dateOfBirth: updated.dateOfBirth,
+                    mobile: updated.mobileNumber,
+                    email: updated.email,
+                  });
                   setCurrentInvestor((prev: any) => ({ ...prev, ...updated }));
                   onInvestorUpdated?.(updated);
+                  if (previousFingerprint !== nextFingerprint) {
+                    setKycPreVerification(null);
+                    setKycActionError('');
+                    setKycActionMessage('Identity updated. Run pre-check again with the new details.');
+                  }
                   setIsEditing(false);
                   setSavedFlash(true);
                   restoreEditScroll();

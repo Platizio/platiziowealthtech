@@ -34,6 +34,7 @@ type InvestorIdentity = {
   fullName?: string;
   pan?: string | null;
   dob?: string | null;
+  dateOfBirth?: string | null;
   mobile?: string | null;
   email?: string | null;
   relationshipType?: string | null;
@@ -286,4 +287,40 @@ export const preVerificationStatusClasses = (status?: string | null) => {
     default:
       return 'bg-blue-50 text-blue-700 border-blue-200';
   }
+};
+
+/** Stable fingerprint for PAN/name/DOB/mobile used to detect identity edits between KYC attempts. */
+export const computeIdentityFingerprint = (identity: InvestorIdentity & { dateOfBirth?: string | null }) => {
+  const dob = String(identity.dob || identity.dateOfBirth || '').trim();
+  return JSON.stringify({
+    fullName: getInvestorFullName(identity).toUpperCase(),
+    pan: normalizePan(identity.pan),
+    dob,
+    mobile: normalizeMobile(identity.mobile),
+    email: String(identity.email || '').trim().toLowerCase(),
+    relationshipType: identity.relationshipType || 'SELF',
+    guardianPan: normalizePan(identity.guardianPan),
+  });
+};
+
+/** True when the investor edited identity since the last saved KYC attempt. */
+export const shouldForceNewKycCheck = (
+  lastKycFingerprint: string,
+  currentFingerprint: string,
+  savedInvestor?: { pan?: string | null; fullName?: string | null; dateOfBirth?: string | null } | null,
+) => {
+  if (lastKycFingerprint && lastKycFingerprint !== currentFingerprint) {
+    return true;
+  }
+  if (!savedInvestor) {
+    return false;
+  }
+  const savedFingerprint = computeIdentityFingerprint({
+    fullName: savedInvestor.fullName || '',
+    pan: savedInvestor.pan,
+    dob: typeof savedInvestor.dateOfBirth === 'string'
+      ? savedInvestor.dateOfBirth.substring(0, 10)
+      : '',
+  });
+  return Boolean(savedFingerprint && savedFingerprint !== currentFingerprint);
 };
