@@ -54,6 +54,7 @@ export default function Dashboard({ onNavigate, userData }: DashboardProps) {
   const [metrics, setMetrics] = React.useState({
     totalAum: 0,
     investorCount: 0,
+    newInvestors30d: 0,
     sipAmount: 0,
     sipCount: 0,
     failedSips: 0,
@@ -204,9 +205,19 @@ export default function Dashboard({ onNavigate, userData }: DashboardProps) {
           .filter(a => a.category === 'Life Event' || a.category === 'Maturing');
         const lifeEventReminders = allLifeEventReminders.slice(0, 5);
 
+        // MVP-B6: "New (30d)" count of investors created in the last 30 days.
+        // Replaces a hardcoded literal `12` that contradicted books with <12
+        // total investors.
+        const cutoffMs = Date.now() - 30 * 24 * 60 * 60 * 1000;
+        const newInvestors30d = investors.reduce((acc: number, inv: any) => {
+          const t = new Date(inv.createdAt ?? '').getTime();
+          return Number.isFinite(t) && t >= cutoffMs ? acc + 1 : acc;
+        }, 0);
+
         setMetrics({
           totalAum,
           investorCount: investors.length,
+          newInvestors30d,
           sipAmount,
           sipCount,
           failedSips,
@@ -295,7 +306,7 @@ export default function Dashboard({ onNavigate, userData }: DashboardProps) {
           <Divider />
           <div className="space-y-1.5 mt-3">
             <SubRow label="Active SIP" value={metrics.sipCount} />
-            <SubRow label="New (30d)" value="12" highlight />
+            <SubRow label="New (30d)" value={metrics.newInvestors30d} highlight />
           </div>
         </SnapshotCard>
 

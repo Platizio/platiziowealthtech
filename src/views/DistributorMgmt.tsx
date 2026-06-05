@@ -8,38 +8,50 @@ import { apiFetch, apiUrl } from '../config/api';
 import { formatDate } from '../utils/formatDate';
 import { useFocusTrap } from '../hooks/useFocusTrap';
 
-interface Distributor {
-  id: number;
-  name: string;
-  arn: string;
-  aum: string;
-  aumCr: number;
-  investors: number;
-  status: 'Active' | 'Pending' | 'Inactive';
-  tier: 'Platinum' | 'Gold' | 'Silver' | 'Bronze';
-  onboarded: string;
-  email: string;
+// MVB-B2: derived-data shapes. We no longer trust `aum`/`investors`/`tier`
+// off the backend distributor record — they don't exist there. AUM and
+// investor counts come from /orders + /investors, tier is derived locally
+// with the same thresholds used by AdminOverview so the two pages agree.
+
+type TierName = 'Platinum' | 'Gold' | 'Silver' | 'Bronze';
+
+interface OrderRow {
+  id: string;
+  distributorId?: string;
+  transactionType?: string;
+  orderStatus?: string;
+  amount?: number | string;
 }
 
-const distributors: Distributor[] = [
-  { id: 1, name: 'Rahul Distributors',  arn: 'ARN-045231', aum: '₹85 Cr',  aumCr: 85,  investors: 420, status: 'Active',   tier: 'Platinum', onboarded: '12 Jan 2023', email: 'rahul@dist.in'    },
-  { id: 2, name: 'WealthEdge Advisory', arn: 'ARN-067890', aum: '₹62 Cr',  aumCr: 62,  investors: 310, status: 'Active',   tier: 'Platinum', onboarded: '05 Mar 2023', email: 'info@wealthedge.in'},
-  { id: 3, name: 'ProFunds India',      arn: 'ARN-023456', aum: '₹38 Cr',  aumCr: 38,  investors: 195, status: 'Active',   tier: 'Gold',     onboarded: '22 Jun 2023', email: 'team@profunds.in' },
-  { id: 4, name: 'Apex Partners',       arn: 'ARN-089012', aum: '₹22 Cr',  aumCr: 22,  investors: 112, status: 'Active',   tier: 'Gold',     onboarded: '14 Aug 2023', email: 'apex@partners.in' },
-  { id: 5, name: 'FinTree Wealth',      arn: 'ARN-034567', aum: '₹8 Cr',   aumCr: 8,   investors:  58, status: 'Active',   tier: 'Silver',   onboarded: '30 Sep 2023', email: 'hi@fintree.in'    },
-  { id: 6, name: 'MoneyGrow',           arn: 'ARN-056789', aum: '₹3.2 Cr', aumCr: 3.2, investors:  32, status: 'Active',   tier: 'Silver',   onboarded: '11 Nov 2023', email: 'ops@moneygrow.in' },
-  { id: 7, name: 'SmartInvest',         arn: 'ARN-012345', aum: '₹0.8 Cr', aumCr: 0.8, investors:  12, status: 'Pending',  tier: 'Bronze',   onboarded: '02 Feb 2024', email: 'hello@smartinv.in'},
-  { id: 8, name: 'PeakFunds',           arn: 'ARN-078901', aum: '₹0.3 Cr', aumCr: 0.3, investors:   7, status: 'Inactive', tier: 'Bronze',   onboarded: '18 Mar 2024', email: 'team@peakfunds.in'},
-];
+interface InvestorRow {
+  id: string;
+  distributorId?: string;
+}
 
-const networkGrowth = [
-  { month: 'Nov', count: 4 },
-  { month: 'Dec', count: 5 },
-  { month: 'Jan', count: 6 },
-  { month: 'Feb', count: 6 },
-  { month: 'Mar', count: 7 },
-  { month: 'Apr', count: 8 },
-];
+// Mirrors AdminOverview.tsx exactly so per-page totals can't drift apart.
+const AUM_OK_STATUSES: ReadonlySet<string> = new Set([
+  'SUCCESSFUL', 'ACTIVE', 'COMPLETED', 'PROCESSING', 'SUBMITTED',
+]);
+const OUTFLOW_TYPES: ReadonlySet<string> = new Set([
+  'REDEMPTION', 'SWP',
+]);
+
+// Indian-locale currency formatter — Cr / L / grouped rupees. Same shape as
+// AdminOverview so a distributor's row reads identically across screens.
+function formatCurrency(value: number): string {
+  if (!isFinite(value)) return '₹0';
+  const abs = Math.abs(value);
+  if (abs >= 1e7) return `₹${(value / 1e7).toFixed(1)} Cr`;
+  if (abs >= 1e5) return `₹${(value / 1e5).toFixed(1)} L`;
+  return `₹${Math.round(value).toLocaleString('en-IN')}`;
+}
+
+function tierFor(aum: number): TierName {
+  if (aum >= 50e7) return 'Platinum';
+  if (aum >= 10e7) return 'Gold';
+  if (aum >= 1e7)  return 'Silver';
+  return 'Bronze';
+}
 
 const tierConfig: Record<string, string> = {
   Platinum: 'bg-violet-50 text-violet-700 border-violet-200',
@@ -84,6 +96,8 @@ const matchesUiStatus = (uiLabel: string, backendStatus?: string) => {
 
 export default function DistributorMgmt({ userData }: { userData: any }) {
   const [distributors, setDistributors] = useState<any[]>([]);
+  const [orders, setOrders] = useState<OrderRow[]>([]);
+  const [investors, setInvestors] = useState<InvestorRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [tierFilter, setTierFilter] = useState('All');
@@ -94,6 +108,10 @@ export default function DistributorMgmt({ userData }: { userData: any }) {
   const userId = userData?.id;
   const userRole = userData?.role;
 
+  // ── Distributor list fetch (search-aware, debounced on keystroke). ─────────
+  // For MASTER_DISTRIBUTOR with no active search we ALSO fetch our own record
+  // and prepend it — mirroring AdminOverview, since the sub-distributors
+  // endpoint never returns the requester themselves.
   React.useEffect(() => {
     let cancelled = false;
 
@@ -104,6 +122,7 @@ export default function DistributorMgmt({ userData }: { userData: any }) {
         const role = normalizeRole(userRole);
         const params = new URLSearchParams();
         let url = apiUrl('/distributors');
+        const isMasterDefault = role === 'MASTER_DISTRIBUTOR' && userId && query.length === 0;
 
         if (query.length >= 1) {
           params.set('query', query);
@@ -115,11 +134,23 @@ export default function DistributorMgmt({ userData }: { userData: any }) {
           url = apiUrl(`/distributors/sub-distributors?${params.toString()}`);
         }
 
-        const response = await apiFetch(url);
-        if (!response.ok) throw new Error('Failed to fetch distributors');
-        const data = await response.json();
+        const [listRes, selfRes] = await Promise.all([
+          apiFetch(url),
+          isMasterDefault ? apiFetch(apiUrl(`/distributors/${encodeURIComponent(userId)}`)) : Promise.resolve(null),
+        ]);
+        if (!listRes.ok) throw new Error('Failed to fetch distributors');
+        const data = await listRes.json();
+        const baseList = Array.isArray(data) ? data : [];
 
-        if (!cancelled) setDistributors(Array.isArray(data) ? data : []);
+        let merged = baseList;
+        if (selfRes && selfRes.ok) {
+          const self = await selfRes.json();
+          if (self && self.id) {
+            merged = [self, ...baseList.filter((d: any) => d.id !== self.id)];
+          }
+        }
+
+        if (!cancelled) setDistributors(merged);
       } catch (err) {
         console.error('Error fetching distributors:', err);
         if (!cancelled) setDistributors([]);
@@ -138,23 +169,129 @@ export default function DistributorMgmt({ userData }: { userData: any }) {
     };
   }, [search, userId, userRole]);
 
-  const filtered = distributors.filter(d => {
-    const matchTier   = tierFilter   === 'All' || d.tier === tierFilter;
+  // ── Orders + investors fetch (search-independent, runs once). ──────────────
+  // These feed per-distributor AUM and investor counts. Re-fetching them on
+  // every keystroke would be wasteful — the search only narrows the
+  // distributor list, not the AUM math behind each row.
+  React.useEffect(() => {
+    let cancelled = false;
+
+    const fetchAggregates = async () => {
+      try {
+        const [invRes, ordRes] = await Promise.all([
+          apiFetch(apiUrl('/investors?page=0&size=500')),
+          apiFetch(apiUrl('/orders?page=0&size=500')),
+        ]);
+        if (!invRes.ok || !ordRes.ok) throw new Error('Failed to fetch aggregates');
+        const [invJson, ordJson] = await Promise.all([invRes.json(), ordRes.json()]);
+        const invList: InvestorRow[] = invJson?.content ?? (Array.isArray(invJson) ? invJson : []);
+        const ordList: OrderRow[] = ordJson?.content ?? (Array.isArray(ordJson) ? ordJson : []);
+        if (!cancelled) {
+          setInvestors(invList);
+          setOrders(ordList);
+        }
+      } catch (err) {
+        console.error('Error fetching investors/orders for distributor view:', err);
+        if (!cancelled) {
+          setInvestors([]);
+          setOrders([]);
+        }
+      }
+    };
+
+    fetchAggregates();
+    return () => { cancelled = true; };
+  }, []);
+
+  // ── Per-distributor AUM (Cr-eligible totals only). ─────────────────────────
+  const aumByDistributor = React.useMemo(() => {
+    const m = new Map<string, number>();
+    for (const o of orders) {
+      const status = (o.orderStatus ?? '').toUpperCase();
+      const type = (o.transactionType ?? '').toUpperCase();
+      if (!AUM_OK_STATUSES.has(status)) continue;
+      if (OUTFLOW_TYPES.has(type)) continue;
+      if (!o.distributorId) continue;
+      m.set(o.distributorId, (m.get(o.distributorId) ?? 0) + (Number(o.amount) || 0));
+    }
+    return m;
+  }, [orders]);
+
+  // ── Per-distributor investor counts. ───────────────────────────────────────
+  const investorCountByDistributor = React.useMemo(() => {
+    const m = new Map<string, number>();
+    for (const inv of investors) {
+      if (!inv.distributorId) continue;
+      m.set(inv.distributorId, (m.get(inv.distributorId) ?? 0) + 1);
+    }
+    return m;
+  }, [investors]);
+
+  // ── Enrich each distributor row with derived AUM/tier/count once. ──────────
+  // Doing this in one pass keeps the filter, the pill counts, and the table
+  // body all reading from the same source of truth.
+  const enriched = React.useMemo(() => {
+    return distributors.map((d: any) => {
+      const aum = aumByDistributor.get(d.id) ?? 0;
+      const investorsCount = investorCountByDistributor.get(d.id) ?? 0;
+      return {
+        ...d,
+        _aum: aum,
+        _aumLabel: formatCurrency(aum),
+        _investors: investorsCount,
+        _tier: tierFor(aum) as TierName,
+      };
+    });
+  }, [distributors, aumByDistributor, investorCountByDistributor]);
+
+  const filtered = enriched.filter(d => {
+    const matchTier   = tierFilter   === 'All' || d._tier === tierFilter;
     const matchStatus = matchesUiStatus(statusFilter, d.status);
     return matchTier && matchStatus;
   });
 
   const tierCounts = TIERS.slice(1).reduce((acc, t) => {
-    acc[t] = distributors.filter(d => d.tier === t).length;
+    acc[t] = enriched.filter(d => d._tier === t).length;
     return acc;
   }, {} as Record<string, number>);
+
+  // ── Network growth: cumulative distributor count per month, last 6 months.
+  // Mirrors the structure of AdminOverview's AUM trend so the chart card
+  // tells the same story — onboarding momentum, not invented numbers.
+  const networkGrowth = React.useMemo(() => {
+    const now = new Date();
+    const months: { key: string; label: string; end: number }[] = [];
+    for (let i = 5; i >= 0; i--) {
+      const endOfMonth = new Date(now.getFullYear(), now.getMonth() - i + 1, 0, 23, 59, 59, 999);
+      const label = new Date(now.getFullYear(), now.getMonth() - i, 1)
+        .toLocaleDateString('en-US', { month: 'short' });
+      months.push({
+        key: `${endOfMonth.getFullYear()}-${endOfMonth.getMonth()}`,
+        label,
+        end: endOfMonth.getTime(),
+      });
+    }
+    return months.map(m => {
+      const count = distributors.reduce((acc: number, d: any) => {
+        const t = new Date(d.createdAt).getTime();
+        return isFinite(t) && t <= m.end ? acc + 1 : acc;
+      }, 0);
+      return { month: m.label, count };
+    });
+  }, [distributors]);
+
+  const networkGrowthDelta = networkGrowth.length
+    ? (networkGrowth[networkGrowth.length - 1].count - networkGrowth[0].count)
+    : 0;
 
   return (
     <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="p-8 space-y-6">
       <div className="flex justify-between items-center">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight text-slate-800">Distributor Management</h1>
-          <p className="text-slate-500 text-sm mt-1">{distributors.length} distributors enrolled in the network</p>
+          <p className="text-slate-500 text-sm mt-1">
+            {distributors.length} {distributors.length === 1 ? 'distributor' : 'distributors'} enrolled in the network
+          </p>
         </div>
         <button
           onClick={() => setShowAddModal(true)}
@@ -263,10 +400,10 @@ export default function DistributorMgmt({ userData }: { userData: any }) {
               {filtered.map(d => {
                 const name = d.name || d.fullName || 'Unnamed';
                 const arn = d.arn || d.arnNumber || 'N/A';
-                const aum = d.aum || '₹0';
-                const investorsCount = d.investors || 0;
+                const aum = d._aumLabel;
+                const investorsCount = d._investors;
                 const status = d.status || 'DRAFT';
-                const tier = d.tier || 'Bronze';
+                const tier: TierName = d._tier;
                 const onboarded = (d.onboarded || d.createdAt) ? formatDate(d.onboarded || d.createdAt) : 'N/A';
                 
                 const sc = statusConfig[status.toUpperCase()] || statusConfig['DRAFT'];
@@ -306,33 +443,37 @@ export default function DistributorMgmt({ userData }: { userData: any }) {
         </div>
       </div>
 
-      {/* Network Growth */}
-      <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-200">
-        <div className="flex justify-between items-center mb-6">
-          <div>
-            <h2 className="font-semibold text-slate-800">Network Growth</h2>
-            <p className="text-xs text-slate-500 mt-0.5">Total distributors onboarded over time</p>
+      {/* Network Growth — cumulative distributor count, rolling 6 months. */}
+      {distributors.length > 0 && (
+        <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-200">
+          <div className="flex justify-between items-center mb-6">
+            <div>
+              <h2 className="font-semibold text-slate-800">Network Growth</h2>
+              <p className="text-xs text-slate-500 mt-0.5">Total distributors onboarded over time</p>
+            </div>
+            <span className="text-xs font-semibold text-green-600 bg-green-50 px-3 py-1 rounded-full border border-green-100">
+              {networkGrowthDelta > 0 ? `+${networkGrowthDelta} in 6 months` : 'No new in 6M'}
+            </span>
           </div>
-          <span className="text-xs font-semibold text-green-600 bg-green-50 px-3 py-1 rounded-full border border-green-100">+4 in 6 months</span>
+          <div className="h-40">
+            <ResponsiveContainer width="100%" height="100%">
+              <AreaChart data={networkGrowth} margin={{ top: 5, right: 5, left: -20, bottom: 0 }}>
+                <defs>
+                  <linearGradient id="netGrad" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%"  stopColor="#8b5cf6" stopOpacity={0.2} />
+                    <stop offset="95%" stopColor="#8b5cf6" stopOpacity={0}   />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                <XAxis dataKey="month" axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: '#94a3b8' }} />
+                <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: '#94a3b8' }} allowDecimals={false} />
+                <Tooltip contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }} />
+                <Area type="monotone" dataKey="count" stroke="#8b5cf6" strokeWidth={2.5} fillOpacity={1} fill="url(#netGrad)" dot={{ fill: '#8b5cf6', strokeWidth: 0, r: 4 }} name="Distributors" />
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
         </div>
-        <div className="h-40">
-          <ResponsiveContainer width="100%" height="100%">
-            <AreaChart data={networkGrowth} margin={{ top: 5, right: 5, left: -20, bottom: 0 }}>
-              <defs>
-                <linearGradient id="netGrad" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%"  stopColor="#8b5cf6" stopOpacity={0.2} />
-                  <stop offset="95%" stopColor="#8b5cf6" stopOpacity={0}   />
-                </linearGradient>
-              </defs>
-              <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-              <XAxis dataKey="month" axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: '#94a3b8' }} />
-              <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: '#94a3b8' }} allowDecimals={false} />
-              <Tooltip contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }} />
-              <Area type="monotone" dataKey="count" stroke="#8b5cf6" strokeWidth={2.5} fillOpacity={1} fill="url(#netGrad)" dot={{ fill: '#8b5cf6', strokeWidth: 0, r: 4 }} name="Distributors" />
-            </AreaChart>
-          </ResponsiveContainer>
-        </div>
-      </div>
+      )}
 
       {/* Add Distributor Modal */}
       <AnimatePresence>

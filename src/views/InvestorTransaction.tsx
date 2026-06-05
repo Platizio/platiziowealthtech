@@ -11,6 +11,32 @@ import { apiFetch } from '../config/api';
 import { getPageContent } from '../utils/pagination';
 import { formatDate } from '../utils/formatDate';
 
+const parseSchemeMetadata = (metadataJson?: string): any => {
+  if (!metadataJson) return {};
+  try { return JSON.parse(metadataJson); } catch { return {}; }
+};
+
+const firstMetaValue = (meta: any, keys: string[]) => {
+  for (const key of keys) {
+    const value = meta?.[key];
+    if (value !== undefined && value !== null && value !== '') return value;
+  }
+  return undefined;
+};
+
+const formatSchemeNav = (rawNav: unknown): string => {
+  const num = typeof rawNav === 'number' ? rawNav : Number(String(rawNav ?? '').replace(/[^0-9.]/g, ''));
+  return Number.isFinite(num) && num > 0
+    ? `₹${num.toLocaleString('en-IN', { maximumFractionDigits: 2, minimumFractionDigits: 2 })}`
+    : '₹0.00';
+};
+
+const formatSchemeReturn = (rawReturn: unknown): string => {
+  const num = typeof rawReturn === 'number' ? rawReturn : Number(String(rawReturn ?? '').replace(/[^0-9.-]/g, ''));
+  if (!Number.isFinite(num)) return '+0.0%';
+  return `${num >= 0 ? '+' : ''}${num.toFixed(1)}%`;
+};
+
 // ── Types ────────────────────────────────────────────────────────────────────
 interface Investor {
   id: string;
@@ -232,17 +258,26 @@ export default function InvestorTransaction({ investor, onComplete, onBack }: Pr
         const schemes = getPageContent(payload);
         if (schemes.length === 0) return;
         const colors: ProductColor[] = ['blue', 'violet', 'indigo', 'rose', 'emerald'];
-        setProducts(schemes.map((scheme: any, index: number) => ({
-          id: scheme.id,
-          name: scheme.schemeName || scheme.name || 'Unknown Scheme',
-          category: scheme.category || scheme.productType || 'Mutual Fund',
-          risk: scheme.riskLevel || 'Moderate',
-          nav: scheme.nav ? `₹${scheme.nav}` : '₹0.00',
-          returns: { '1Y': '+0.0%', '3Y': '+0.0%', '5Y': '+0.0%' },
-          minSip: Number(scheme.minSip || 500),
-          minLumpsum: Number(scheme.minInvestment || 1000),
-          color: colors[index % colors.length],
-        })));
+        setProducts(schemes.map((scheme: any, index: number) => {
+          const meta = parseSchemeMetadata(scheme.metadataJson);
+          const rawNav = firstMetaValue(meta, ['nav', 'current_nav', 'last_nav']);
+          const ret = meta?.returns || {};
+          return {
+            id: scheme.id,
+            name: scheme.schemeName || scheme.name || 'Unknown Scheme',
+            category: scheme.category || scheme.productType || 'Mutual Fund',
+            risk: scheme.riskLevel || 'Moderate',
+            nav: formatSchemeNav(rawNav),
+            returns: {
+              '1Y': formatSchemeReturn(ret['1y'] ?? ret.one_year),
+              '3Y': formatSchemeReturn(ret['3y'] ?? ret.three_year),
+              '5Y': formatSchemeReturn(ret['5y'] ?? ret.five_year),
+            },
+            minSip: Number(scheme.minSip || 500),
+            minLumpsum: Number(scheme.minInvestment || 1000),
+            color: colors[index % colors.length],
+          };
+        }));
       })
       .catch(err => console.error('Failed to load product schemes for transaction form', err));
 
@@ -409,11 +444,22 @@ export default function InvestorTransaction({ investor, onComplete, onBack }: Pr
 
       <StepBar current={step} />
 
+      {/*
+        MVP-B8: the wizard flashed blank for ~300 ms on every Next because the
+        per-step motion.divs had `initial={{ opacity: 0, … }}` and `exit={{
+        opacity: 0, … }}` while AnimatePresence ran in `mode="wait"`. The
+        outgoing step faded to opacity 0, unmounted, and only THEN did the new
+        step mount and start its own fade-from-0 — so there were a few hundred
+        milliseconds with nothing on screen between them. Fix: the steps now
+        animate ONLY on the X axis (slide left/right) at constant opacity, so
+        content is visible the entire transition. `mode="wait"` is preserved
+        so we don't stack two full-height steps in the layout simultaneously.
+      */}
       <AnimatePresence mode="wait">
 
         {/* ── Step 1: Select Fund ─────────────────────────────────────────── */}
         {step === 1 && (
-          <motion.div key="s1" initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }}>
+          <motion.div key="s1" initial={{ x: 20 }} animate={{ x: 0 }} exit={{ x: -20 }} transition={{ duration: 0.22 }}>
             <h2 className="font-semibold text-slate-800 mb-4">Select a Fund</h2>
             <div className="space-y-3">
               {products.map(p => (
@@ -472,7 +518,7 @@ export default function InvestorTransaction({ investor, onComplete, onBack }: Pr
 
         {/* ── Step 2: Amount ──────────────────────────────────────────────── */}
         {step === 2 && product && (
-          <motion.div key="s2" initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }}>
+          <motion.div key="s2" initial={{ x: 20 }} animate={{ x: 0 }} exit={{ x: -20 }} transition={{ duration: 0.22 }}>
             <h2 className="font-semibold text-slate-800 mb-4">Investment Details</h2>
 
             {/* Selected fund summary */}
@@ -598,7 +644,7 @@ export default function InvestorTransaction({ investor, onComplete, onBack }: Pr
 
         {/* ── Step 3: Bank ────────────────────────────────────────────────── */}
         {step === 3 && (
-          <motion.div key="s3" initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }}>
+          <motion.div key="s3" initial={{ x: 20 }} animate={{ x: 0 }} exit={{ x: -20 }} transition={{ duration: 0.22 }}>
             <h2 className="font-semibold text-slate-800 mb-4">Select Payment Bank</h2>
             <p className="text-sm text-slate-500 mb-6">
               Choose the bank account to {txType === 'sip' ? 'set up auto-debit mandate' : 'debit the investment amount'}.
@@ -671,7 +717,7 @@ export default function InvestorTransaction({ investor, onComplete, onBack }: Pr
 
         {/* ── Step 4: Confirm ─────────────────────────────────────────────── */}
         {step === 4 && product && bank && (
-          <motion.div key="s4" initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }}>
+          <motion.div key="s4" initial={{ x: 20 }} animate={{ x: 0 }} exit={{ x: -20 }} transition={{ duration: 0.22 }}>
             <h2 className="font-semibold text-slate-800 mb-4">Review &amp; Confirm</h2>
 
             <div className="bg-white rounded-2xl border border-slate-200 p-6 mb-6 space-y-4">

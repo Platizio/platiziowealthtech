@@ -20,20 +20,9 @@ interface Investor {
   pan: string;
 }
 
-const mockInvestors: Investor[] = [
-  { id:  1, name: 'Aditya Sharma',       distributor: 'Direct (Master)',    productClasses: ['MF', 'SIF'], invested: '₹1.2 Cr',  kyc: 'Verified',    pan: 'ABCDE1234F' },
-  { id:  2, name: 'Meera Iyer',          distributor: 'Rahul Distributors', productClasses: ['MF'],        invested: '₹45 L',    kyc: 'Pending',     pan: 'FGHIJ5678K' },
-  { id:  3, name: 'Rahul Verma',         distributor: 'WealthEdge Advisory',productClasses: ['MF'],        invested: '₹15 Cr',   kyc: 'Verified',    pan: 'KLMNO9012P' },
-  { id:  4, name: 'Sunita Kapur',        distributor: 'Direct (Master)',    productClasses: ['MF'],        invested: '₹12 L',    kyc: 'Verified',    pan: 'QRSTU3456V' },
-  { id:  5, name: 'Tech Innovations PF', distributor: 'ProFunds India',     productClasses: ['MF', 'SIF'], invested: '₹42 Cr',   kyc: 'Verified',    pan: 'WXYZ7890AB' },
-  { id:  6, name: 'Priya Nair',          distributor: 'Apex Partners',      productClasses: ['MF'],        invested: '₹8 L',     kyc: 'In Progress', pan: 'CDEFG1234H' },
-  { id:  7, name: 'Vikram Singh',        distributor: 'FinTree Wealth',     productClasses: ['MF'],        invested: '₹3.5 L',   kyc: 'Failed',      pan: 'IJKLM5678N' },
-  { id:  8, name: 'Anjali Desai',        distributor: 'Rahul Distributors', productClasses: ['MF'],        invested: '₹22 L',    kyc: 'Verified',    pan: 'OPQRS9012T' },
-  { id:  9, name: 'Mohit Gupta',         distributor: 'WealthEdge Advisory',productClasses: ['MF', 'SIF'], invested: '₹1.8 Cr',  kyc: 'Verified',    pan: 'UVWXY3456Z' },
-  { id: 10, name: 'Nisha Patel',         distributor: 'Direct (Master)',    productClasses: ['MF'],        invested: '₹5 L',     kyc: 'Pending',     pan: 'ABCDE6789F' },
-  { id: 11, name: 'Rajesh Kumar',        distributor: 'ProFunds India',     productClasses: ['MF'],        invested: '₹28 L',    kyc: 'Verified',    pan: 'GHIJK2345L' },
-  { id: 12, name: 'Prakash Mehta',       distributor: 'MoneyGrow',          productClasses: ['MF'],        invested: '₹2.1 L',   kyc: 'Failed',      pan: 'MNOPQ6789R' },
-];
+// MVP-B2: removed mockInvestors entirely — a transient backend error must not
+// silently surface 12 fabricated rows that contradict AdminOverview's counts.
+// The catch handler below now sets investors to [] and raises an error banner.
 
 const kycConfig: Record<string, { color: string; bg: string; icon: React.ReactNode }> = {
   Verified:    { color: 'text-green-700', bg: 'bg-green-50',  icon: <CheckCircle2 className="w-3.5 h-3.5" /> },
@@ -64,6 +53,7 @@ export default function InvestorMgmt({ userData }: { userData?: any }) {
   const [investors,      setInvestors]      = useState<Investor[]>([]);
   const [distributors,   setDistributors]   = useState<any[]>([]);
   const [loading,        setLoading]        = useState(true);
+  const [loadError,      setLoadError]      = useState(false);
   const [search,         setSearch]         = useState('');
   const [kycFilter,      setKycFilter]      = useState('All');
   const [distFilter,     setDistFilter]     = useState('All');
@@ -158,10 +148,18 @@ export default function InvestorMgmt({ userData }: { userData?: any }) {
         const res = await apiFetch(url);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
-        if (!cancelled) setInvestors((Array.isArray(data) ? data : []).map(mapInvestor));
+        if (!cancelled) {
+          setInvestors((Array.isArray(data) ? data : []).map(mapInvestor));
+          setLoadError(false);
+        }
       } catch (err) {
         console.error('Failed to fetch investors:', err);
-        if (!cancelled) setInvestors(mockInvestors);
+        if (!cancelled) {
+          // MVP-B2: empty + banner, never mock data — fake counts here would
+          // contradict AdminOverview's totals and erode trust in the page.
+          setInvestors([]);
+          setLoadError(true);
+        }
       } finally {
         if (!cancelled) {
           hasLoadedRef.current = true;
@@ -287,7 +285,7 @@ export default function InvestorMgmt({ userData }: { userData?: any }) {
         <div>
           <h1 className="text-2xl font-semibold tracking-tight text-slate-800">Investor Management</h1>
           <p className="text-slate-500 text-sm mt-1">
-            {loading ? 'Loading investors…' : `${total} investors across visible distributors`}
+            {loading ? 'Loading investors…' : `${total} ${total === 1 ? 'investor' : 'investors'} across visible distributors`}
           </p>
         </div>
         <div className="flex gap-3">
@@ -301,6 +299,15 @@ export default function InvestorMgmt({ userData }: { userData?: any }) {
           </button>
         </div>
       </div>
+
+      {/* Load-error banner — surfaced when the investors fetch fails so the
+          user sees something honest instead of fabricated rows. */}
+      {loadError && (
+        <div className="flex items-center gap-2.5 px-4 py-3 rounded-xl border border-red-200 bg-red-50 text-red-700 text-sm font-medium">
+          <AlertCircle className="w-4 h-4 flex-shrink-0" />
+          Couldn't load investors. Please try again later.
+        </div>
+      )}
 
       {/* KYC Status Banner */}
       <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-200">
@@ -433,6 +440,13 @@ export default function InvestorMgmt({ userData }: { userData?: any }) {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
+              {!loading && investors.length === 0 && !loadError && (
+                <tr>
+                  <td colSpan={6} className="px-6 py-12 text-center text-sm text-slate-400">
+                    No investors yet — onboard one using the buttons above.
+                  </td>
+                </tr>
+              )}
               {filtered.map(inv => {
                 const kc = kycConfig[inv.kyc];
                 return (

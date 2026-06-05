@@ -234,7 +234,7 @@ export default function App() {
           {/* Admin Routes */}
           {canAccessAdmin ? (
             <>
-              <Route path="/admin/overview" element={<AdminOverview />} />
+              <Route path="/admin/overview" element={<AdminOverview userData={userData} />} />
               <Route path="/admin/distributor-mgmt" element={<DistributorMgmt userData={userData} />} />
               <Route path="/admin/product-mgmt" element={<ProductMgmtWrapper userData={userData} />} />
               <Route path="/admin/investor-mgmt" element={<InvestorMgmt userData={userData} />} />

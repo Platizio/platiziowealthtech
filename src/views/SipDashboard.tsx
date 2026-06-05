@@ -161,9 +161,12 @@ export default function SipDashboard({ onBack, userData }: { onBack: () => void;
         if (Date.now() - ts < CACHE_TTL_MS) {
           setSips(payload.sips || []);
           setSipTrend(
+            // MVP-B7: backend `amount` is rupees; the chart axis label is
+            // "(₹ L)", so we convert rupees → lakhs once here. Without this,
+            // 55 000 rupees plots as "₹55000L" (₹550 Cr) — a 100 000× lie.
             (payload.trend || []).map((t: any) => ({
               month: t.month,
-              value: Number(t.amount) || 0,
+              value: (Number(t.amount) || 0) / 1e5,
               count: t.count ?? 0,
             }))
           );
@@ -192,10 +195,13 @@ export default function SipDashboard({ onBack, userData }: { onBack: () => void;
         setSips(data.sips || []);
         // Normalise backend {month, amount, count} → {month, value, count}.
         // Coerce amount to Number to handle BigDecimal serialised as string.
+        // MVP-B7: divide by 1e5 once — backend amount is rupees, chart axis is
+        // labelled "(₹ L)". The two paths (cache + fresh) must use the same
+        // conversion or they'll disagree on navigation.
         setSipTrend(
           (data.trend || []).map((t: any) => ({
             month: t.month,
-            value: Number(t.amount) || 0,
+            value: (Number(t.amount) || 0) / 1e5,
             count: t.count ?? 0,
           }))
         );
