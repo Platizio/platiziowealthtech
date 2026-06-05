@@ -5,8 +5,8 @@ import com.platizio.wealthtech.dto.ProductSchemeRequest;
 import com.platizio.wealthtech.dto.ProductSchemeStatusRequest;
 import com.platizio.wealthtech.service.ProductService;
 import jakarta.validation.Valid;
-import java.util.List;
 import java.util.UUID;
+import org.springframework.data.domain.Page;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
@@ -21,8 +21,52 @@ public class ProductController {
     }
 
     @GetMapping("/schemes")
-    public List<ProductScheme> listSchemes() {
-        return productService.listSchemes();
+    public Page<ProductScheme> listSchemes(
+            @RequestParam(required = false) String query,
+            @RequestParam(required = false) Boolean active,
+            @RequestParam(required = false) String assetClass,
+            @RequestParam(required = false) String category,
+            @RequestParam(required = false) String productType,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size
+    ) {
+        return productService.listSchemesPage(query, active, assetClass, category, productType, page, size);
+    }
+
+    @GetMapping("/schemes/page")
+    public Page<ProductScheme> listAvailableSchemesPage(
+            @RequestParam(required = false) String query,
+            @RequestParam(required = false) Boolean active,
+            @RequestParam(required = false) String assetClass,
+            @RequestParam(required = false) String category,
+            @RequestParam(required = false) String productType,
+            @RequestParam(defaultValue = "false") boolean syncFromCybrilla,
+            @RequestParam(defaultValue = "false") boolean forceCatalogueRefresh,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size
+    ) {
+        Boolean effectiveActive = active == null ? Boolean.TRUE : active;
+        if (syncFromCybrilla) {
+            return productService.syncAvailableFundsFromCybrilla(
+                    forceCatalogueRefresh,
+                    query,
+                    effectiveActive,
+                    assetClass,
+                    category,
+                    productType,
+                    page,
+                    size
+            );
+        }
+        return productService.listSchemesPage(
+                query,
+                effectiveActive,
+                assetClass,
+                category,
+                productType,
+                page,
+                size
+        );
     }
 
     @GetMapping("/schemes/{schemeId}")
@@ -31,31 +75,53 @@ public class ProductController {
     }
 
     @PostMapping("/schemes")
-    @PreAuthorize("hasRole('ADMIN')")
+    @PreAuthorize("hasAnyRole('ADMIN','MASTER_DISTRIBUTOR')")
     public ProductScheme createScheme(@Valid @RequestBody ProductSchemeRequest request) {
         return productService.createScheme(request);
     }
 
     @PutMapping("/schemes/{schemeId}")
-    @PreAuthorize("hasRole('ADMIN')")
+    @PreAuthorize("hasAnyRole('ADMIN','MASTER_DISTRIBUTOR')")
     public ProductScheme updateScheme(@PathVariable UUID schemeId, @Valid @RequestBody ProductSchemeRequest request) {
         return productService.updateScheme(schemeId, request);
     }
 
     @PatchMapping("/schemes/{schemeId}/status")
-    @PreAuthorize("hasRole('ADMIN')")
+    @PreAuthorize("hasAnyRole('ADMIN','MASTER_DISTRIBUTOR')")
     public ProductScheme updateSchemeStatus(@PathVariable UUID schemeId, @Valid @RequestBody ProductSchemeStatusRequest request) {
         return productService.updateSchemeStatus(schemeId, request.active());
     }
 
     @PostMapping("/schemes/refresh")
-    @PreAuthorize("hasRole('ADMIN')")
-    public List<ProductScheme> refreshSchemes() {
-        return productService.refreshFromCybrilla();
+    @PreAuthorize("hasAnyRole('ADMIN','MASTER_DISTRIBUTOR')")
+    public Page<ProductScheme> refreshSchemes(
+            @RequestParam(required = false) String query,
+            @RequestParam(required = false) Boolean active,
+            @RequestParam(required = false) String assetClass,
+            @RequestParam(required = false) String category,
+            @RequestParam(required = false) String productType,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size
+    ) {
+        return productService.syncAvailableFundsFromCybrilla(true, query, active, assetClass, category, productType, page, size);
+    }
+
+    @PostMapping({"/funds/sync", "/schemes/sync"})
+    @PreAuthorize("hasAnyRole('ADMIN','MASTER_DISTRIBUTOR')")
+    public Page<ProductScheme> syncFundsFromCybrilla(
+            @RequestParam(required = false) String query,
+            @RequestParam(required = false) Boolean active,
+            @RequestParam(required = false) String assetClass,
+            @RequestParam(required = false) String category,
+            @RequestParam(required = false) String productType,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size
+    ) {
+        return productService.syncAvailableFundsFromCybrilla(true, query, active, assetClass, category, productType, page, size);
     }
 
     @DeleteMapping("/schemes/{schemeId}")
-    @PreAuthorize("hasRole('ADMIN')")
+    @PreAuthorize("hasAnyRole('ADMIN','MASTER_DISTRIBUTOR')")
     public void deleteScheme(@PathVariable UUID schemeId) {
         productService.deleteScheme(schemeId);
     }

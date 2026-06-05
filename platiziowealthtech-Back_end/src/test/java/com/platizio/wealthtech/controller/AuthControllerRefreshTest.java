@@ -25,8 +25,9 @@ class AuthControllerRefreshTest {
         AuthController controller = new AuthController(authService, cookieService(), null);
         MockHttpServletResponse response = new MockHttpServletResponse();
 
-        controller.login(new AuthLoginRequest("user@example.com", "password"), response);
+        AuthResponse authResponse = controller.login(new AuthLoginRequest("user@example.com", "password"), response);
 
+        assertThat(authResponse.token()).isNull();
         List<String> cookies = response.getHeaders(HttpHeaders.SET_COOKIE);
         assertThat(cookies).anySatisfy(cookie -> {
             assertThat(cookie).contains("access_token=access.jwt");
@@ -54,6 +55,7 @@ class AuthControllerRefreshTest {
 
         assertThat(authService.refreshedToken).isEqualTo(refreshToken.toString());
         assertThat(authResponse.message()).isEqualTo("Token refreshed");
+        assertThat(authResponse.token()).isNull();
         assertThat(response.getHeaders(HttpHeaders.SET_COOKIE))
                 .anySatisfy(cookie -> assertThat(cookie).contains("access_token=refreshed.jwt"));
         assertThat(response.getHeaders(HttpHeaders.SET_COOKIE))

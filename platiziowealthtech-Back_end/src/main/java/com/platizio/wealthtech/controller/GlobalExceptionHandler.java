@@ -5,12 +5,14 @@ import com.platizio.wealthtech.common.ConflictException;
 import com.platizio.wealthtech.common.DuplicateResourceException;
 import com.platizio.wealthtech.dto.ApiErrorResponse;
 import com.platizio.wealthtech.integration.CybrillaApiException;
+import com.platizio.wealthtech.integration.CybrillaUnavailableException;
 import com.platizio.wealthtech.integration.auth.ExternalApiAuthenticationException;
 import jakarta.persistence.EntityNotFoundException;
 import jakarta.servlet.http.HttpServletRequest;
 import java.time.OffsetDateTime;
 import java.util.Collections;
 import java.util.LinkedHashMap;
+import java.util.Locale;
 import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -150,17 +152,92 @@ public class GlobalExceptionHandler {
         return new ApiErrorResponse(OffsetDateTime.now(), 409, "CONFLICT", friendly, request.getRequestURI());
     }
 
+    /**
+     * Provider is unreachable (DNS/connection/timeout). This is transient and
+     * the caller already persisted a pending/deferred state, so we return 503
+     * with a clear retry message and log at WARN (no noisy full stack trace).
+     * Declared separately from the generic Cybrilla handler so Spring routes the
+     * connectivity subtype here.
+     */
+    @ExceptionHandler(CybrillaUnavailableException.class)
+    @ResponseStatus(HttpStatus.SERVICE_UNAVAILABLE)
+    public ApiErrorResponse handleCybrillaUnavailable(CybrillaUnavailableException ex, HttpServletRequest request) {
+        logger.warn("External investment platform unreachable at {}: {}", request.getRequestURI(), ex.getMessage());
+        String message = request.getRequestURI() != null && request.getRequestURI().contains("/products")
+                ? "Cannot sync the product catalogue: Cybrilla/Fintech Primitives is unreachable (network/DNS). "
+                        + "Check FINPRIM_TENANT_CLIENT_ID, FINPRIM_TENANT_CLIENT_SECRET, and that s.finprim.com resolves, then retry Sync from Cybrilla."
+                : "Cybrilla/Fintech Primitives is currently unreachable (network/DNS). "
+                        + "Your changes were saved and the action can be retried in a moment.";
+        return new ApiErrorResponse(
+                OffsetDateTime.now(),
+                503,
+                "EXTERNAL_PLATFORM_UNAVAILABLE",
+                message,
+                request.getRequestURI()
+        );
+    }
+
     @ExceptionHandler({CybrillaApiException.class, ExternalApiAuthenticationException.class})
     @ResponseStatus(HttpStatus.BAD_GATEWAY)
     public ApiErrorResponse handleCybrillaApiException(RuntimeException ex, HttpServletRequest request) {
         logger.error("External investment platform call failed at {}: {}", request.getRequestURI(), ex.getMessage(), ex);
+        String rawChain = buildCauseChainMessage(ex);
+        String causeChain = rawChain.toLowerCase(Locale.ROOT);
+
+        String message;
+        if (causeChain.contains("is not configured") || causeChain.contains("configuration error")) {
+            // Missing/blank external credentials. POA pre-verification (KYC checks
+            // and bank verification) authenticates with a DIFFERENT audience than
+            // the product-catalogue/tenant calls, so it can fail even when product
+            // sync works. Name the exact env vars so the operator can fix it.
+            message = "Cybrilla/Fintech Primitives credentials are not fully configured ("
+                    + safeExternalReason(rawChain)
+                    + "). KYC pre-verification needs the POA credentials "
+                    + "CYBRILLA_PRE_VERIFICATION_CLIENT_ID and CYBRILLA_PRE_VERIFICATION_CLIENT_SECRET "
+                    + "(separate from the tenant FINPRIM_TENANT_CLIENT_ID / FINPRIM_TENANT_CLIENT_SECRET). "
+                    + "Set them in the backend .env and restart, then retry.";
+        } else if (causeChain.contains("unable to authenticate")
+                || causeChain.contains("401")
+                || causeChain.contains("unauthorized")) {
+            message = "Could not authenticate with Cybrilla/Fintech Primitives. Verify the client id, "
+                    + "client secret, and token URL for the POA pre-verification audience "
+                    + "(CYBRILLA_PRE_VERIFICATION_*), then retry.";
+        } else if (causeChain.contains("too many requests") || causeChain.contains("429")) {
+            message = "Cybrilla/Fintech Primitives is rate-limiting live requests right now. Please wait a few minutes; cached local data is still available where supported.";
+        } else {
+            message = "Unable to post data to Cybrilla/Fintech Primitives right now ("
+                    + safeExternalReason(rawChain)
+                    + "). Please check external platform connectivity and retry.";
+        }
         return new ApiErrorResponse(
                 OffsetDateTime.now(),
                 502,
                 "EXTERNAL_PLATFORM_ERROR",
-                "Unable to post data to Cybrilla/Fintech Primitives right now. Please check external platform connectivity and retry.",
+                message,
                 request.getRequestURI()
         );
+    }
+
+    /**
+     * Extracts a client-safe reason from an external-call exception chain. Drops
+     * everything from " response=" onward because provider response bodies can
+     * contain PII (PAN, names); the prefix only carries the operation + HTTP
+     * status, which is safe and actionable.
+     */
+    private String safeExternalReason(String message) {
+        if (message == null || message.isBlank()) {
+            return "no further detail available";
+        }
+        String trimmed = message;
+        int idx = trimmed.toLowerCase(Locale.ROOT).indexOf(" response=");
+        if (idx >= 0) {
+            trimmed = trimmed.substring(0, idx);
+        }
+        trimmed = trimmed.trim();
+        if (trimmed.length() > 200) {
+            trimmed = trimmed.substring(0, 200) + "…";
+        }
+        return trimmed.isBlank() ? "no further detail available" : trimmed;
     }
 
     @ExceptionHandler(Exception.class)

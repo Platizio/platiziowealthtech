@@ -22,8 +22,8 @@ public record OAuthClientCredentials(
     }
 
     public Duration safeRefreshBuffer() {
-        if (refreshBuffer == null || refreshBuffer.isNegative() || refreshBuffer.isZero()) {
-            return Duration.ofMinutes(2);
+        if (refreshBuffer == null || refreshBuffer.isNegative()) {
+            return Duration.ZERO;
         }
         return refreshBuffer;
     }

@@ -28,6 +28,8 @@ public class ProductScheme extends BaseEntity {
     private String productType;
     private Boolean active = Boolean.TRUE;
     private String metadataJson;
+    @Column(columnDefinition = "TEXT")
+    private String externalFetchRequestJson;
 
     public String getSchemeName() { return schemeName; }
     public void setSchemeName(String schemeName) { this.schemeName = schemeName; }
@@ -45,4 +47,6 @@ public class ProductScheme extends BaseEntity {
     public void setActive(Boolean active) { this.active = active; }
     public String getMetadataJson() { return metadataJson; }
     public void setMetadataJson(String metadataJson) { this.metadataJson = metadataJson; }
+    public String getExternalFetchRequestJson() { return externalFetchRequestJson; }
+    public void setExternalFetchRequestJson(String externalFetchRequestJson) { this.externalFetchRequestJson = externalFetchRequestJson; }
 }

@@ -16,13 +16,33 @@ class ProductControllerTest {
         Method createScheme = ProductController.class.getMethod("createScheme", ProductSchemeRequest.class);
         Method updateScheme = ProductController.class.getMethod("updateScheme", UUID.class, ProductSchemeRequest.class);
         Method updateSchemeStatus = ProductController.class.getMethod("updateSchemeStatus", UUID.class, ProductSchemeStatusRequest.class);
-        Method refreshSchemes = ProductController.class.getMethod("refreshSchemes");
+        Method refreshSchemes = ProductController.class.getMethod(
+                "refreshSchemes",
+                String.class,
+                Boolean.class,
+                String.class,
+                String.class,
+                String.class,
+                int.class,
+                int.class
+        );
+        Method syncFundsFromCybrilla = ProductController.class.getMethod(
+                "syncFundsFromCybrilla",
+                String.class,
+                Boolean.class,
+                String.class,
+                String.class,
+                String.class,
+                int.class,
+                int.class
+        );
         Method deleteScheme = ProductController.class.getMethod("deleteScheme", UUID.class);
 
         assertThat(createScheme.getAnnotation(PreAuthorize.class).value()).isEqualTo("hasRole('ADMIN')");
         assertThat(updateScheme.getAnnotation(PreAuthorize.class).value()).isEqualTo("hasRole('ADMIN')");
         assertThat(updateSchemeStatus.getAnnotation(PreAuthorize.class).value()).isEqualTo("hasRole('ADMIN')");
         assertThat(refreshSchemes.getAnnotation(PreAuthorize.class).value()).isEqualTo("hasRole('ADMIN')");
+        assertThat(syncFundsFromCybrilla.getAnnotation(PreAuthorize.class).value()).isEqualTo("hasRole('ADMIN')");
         assertThat(deleteScheme.getAnnotation(PreAuthorize.class).value()).isEqualTo("hasRole('ADMIN')");
     }
 }

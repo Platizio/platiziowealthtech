@@ -1,12 +1,15 @@
 package com.platizio.wealthtech.service;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.platizio.wealthtech.domain.BankVerificationStatus;
 import com.platizio.wealthtech.domain.Distributor;
 import com.platizio.wealthtech.domain.DistributorRole;
 import com.platizio.wealthtech.domain.Investor;
 import com.platizio.wealthtech.domain.InvestorStatus;
 import com.platizio.wealthtech.domain.KycStatus;
+import com.platizio.wealthtech.dto.ExternalKycSyncResponse;
 import com.platizio.wealthtech.dto.IdentityDocumentCreateRequest;
 import com.platizio.wealthtech.dto.InvestorExternalKycResponse;
 import com.platizio.wealthtech.dto.InvestorKycCheckRequest;
@@ -14,46 +17,81 @@ import com.platizio.wealthtech.dto.InvestorKycRequestCreateRequest;
 import com.platizio.wealthtech.dto.InvestorKycRequestUpdateRequest;
 import com.platizio.wealthtech.dto.InvestorPreVerificationRequest;
 import com.platizio.wealthtech.dto.InvestorPreVerificationResponse;
+import com.platizio.wealthtech.integration.CybrillaApiException;
 import com.platizio.wealthtech.integration.CybrillaClient;
+import com.platizio.wealthtech.integration.CybrillaUnavailableException;
 import com.platizio.wealthtech.integration.auth.CybrillaPreVerificationProperties;
 import com.platizio.wealthtech.repository.InvestorRepository;
 import jakarta.persistence.EntityNotFoundException;
 import java.time.LocalDate;
+import java.util.List;
 import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.regex.Pattern;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.data.domain.PageRequest;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.util.StringUtils;
 
 @Service
 public class InvestorKycService {
 
-    private static final Pattern CYBRILLA_SANDBOX_PAN_PATTERN = Pattern.compile("^[A-Z]{3}P[IAX][0-9]{4}[A-Z]$");
+    private static final Logger logger = LoggerFactory.getLogger(InvestorKycService.class);
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+    private static final Pattern CYBRILLA_SANDBOX_PAN_PATTERN = Pattern.compile(
+            "^[A-Z]{3}P[IAX][0-9]{4}[A-Z]$"
+    );
     private static final String CYBRILLA_SANDBOX_PAN_MESSAGE = "Cybrilla sandbox only accepts simulator PANs: "
-            + "use AAAPX1234A for verified KYC, AAAPA1234A for Aadhaar-not-linked, or AAAPI1234A for invalid PAN.";
+            + "use XXXPXNNNNX for valid PAN/KYC-ready simulations, XXXPX3753X for KYC-unavailable, "
+            + "XXXPINNNNX for invalid PAN, or XXXPANNNNX for Aadhaar-not-linked. Replace X with letters and N with digits.";
+    private static final List<KycStatus> AUTO_SYNC_STATUSES = List.of(
+            KycStatus.PENDING,
+            KycStatus.IN_PROGRESS,
+            KycStatus.RETRY_REQUIRED,
+            KycStatus.NOT_STARTED
+    );
 
     private final InvestorRepository investorRepository;
     private final DistributorService distributorService;
     private final AuditService auditService;
     private final CybrillaClient cybrillaClient;
     private final CybrillaPreVerificationProperties poaProperties;
+    private final BankVerificationStarter bankVerificationStarter;
+    private final long scheduledSyncFailureBackoffMs;
+    private volatile long scheduledSyncBackoffUntilEpochMillis;
+    // Commits the deferred/pending state in its OWN transaction so it survives
+    // the rollback of the surrounding @Transactional KYC method when we rethrow.
+    private final TransactionTemplate deferredPersistTx;
 
     public InvestorKycService(
             InvestorRepository investorRepository,
             DistributorService distributorService,
             AuditService auditService,
             CybrillaClient cybrillaClient,
-            CybrillaPreVerificationProperties poaProperties
+            CybrillaPreVerificationProperties poaProperties,
+            BankVerificationStarter bankVerificationStarter,
+            PlatformTransactionManager transactionManager,
+            @Value("${app.kyc-sync.failure-backoff-ms:900000}") long scheduledSyncFailureBackoffMs
     ) {
         this.investorRepository = investorRepository;
         this.distributorService = distributorService;
         this.auditService = auditService;
         this.cybrillaClient = cybrillaClient;
         this.poaProperties = poaProperties;
+        this.bankVerificationStarter = bankVerificationStarter;
+        this.scheduledSyncFailureBackoffMs = Math.max(0, scheduledSyncFailureBackoffMs);
+        this.deferredPersistTx = new TransactionTemplate(transactionManager);
+        this.deferredPersistTx.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
     }
 
     @Transactional
@@ -74,11 +112,76 @@ public class InvestorKycService {
         if (request != null && request.dateOfBirth() != null) {
             investor.setDateOfBirth(request.dateOfBirth());
         }
+        investor = ensureExternalInvestorProfileBeforeKyc(investor, actorId);
         validateCybrillaSandboxPan(normalizePan(investor.getPan()));
         JsonNode response = cybrillaClient.createKycCheck(investor);
         applyKycCheckResponse(investor, response);
-        Investor saved = investorRepository.save(investor);
+        Investor saved = saveAndStartBankVerificationIfKycComplete(investor, actorId, "kyc_check_created");
         auditService.log("INVESTOR", saved.getId(), "KYC_CHECK_CREATED", actorId, auditDetails(saved));
+        return new InvestorExternalKycResponse(saved, response);
+    }
+
+    /**
+     * Runs the FP KYC Check (`POST /api/kyc/check`) — the authoritative KRA
+     * "is this PAN already KYC compliant?" lookup. Returns granular
+     * status/reason/action plus any investment constraints so the customer can
+     * be shown the correct indicator and re-KYC is skipped when already done.
+     * Pass {@code fetchData=true} to also pull demographic details (requires a
+     * SEBI RIA/AMC licence; AMFI ARN holders only get status).
+     */
+    @Transactional
+    public InvestorExternalKycResponse runKycComplianceCheck(UUID investorId, boolean fetchData, UUID actorId) {
+        Investor investor = getAuthorizedInvestor(investorId, actorId);
+        validateCybrillaSandboxPan(normalizePan(investor.getPan()));
+        LocalDate dateOfBirth = fetchData ? investor.getDateOfBirth() : null;
+        JsonNode response = cybrillaClient.createKycComplianceCheck(investor.getPan(), dateOfBirth);
+        applyKycComplianceResponse(investor, response);
+        Investor saved = saveAndStartBankVerificationIfKycComplete(investor, actorId, "kyc_compliance_checked");
+        auditService.log("INVESTOR", saved.getId(), "KYC_COMPLIANCE_CHECKED", actorId, auditDetails(saved));
+        return new InvestorExternalKycResponse(saved, response);
+    }
+
+    @Transactional
+    public InvestorExternalKycResponse applyInvestorKyc(UUID investorId, InvestorKycCheckRequest request, UUID actorId) {
+        boolean forceNewCheck = request != null && Boolean.TRUE.equals(request.forceNewCheck());
+        return applyInvestorKyc(investorId, request, actorId, forceNewCheck);
+    }
+
+    @Transactional
+    public InvestorExternalKycResponse reapplyInvestorKyc(UUID investorId, InvestorKycCheckRequest request, UUID actorId) {
+        return applyInvestorKyc(investorId, request, actorId, true);
+    }
+
+    private InvestorExternalKycResponse applyInvestorKyc(
+            UUID investorId,
+            InvestorKycCheckRequest request,
+            UUID actorId,
+            boolean forceNewCheck
+    ) {
+        Investor investor = getAuthorizedInvestor(investorId, actorId);
+        if (request != null && request.dateOfBirth() != null) {
+            investor.setDateOfBirth(request.dateOfBirth());
+        }
+        investor = ensureExternalInvestorProfileBeforeKyc(investor, actorId);
+        validateCybrillaSandboxPan(normalizePan(investor.getPan()));
+
+        JsonNode response = null;
+        if (forceNewCheck) {
+            resetKycAttemptState(investor);
+        } else if (hasSavedExternalKycReference(investor)) {
+            response = syncInvestorExternalKycStatusPayload(investor);
+        }
+        if (response == null) {
+            response = cybrillaClient.createKycCheck(investor);
+            applyKycCheckResponse(investor, response);
+        }
+        if (shouldStartFreshKycRequest(investor)) {
+            response = cybrillaClient.createKycRequest(kycRequestPayload(investor, null));
+            applyKycRequestResponse(investor, response);
+        }
+
+        Investor saved = saveAndStartBankVerificationIfKycComplete(investor, actorId, forceNewCheck ? "kyc_reapplied" : "kyc_applied");
+        auditService.log("INVESTOR", saved.getId(), forceNewCheck ? "KYC_REAPPLIED" : "KYC_APPLIED", actorId, auditDetails(saved));
         return new InvestorExternalKycResponse(saved, response);
     }
 
@@ -87,7 +190,7 @@ public class InvestorKycService {
         Investor investor = getAuthorizedInvestor(investorId, actorId);
         JsonNode response = cybrillaClient.fetchKycCheck(resolveExternalId(kycCheckId, investor.getExternalKycCheckId(), "KYC check id"));
         applyKycCheckResponse(investor, response);
-        Investor saved = investorRepository.save(investor);
+        Investor saved = saveAndStartBankVerificationIfKycComplete(investor, actorId, "kyc_check_fetched");
         auditService.log("INVESTOR", saved.getId(), "KYC_CHECK_FETCHED", actorId, auditDetails(saved));
         return new InvestorExternalKycResponse(saved, response);
     }
@@ -97,7 +200,7 @@ public class InvestorKycService {
         Investor investor = getAuthorizedInvestor(investorId, actorId);
         JsonNode response = cybrillaClient.refetchKycCheck(resolveExternalId(kycCheckId, investor.getExternalKycCheckId(), "KYC check id"));
         applyKycCheckResponse(investor, response);
-        Investor saved = investorRepository.save(investor);
+        Investor saved = saveAndStartBankVerificationIfKycComplete(investor, actorId, "kyc_check_refetched");
         auditService.log("INVESTOR", saved.getId(), "KYC_CHECK_REFETCHED", actorId, auditDetails(saved));
         return new InvestorExternalKycResponse(saved, response);
     }
@@ -111,9 +214,22 @@ public class InvestorKycService {
     @Transactional
     public InvestorExternalKycResponse createKycRequest(UUID investorId, InvestorKycRequestCreateRequest request, UUID actorId) {
         Investor investor = getAuthorizedInvestor(investorId, actorId);
+        if (isAlreadyKycCompliant(investor)) {
+            // Investor's PAN is already KYC compliant (e.g. KYC done earlier with
+            // another distributor/AMC/KRA). Do not start a fresh KYC application or
+            // call Cybrilla again — skipping the unnecessary re-KYC round trip.
+            logger.info(
+                    "external_kyc status='rekyc_skipped' reason='already_kyc_compliant' investor_id='{}' kyc_status='{}'",
+                    investor.getId(),
+                    investor.getKycStatus()
+            );
+            auditService.log("INVESTOR", investor.getId(), "KYC_REQUEST_SKIPPED_ALREADY_VERIFIED", actorId, auditDetails(investor));
+            return new InvestorExternalKycResponse(investor, existingExternalKycPayload(investor));
+        }
+        investor = ensureExternalInvestorProfileBeforeKyc(investor, actorId);
         JsonNode response = cybrillaClient.createKycRequest(kycRequestPayload(investor, request));
         applyKycRequestResponse(investor, response);
-        Investor saved = investorRepository.save(investor);
+        Investor saved = saveAndStartBankVerificationIfKycComplete(investor, actorId, "kyc_request_created");
         auditService.log("INVESTOR", saved.getId(), "KYC_REQUEST_CREATED", actorId, auditDetails(saved));
         return new InvestorExternalKycResponse(saved, response);
     }
@@ -123,7 +239,7 @@ public class InvestorKycService {
         Investor investor = getAuthorizedInvestor(investorId, actorId);
         JsonNode response = cybrillaClient.fetchKycRequest(resolveExternalId(kycRequestId, investor.getExternalKycRequestId(), "KYC request id"));
         applyKycRequestResponse(investor, response);
-        Investor saved = investorRepository.save(investor);
+        Investor saved = saveAndStartBankVerificationIfKycComplete(investor, actorId, "kyc_request_fetched");
         auditService.log("INVESTOR", saved.getId(), "KYC_REQUEST_FETCHED", actorId, auditDetails(saved));
         return new InvestorExternalKycResponse(saved, response);
     }
@@ -136,7 +252,7 @@ public class InvestorKycService {
                 updatePayload(request)
         );
         applyKycRequestResponse(investor, response);
-        Investor saved = investorRepository.save(investor);
+        Investor saved = saveAndStartBankVerificationIfKycComplete(investor, actorId, "kyc_request_updated");
         auditService.log("INVESTOR", saved.getId(), "KYC_REQUEST_UPDATED", actorId, auditDetails(saved));
         return new InvestorExternalKycResponse(saved, response);
     }
@@ -149,7 +265,7 @@ public class InvestorKycService {
                 status
         );
         applyKycRequestResponse(investor, response);
-        Investor saved = investorRepository.save(investor);
+        Investor saved = saveAndStartBankVerificationIfKycComplete(investor, actorId, "kyc_request_simulated");
         auditService.log("INVESTOR", saved.getId(), "KYC_REQUEST_SIMULATED", actorId, auditDetails(saved));
         return new InvestorExternalKycResponse(saved, response);
     }
@@ -175,6 +291,319 @@ public class InvestorKycService {
         Investor investor = getAuthorizedInvestor(investorId, actorId);
         String resolvedKycRequestId = StringUtils.hasText(kycRequestId) ? kycRequestId : investor.getExternalKycRequestId();
         return cybrillaClient.listIdentityDocuments(resolvedKycRequestId, fetchStatus);
+    }
+
+    @Transactional
+    public InvestorExternalKycResponse syncInvestorExternalKycStatus(UUID investorId, UUID actorId) {
+        Investor investor = getAuthorizedInvestor(investorId, actorId);
+        JsonNode response = syncInvestorExternalKycStatusPayload(investor);
+        if (response == null) {
+            throw new IllegalArgumentException("Investor does not have a saved external KYC check or KYC request id to refresh");
+        }
+        Investor saved = saveAndStartBankVerificationIfKycComplete(investor, actorId, "external_kyc_manual_sync");
+        auditService.log("INVESTOR", saved.getId(), "EXTERNAL_KYC_MANUAL_SYNCED", actorId, auditDetails(saved));
+        return new InvestorExternalKycResponse(saved, response);
+    }
+
+    @Transactional
+    public int syncOutstandingExternalKycStatuses(int limit) {
+        long now = System.currentTimeMillis();
+        long backoffUntil = scheduledSyncBackoffUntilEpochMillis;
+        if (now < backoffUntil) {
+            logger.debug(
+                    "external_kyc_sync status='skipped' reason='provider_backoff' retry_in_ms='{}'",
+                    backoffUntil - now
+            );
+            return 0;
+        }
+
+        int safeLimit = Math.min(Math.max(limit, 1), 100);
+        List<Investor> candidates = investorRepository.findKycSyncCandidates(
+                AUTO_SYNC_STATUSES,
+                PageRequest.of(0, safeLimit)
+        );
+        int synced = 0;
+        for (Investor investor : candidates) {
+            try {
+                if (syncInvestorExternalKycStatus(investor, "scheduled")) {
+                    synced++;
+                }
+            } catch (CybrillaApiException ex) {
+                logger.warn(
+                        "external_kyc_sync status='failed' trigger='scheduled' investor_id='{}' reason='{}'",
+                        investor.getId(),
+                        ex.getMessage()
+                );
+                activateScheduledSyncBackoff(ex, now);
+                break;
+            } catch (RuntimeException ex) {
+                logger.warn(
+                        "external_kyc_sync status='failed' trigger='scheduled' investor_id='{}' reason='{}'",
+                        investor.getId(),
+                        ex.getMessage()
+                );
+            }
+        }
+        return synced;
+    }
+
+    private void activateScheduledSyncBackoff(CybrillaApiException ex, long failureEpochMillis) {
+        if (scheduledSyncFailureBackoffMs <= 0) {
+            return;
+        }
+        long backoffUntil = failureEpochMillis + scheduledSyncFailureBackoffMs;
+        scheduledSyncBackoffUntilEpochMillis = Math.max(scheduledSyncBackoffUntilEpochMillis, backoffUntil);
+        logger.warn(
+                "external_kyc_sync status='backing_off' retry_after_ms='{}' reason='{}'",
+                scheduledSyncFailureBackoffMs,
+                ex.getMessage()
+        );
+    }
+
+    @Transactional
+    public ExternalKycSyncResponse handleExternalKycWebhook(JsonNode payload) {
+        JsonNode externalObject = webhookDataObject(payload);
+        String eventType = firstText(payload, "type");
+        String objectType = firstText(externalObject, "object");
+        String externalId = firstText(externalObject, "id");
+
+        if (isPreVerificationReference(eventType, objectType, externalId)) {
+            return syncKycCheckEvent(externalId, eventType);
+        }
+        if (isKycRequestReference(eventType, objectType, externalId)) {
+            return syncKycRequestEvent(externalId, eventType);
+        }
+        return new ExternalKycSyncResponse("ignored_unsupported_event", eventType, externalId, null, null);
+    }
+
+    private boolean syncInvestorExternalKycStatus(Investor investor, String trigger) {
+        JsonNode response = syncInvestorExternalKycStatusPayload(investor);
+        if (response == null) {
+            return false;
+        }
+        Investor saved = saveAndStartBankVerificationIfKycComplete(investor, savedDistributorActor(investor), trigger);
+        auditService.log("INVESTOR", saved.getId(), "EXTERNAL_KYC_SYNCED", saved.getDistributorId(), auditDetails(saved));
+        logger.info(
+                "external_kyc_sync status='completed' trigger='{}' investor_id='{}' kyc_status='{}'",
+                trigger,
+                saved.getId(),
+                saved.getKycStatus()
+        );
+        return true;
+    }
+
+    private UUID savedDistributorActor(Investor investor) {
+        return investor == null ? null : investor.getDistributorId();
+    }
+
+    private Investor saveAndStartBankVerificationIfKycComplete(Investor investor, UUID actorId, String trigger) {
+        Investor saved = investorRepository.save(investor);
+        if (saved.getKycStatus() != KycStatus.COMPLETED) {
+            return saved;
+        }
+        return bankVerificationStarter.startBankVerificationAfterKycCompletion(saved, actorId, trigger);
+    }
+
+    private JsonNode syncInvestorExternalKycStatusPayload(Investor investor) {
+        JsonNode lastResponse = null;
+        if (StringUtils.hasText(investor.getExternalKycCheckId())) {
+            JsonNode response = cybrillaClient.fetchKycCheck(investor.getExternalKycCheckId());
+            applyKycCheckResponse(investor, response);
+            lastResponse = response;
+        }
+        if (StringUtils.hasText(investor.getExternalKycRequestId())
+                && (lastResponse == null || investor.getKycStatus() != KycStatus.COMPLETED)) {
+            JsonNode response = cybrillaClient.fetchKycRequest(investor.getExternalKycRequestId());
+            applyKycRequestResponse(investor, response);
+            lastResponse = response;
+        }
+        return lastResponse;
+    }
+
+    private boolean hasSavedExternalKycReference(Investor investor) {
+        return StringUtils.hasText(investor.getExternalKycCheckId())
+                || StringUtils.hasText(investor.getExternalKycRequestId());
+    }
+
+    /**
+     * True when the investor's PAN is already KYC compliant, so a fresh KYC
+     * application (re-KYC) must not be started. This is the case when the POA
+     * pre-verification readiness check returned {@code verified} (KYC done
+     * elsewhere with another distributor/AMC/KRA) or when KYC is already
+     * COMPLETED locally.
+     */
+    private boolean isAlreadyKycCompliant(Investor investor) {
+        if (investor.getKycStatus() == KycStatus.COMPLETED) {
+            return true;
+        }
+        if (Boolean.TRUE.equals(investor.getKycComplianceStatus())) {
+            return true;
+        }
+        return "verified".equalsIgnoreCase(investor.getKycReadinessStatus());
+    }
+
+    private JsonNode existingExternalKycPayload(Investor investor) {
+        String payload = investor.getExternalKycPayloadJson();
+        if (!StringUtils.hasText(payload)) {
+            return null;
+        }
+        try {
+            return OBJECT_MAPPER.readTree(payload);
+        } catch (JsonProcessingException ex) {
+            logger.debug("external_kyc status='payload_parse_failed' investor_id='{}'", investor.getId());
+            return null;
+        }
+    }
+
+    private void resetKycAttemptState(Investor investor) {
+        investor.setExternalKycCheckId(null);
+        investor.setExternalKycRequestId(null);
+        investor.setExternalKycStatus(null);
+        investor.setKycReadinessStatus(null);
+        investor.setKycReadinessCode(null);
+        investor.setKycReadinessReason(null);
+        investor.setPanVerificationStatus(null);
+        investor.setPanVerificationCode(null);
+        investor.setPanVerificationReason(null);
+        investor.setPanAadhaarLinkStatus(null);
+        investor.setPanAadhaarLinkReason(null);
+        investor.setExternalKycComplianceId(null);
+        investor.setKycComplianceStatus(null);
+        investor.setKycComplianceReason(null);
+        investor.setKycComplianceAction(null);
+        investor.setKycConstraintsJson(null);
+        investor.setExternalKycPayloadJson(null);
+        investor.setKycStatus(KycStatus.IN_PROGRESS);
+        if (investor.getInvestorStatus() == InvestorStatus.READY_FOR_TRANSACTIONS) {
+            investor.setInvestorStatus(InvestorStatus.ONBOARDING);
+        }
+    }
+
+    private boolean shouldStartFreshKycRequest(Investor investor) {
+        return !StringUtils.hasText(investor.getExternalKycRequestId())
+                && investor.getKycStatus() == KycStatus.NOT_STARTED
+                && "failed".equalsIgnoreCase(investor.getKycReadinessStatus())
+                && ("kyc_unavailable".equalsIgnoreCase(investor.getKycReadinessCode())
+                        || "unavailable".equalsIgnoreCase(investor.getKycReadinessCode()));
+    }
+
+    private Investor ensureExternalInvestorProfileBeforeKyc(Investor investor, UUID actorId) {
+        if (StringUtils.hasText(investor.getCybrillaInvestorId())) {
+            return investor;
+        }
+
+        try {
+            String externalInvestorId = cybrillaClient.createInvestorProfile(investor);
+            if (!StringUtils.hasText(externalInvestorId)) {
+                throw new CybrillaApiException("Fintech Primitives investor profile response did not include id");
+            }
+            investor.setCybrillaInvestorId(externalInvestorId);
+            investor.setExternalSyncPending(Boolean.FALSE);
+            investor.setExternalSyncMessage(null);
+            Investor saved = investorRepository.save(investor);
+            auditService.log("INVESTOR", saved.getId(), "EXTERNAL_PROFILE_CREATED_BEFORE_KYC", actorId, auditDetails(saved));
+            return saved;
+        } catch (CybrillaUnavailableException ex) {
+            // Provider unreachable (network/DNS). Degrade gracefully: persist the
+            // pending state in a separate transaction (the surrounding @Transactional
+            // method will roll back when we rethrow) and surface a clear 503.
+            String message = "Cybrilla/Fintech Primitives is currently unreachable (network/DNS). "
+                    + "Investor details were saved; please retry KYC once connectivity is restored.";
+            markExternalProfileSyncDeferred(investor.getId(), message);
+            logger.warn(
+                    "external_profile_deferred_before_kyc investor_id='{}' reason='{}'",
+                    investor.getId(), ex.getMessage()
+            );
+            throw new CybrillaUnavailableException(
+                    "KYC deferred: investor profile could not be synced because the provider is unreachable. " + ex.getMessage(),
+                    ex
+            );
+        } catch (CybrillaApiException ex) {
+            investor.setExternalSyncPending(Boolean.TRUE);
+            investor.setExternalSyncMessage("Investor details could not be posted to Cybrilla/Fintech Primitives. KYC was not started to avoid data mismatch.");
+            Investor saved = investorRepository.save(investor);
+            auditService.log("INVESTOR", saved.getId(), "EXTERNAL_PROFILE_PENDING_BEFORE_KYC", actorId, auditDetails(saved));
+            throw new CybrillaApiException("Unable to sync investor profile before KYC: " + ex.getMessage(), ex);
+        }
+    }
+
+    /**
+     * Persists the deferred/pending flag in a brand-new transaction so it is
+     * committed even though the caller's @Transactional method is about to roll
+     * back (we rethrow to signal 503). Re-reads the row to avoid touching the
+     * entity bound to the outer, rolling-back persistence context.
+     */
+    private void markExternalProfileSyncDeferred(UUID investorId, String message) {
+        try {
+            deferredPersistTx.executeWithoutResult(status ->
+                    investorRepository.findById(investorId).ifPresent(fresh -> {
+                        fresh.setExternalSyncPending(Boolean.TRUE);
+                        fresh.setExternalSyncMessage(message);
+                        investorRepository.save(fresh);
+                    })
+            );
+        } catch (RuntimeException persistEx) {
+            logger.warn(
+                    "external_profile_defer_persist_failed investor_id='{}' reason='{}'",
+                    investorId, persistEx.getMessage()
+            );
+        }
+    }
+
+    private ExternalKycSyncResponse syncKycCheckEvent(String externalId, String eventType) {
+        if (!StringUtils.hasText(externalId)) {
+            return new ExternalKycSyncResponse("ignored_missing_external_id", eventType, null, null, null);
+        }
+        Optional<Investor> investor = investorRepository.findByExternalKycCheckId(externalId.trim());
+        if (investor.isEmpty()) {
+            return new ExternalKycSyncResponse("ignored_no_matching_investor", eventType, externalId, null, null);
+        }
+        JsonNode response = cybrillaClient.fetchKycCheck(externalId.trim());
+        Investor saved = investor.get();
+        applyKycCheckResponse(saved, response);
+        saved = saveAndStartBankVerificationIfKycComplete(saved, saved.getDistributorId(), "external_kyc_webhook");
+        auditService.log("INVESTOR", saved.getId(), "EXTERNAL_KYC_WEBHOOK_SYNCED", saved.getDistributorId(), auditDetails(saved));
+        return new ExternalKycSyncResponse("synced", eventType, externalId, saved.getId(), saved.getKycStatus());
+    }
+
+    private ExternalKycSyncResponse syncKycRequestEvent(String externalId, String eventType) {
+        if (!StringUtils.hasText(externalId)) {
+            return new ExternalKycSyncResponse("ignored_missing_external_id", eventType, null, null, null);
+        }
+        Optional<Investor> investor = investorRepository.findByExternalKycRequestId(externalId.trim());
+        if (investor.isEmpty()) {
+            return new ExternalKycSyncResponse("ignored_no_matching_investor", eventType, externalId, null, null);
+        }
+        JsonNode response = cybrillaClient.fetchKycRequest(externalId.trim());
+        Investor saved = investor.get();
+        applyKycRequestResponse(saved, response);
+        saved = saveAndStartBankVerificationIfKycComplete(saved, saved.getDistributorId(), "external_kyc_webhook");
+        auditService.log("INVESTOR", saved.getId(), "EXTERNAL_KYC_WEBHOOK_SYNCED", saved.getDistributorId(), auditDetails(saved));
+        return new ExternalKycSyncResponse("synced", eventType, externalId, saved.getId(), saved.getKycStatus());
+    }
+
+    private JsonNode webhookDataObject(JsonNode payload) {
+        if (payload == null || payload.isNull()) {
+            return null;
+        }
+        JsonNode dataObject = payload.path("data").path("object");
+        return dataObject.isMissingNode() || dataObject.isNull() ? payload : dataObject;
+    }
+
+    private boolean isPreVerificationReference(String eventType, String objectType, String externalId) {
+        return "pre_verification".equalsIgnoreCase(objectType)
+                || startsWithIgnoreCase(eventType, "pre_verification.")
+                || startsWithIgnoreCase(externalId, "pv_");
+    }
+
+    private boolean isKycRequestReference(String eventType, String objectType, String externalId) {
+        return "kyc_request".equalsIgnoreCase(objectType)
+                || startsWithIgnoreCase(eventType, "kyc_request.")
+                || startsWithIgnoreCase(externalId, "kycr_");
+    }
+
+    private boolean startsWithIgnoreCase(String value, String prefix) {
+        return StringUtils.hasText(value) && value.trim().toLowerCase(Locale.ROOT).startsWith(prefix);
     }
 
     private Investor getAuthorizedInvestor(UUID investorId, UUID actorId) {
@@ -274,8 +703,66 @@ public class InvestorKycService {
         }
         investor.setExternalKycStatus(kycStatusText(response));
         investor.setExternalKycPayloadJson(response == null ? null : response.toString());
+        applyPreVerificationResultFields(investor, response);
         investor.setKycStatus(resolveKycCheckStatus(response));
         markReadyIfEligible(investor);
+    }
+
+    private void applyKycComplianceResponse(Investor investor, JsonNode response) {
+        if (response == null || response.isNull()) {
+            return;
+        }
+        String responseId = firstText(response, "id");
+        if (StringUtils.hasText(responseId)) {
+            investor.setExternalKycComplianceId(responseId);
+        }
+        JsonNode statusNode = response.path("status");
+        Boolean complianceStatus = statusNode.isBoolean() ? statusNode.asBoolean() : null;
+        investor.setKycComplianceStatus(complianceStatus);
+        investor.setKycComplianceReason(firstText(response, "reason"));
+        investor.setKycComplianceAction(firstText(response, "action"));
+
+        JsonNode constraints = response.path("constraints");
+        boolean hasConstraints = constraints.isArray() && constraints.size() > 0;
+        investor.setKycConstraintsJson(hasConstraints ? constraints.toString() : null);
+
+        investor.setExternalKycStatus(complianceStatus == null ? null : Boolean.toString(complianceStatus));
+        investor.setExternalKycPayloadJson(response.toString());
+        investor.setKycStatus(resolveComplianceKycStatus(
+                complianceStatus,
+                investor.getKycComplianceReason(),
+                investor.getKycComplianceAction()
+        ));
+        markReadyIfEligible(investor);
+    }
+
+    /**
+     * Maps the FP KYC Check {@code status}/{@code reason}/{@code action} triple
+     * to a local {@link KycStatus}. Programmatic interpretation uses
+     * {@code reason}/{@code action} codes, never the free-text reason string.
+     */
+    private KycStatus resolveComplianceKycStatus(Boolean complianceStatus, String reason, String action) {
+        if (Boolean.TRUE.equals(complianceStatus)) {
+            return KycStatus.COMPLETED;
+        }
+        if (complianceStatus == null) {
+            return KycStatus.PENDING;
+        }
+        String normalizedAction = action == null ? "" : action.trim().toLowerCase(Locale.ROOT);
+        String normalizedReason = reason == null ? "" : reason.trim().toLowerCase(Locale.ROOT);
+        if ("create".equals(normalizedAction)
+                || "unavailable".equals(normalizedReason)
+                || "rejected".equals(normalizedReason)) {
+            return KycStatus.NOT_STARTED;
+        }
+        if ("disallowed".equals(normalizedAction) || "deactivated".equals(normalizedReason)) {
+            return KycStatus.FAILED;
+        }
+        if ("none".equals(normalizedAction) || "underprocess".equals(normalizedReason)) {
+            return KycStatus.IN_PROGRESS;
+        }
+        // modify (incomplete / legacy / onhold) and unknown → a one-time fix is needed.
+        return KycStatus.RETRY_REQUIRED;
     }
 
     private void applyKycRequestResponse(Investor investor, JsonNode response) {
@@ -308,13 +795,51 @@ public class InvestorKycService {
             return defaultStatus;
         }
         return switch (status.trim().toLowerCase(Locale.ROOT)) {
-            case "true", "verified", "completed", "complete" -> KycStatus.COMPLETED;
-            case "successful" -> KycStatus.IN_PROGRESS;
+            case "true", "verified", "completed", "complete", "successful" -> KycStatus.COMPLETED;
             case "failed", "failure", "rejected", "invalid" -> KycStatus.FAILED;
             case "expired" -> KycStatus.RETRY_REQUIRED;
             case "pending", "submitted", "esign_required", "in_progress", "processing" -> KycStatus.IN_PROGRESS;
             default -> defaultStatus;
         };
+    }
+
+    private void applyPreVerificationResultFields(Investor investor, JsonNode response) {
+        if (!isPreVerification(response)) {
+            return;
+        }
+
+        investor.setKycReadinessStatus(nestedText(response, "readiness", "status"));
+        investor.setKycReadinessCode(nestedText(response, "readiness", "code"));
+        investor.setKycReadinessReason(nestedText(response, "readiness", "reason"));
+        investor.setPanVerificationStatus(nestedText(response, "pan", "status"));
+        investor.setPanVerificationCode(nestedText(response, "pan", "code"));
+        investor.setPanVerificationReason(nestedText(response, "pan", "reason"));
+        applyPanAadhaarLinkResult(investor);
+    }
+
+    private void applyPanAadhaarLinkResult(Investor investor) {
+        String panStatus = investor.getPanVerificationStatus();
+        String panCode = investor.getPanVerificationCode();
+        if ("aadhaar_not_linked".equalsIgnoreCase(panCode)) {
+            investor.setPanAadhaarLinkStatus("NOT_LINKED");
+            investor.setPanAadhaarLinkReason(defaultText(
+                    investor.getPanVerificationReason(),
+                    "PAN is not seeded with Aadhaar"
+            ));
+            return;
+        }
+        if ("verified".equalsIgnoreCase(panStatus)) {
+            investor.setPanAadhaarLinkStatus("LINKED");
+            investor.setPanAadhaarLinkReason(null);
+            return;
+        }
+        if (StringUtils.hasText(panStatus) || StringUtils.hasText(panCode)) {
+            investor.setPanAadhaarLinkStatus("UNKNOWN");
+            investor.setPanAadhaarLinkReason(investor.getPanVerificationReason());
+            return;
+        }
+        investor.setPanAadhaarLinkStatus(null);
+        investor.setPanAadhaarLinkReason(null);
     }
 
     private String kycStatusText(JsonNode response) {

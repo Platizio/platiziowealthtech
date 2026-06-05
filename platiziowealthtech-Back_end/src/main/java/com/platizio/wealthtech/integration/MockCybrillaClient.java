@@ -36,6 +36,15 @@ public class MockCybrillaClient implements CybrillaClient {
     }
 
     @Override
+    public void updateInvestorProfile(Investor investor) {
+        logger.warn(
+                "cybrilla_client mode='mock' operation='update_investor_profile' local_investor_id='{}' external_profile_id='{}'",
+                investor.getId(),
+                investor.getCybrillaInvestorId()
+        );
+    }
+
+    @Override
     public String createMfInvestmentAccount(Investor investor) {
         String mockId = "cyb-mfia-" + UUID.randomUUID();
         logger.warn("cybrilla_client mode='mock' operation='create_mf_investment_account' local_investor_id='{}' mock_id='{}'", investor.getId(), mockId);
@@ -45,21 +54,43 @@ public class MockCybrillaClient implements CybrillaClient {
     @Override
     public void captureBankAccount(Investor investor, InvestorBankAccount bankAccount) {
         String mockId = "cyb-bank-" + UUID.randomUUID();
-        String mockVerificationId = "cyb-bav-" + UUID.randomUUID();
         logger.warn("cybrilla_client mode='mock' operation='capture_bank_account' local_investor_id='{}' local_bank_id='{}' mock_id='{}'", investor.getId(), bankAccount.getId(), mockId);
         bankAccount.setCybrillaBankId(mockId);
+        startBankAccountVerification(investor, bankAccount);
+    }
+
+    @Override
+    public void startBankAccountVerification(Investor investor, InvestorBankAccount bankAccount) {
+        String mockVerificationId = "pv_" + UUID.randomUUID().toString().replace("-", "");
+        logger.warn("cybrilla_client mode='mock' operation='start_bank_account_verification' local_investor_id='{}' local_bank_id='{}' mock_id='{}'", investor.getId(), bankAccount.getId(), mockVerificationId);
         bankAccount.setCybrillaBankVerificationId(mockVerificationId);
-        bankAccount.setCybrillaBankVerificationStatus("pending");
+        bankAccount.setCybrillaBankVerificationStatus("accepted");
+        bankAccount.setExternalSyncPending(false);
+        bankAccount.setExternalSyncMessage(null);
     }
 
     @Override
     public JsonNode fetchBankAccountVerification(String bankAccountVerificationId) {
         ObjectNode response = OBJECT_MAPPER.createObjectNode();
-        response.put("object", "bank_account_verification");
+        response.put("object", "pre_verification");
         response.put("id", bankAccountVerificationId);
         response.put("status", "completed");
-        response.put("confidence", "very_high");
+        ObjectNode bank = OBJECT_MAPPER.createObjectNode();
+        bank.put("status", "verified");
+        bank.putNull("code");
+        bank.putNull("reason");
+        response.putArray("bank_accounts").add(bank);
         return response;
+    }
+
+    @Override
+    public JsonNode fetchBankAccountVerificationWithPayloadSnapshot(String bankAccountVerificationId, Map<String, Object> payloadSnapshot) {
+        if (payloadSnapshot != null) {
+            payloadSnapshot.put("operation", "fetch_bank_account_verification");
+            payloadSnapshot.put("bank_account_verification_id", bankAccountVerificationId);
+            payloadSnapshot.put("mode", "mock");
+        }
+        return fetchBankAccountVerification(bankAccountVerificationId);
     }
 
     @Override
@@ -99,6 +130,68 @@ public class MockCybrillaClient implements CybrillaClient {
     @Override
     public JsonNode refetchKycCheck(String kycCheckId) {
         return fetchKycCheck(kycCheckId);
+    }
+
+    @Override
+    public JsonNode createKycComplianceCheck(String pan, java.time.LocalDate dateOfBirth) {
+        ObjectNode response = OBJECT_MAPPER.createObjectNode();
+        response.put("id", "kyc_" + UUID.randomUUID().toString().replace("-", ""));
+        response.putNull("source_ref_id");
+        response.put("pan", pan == null ? "" : pan.toUpperCase());
+
+        String normalized = pan == null ? "" : pan.toUpperCase();
+        // Mirror the FP sandbox PAN simulator (XXXPX375NX) so local flows can exercise each state.
+        if (normalized.contains("3753")) {
+            response.put("status", false);
+            response.put("reason", "unavailable");
+            response.put("action", "create");
+            response.putArray("constraints");
+        } else if (normalized.contains("3754")) {
+            response.put("status", false);
+            response.put("reason", "onhold");
+            response.put("action", "modify");
+            response.putArray("constraints");
+        } else if (normalized.contains("3759")) {
+            response.put("status", false);
+            response.put("reason", "incomplete");
+            response.put("action", "modify");
+            response.putArray("constraints");
+        } else if (normalized.contains("3752")) {
+            response.put("status", true);
+            response.putNull("reason");
+            response.putNull("action");
+            ObjectNode constraint = response.putArray("constraints").addObject();
+            constraint.put("type", "investment_limit");
+            constraint.putObject("amount").put("value", 50000).put("currency", "inr");
+        } else {
+            response.put("status", true);
+            response.putNull("reason");
+            response.putNull("action");
+            response.putArray("constraints");
+        }
+
+        ObjectNode entityDetails = response.putObject("entity_details");
+        entityDetails.put("name", "Mock Investor");
+        if (dateOfBirth != null) {
+            entityDetails.put("date_of_birth", dateOfBirth.toString());
+        }
+        return response;
+    }
+
+    @Override
+    public JsonNode fetchKycComplianceCheck(String kycComplianceCheckId) {
+        ObjectNode response = OBJECT_MAPPER.createObjectNode();
+        response.put("id", kycComplianceCheckId);
+        response.put("status", true);
+        response.putNull("reason");
+        response.putNull("action");
+        response.putArray("constraints");
+        return response;
+    }
+
+    @Override
+    public JsonNode refetchKycComplianceCheck(String kycComplianceCheckId) {
+        return fetchKycComplianceCheck(kycComplianceCheckId);
     }
 
     private String textValue(Map<String, Object> payload, String key) {
@@ -189,6 +282,79 @@ public class MockCybrillaClient implements CybrillaClient {
     }
 
     @Override
+    public JsonNode createKycForm(Map<String, Object> payload) {
+        String mockId = "kycf_" + UUID.randomUUID().toString().replace("-", "");
+        logger.warn("cybrilla_client mode='mock' operation='create_kyc_form' mock_id='{}'", mockId);
+        ObjectNode response = kycFormBase(mockId, "created");
+        response.put("pan", textValue(payload, "pan"));
+        response.put("name", textValue(payload, "name"));
+        response.put("date_of_birth", textValue(payload, "date_of_birth"));
+        response.put("proof_details_callback_url", textValue(payload, "proof_details_callback_url"));
+        response.put("esign_callback_url", textValue(payload, "esign_callback_url"));
+        ObjectNode proof = response.putObject("proof_details");
+        proof.put("fetch_url", "https://s.finprim.com/identity_documents/fetch_my_proof?form=" + mockId);
+        proof.put("status", "pending");
+        response.putObject("esign_details").putNull("esign_url").putNull("status");
+        response.putObject("requirements").putArray("fields_needed")
+                .add("identity_proof").add("address").add("signature");
+        return response;
+    }
+
+    @Override
+    public JsonNode updateKycForm(String kycFormId, Map<String, Object> payload) {
+        logger.warn("cybrilla_client mode='mock' operation='update_kyc_form' kyc_form_id='{}'", kycFormId);
+        ObjectNode response = kycFormBase(kycFormId, "created");
+        response.putObject("proof_details")
+                .put("fetch_url", "https://s.finprim.com/identity_documents/fetch_my_proof?form=" + kycFormId)
+                .put("status", "pending");
+        response.putObject("requirements").putArray("fields_needed").add("signature");
+        return response;
+    }
+
+    @Override
+    public JsonNode fetchKycForm(String kycFormId) {
+        logger.warn("cybrilla_client mode='mock' operation='fetch_kyc_form' kyc_form_id='{}'", kycFormId);
+        ObjectNode response = kycFormBase(kycFormId, "awaiting_esign");
+        response.putObject("proof_details")
+                .put("fetch_url", "https://s.finprim.com/identity_documents/fetch_my_proof?form=" + kycFormId)
+                .put("status", "fetched");
+        response.putObject("esign_details")
+                .put("esign_url", "https://s.finprim.com/esign/" + kycFormId)
+                .put("status", "pending");
+        response.put("signature_provided", true);
+        response.putObject("requirements").putNull("fields_needed");
+        return response;
+    }
+
+    @Override
+    public JsonNode uploadKycFormSignature(String kycFormId, byte[] fileBytes, String filename, String contentType) {
+        logger.warn("cybrilla_client mode='mock' operation='upload_kyc_form_signature' kyc_form_id='{}' file='{}'", kycFormId, filename);
+        ObjectNode response = kycFormBase(kycFormId, "created");
+        response.put("signature_provided", true);
+        return response;
+    }
+
+    @Override
+    public JsonNode retryKycFormProofDetailsFetch(String kycFormId) {
+        logger.warn("cybrilla_client mode='mock' operation='retry_kyc_form_proof_details_fetch' kyc_form_id='{}'", kycFormId);
+        ObjectNode response = kycFormBase(kycFormId, "created");
+        response.putObject("proof_details")
+                .put("fetch_url", "https://s.finprim.com/identity_documents/fetch_my_proof?form=" + kycFormId + "&retry=1")
+                .put("status", "pending");
+        return response;
+    }
+
+    private ObjectNode kycFormBase(String id, String status) {
+        ObjectNode response = OBJECT_MAPPER.createObjectNode();
+        response.put("object", "kyc_form");
+        response.put("id", id);
+        response.put("type", "modify");
+        response.put("status", status);
+        response.putNull("reason");
+        return response;
+    }
+
+    @Override
     public SchemeFetchResult fetchProductSchemes() {
         ProductScheme equityScheme = new ProductScheme();
         equityScheme.setSchemeName("Bluechip Equity Fund");
@@ -218,6 +384,23 @@ public class MockCybrillaClient implements CybrillaClient {
         sifScheme.setMetadataJson("{\"impact\":\"high\",\"returns\":{\"daily\":-0.1,\"ytd\":5.4,\"1y\":8.2,\"5y\":32.1}}");
 
         return SchemeFetchResult.complete(List.of(equityScheme, mfScheme, sifScheme));
+    }
+
+    @Override
+    public JsonNode getFundSchemesPageWithPayloadSnapshot(int page, int size, Map<String, Object> payloadSnapshot) {
+        if (payloadSnapshot != null) {
+            payloadSnapshot.put("operation", "fetch_fund_schemes_page");
+            payloadSnapshot.put("path", "/api/oms/fund_schemes");
+            payloadSnapshot.put("page", page);
+            payloadSnapshot.put("size", size);
+            payloadSnapshot.put("mode", "mock");
+        }
+        ObjectNode response = OBJECT_MAPPER.createObjectNode();
+        response.put("page", page);
+        response.put("total_pages", 1);
+        response.put("last", true);
+        response.putArray("fund_schemes");
+        return response;
     }
 
     @Override

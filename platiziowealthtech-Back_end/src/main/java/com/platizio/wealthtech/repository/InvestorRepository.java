@@ -15,6 +15,8 @@ import org.springframework.data.repository.query.Param;
 public interface InvestorRepository extends JpaRepository<Investor, UUID> {
     Optional<Investor> findByPan(String pan);
     Optional<Investor> findByEmail(String email);
+    Optional<Investor> findByExternalKycCheckId(String externalKycCheckId);
+    Optional<Investor> findByExternalKycRequestId(String externalKycRequestId);
     List<Investor> findByDistributorId(UUID distributorId);
     List<Investor> findByDistributorIdIn(List<UUID> distributorIds);
     List<Investor> findByHouseholdIdAndDistributorId(UUID householdId, UUID distributorId);
@@ -39,6 +41,15 @@ public interface InvestorRepository extends JpaRepository<Investor, UUID> {
     List<Investor> findByPostalCode(String postalCode);
     List<Investor> findByKycStatus(KycStatus kycStatus);
     List<Investor> findByDistributorIdAndKycStatus(UUID distributorId, KycStatus kycStatus);
+
+    @Query("""
+            select i
+            from Investor i
+            where i.kycStatus in :statuses
+              and (i.externalKycCheckId is not null or i.externalKycRequestId is not null)
+            order by i.updatedAt asc
+            """)
+    List<Investor> findKycSyncCandidates(@Param("statuses") List<KycStatus> statuses, Pageable pageable);
 
     @Query("""
             select i

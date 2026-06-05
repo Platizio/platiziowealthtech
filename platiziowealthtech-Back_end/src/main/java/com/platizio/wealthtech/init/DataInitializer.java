@@ -15,8 +15,9 @@ public class DataInitializer implements CommandLineRunner {
 
     @Override
     public void run(String... args) throws Exception {
+        // Only bootstrap an empty catalogue; never pull thousands of schemes (and Finprim tokens) on every restart.
         if (productService.listSchemes().size() < 3) {
-            productService.refreshFromCybrilla();
+            productService.refreshFromCybrilla(true);
         }
     }
 }

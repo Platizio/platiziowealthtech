@@ -68,14 +68,32 @@ public class Investor extends BaseEntity {
     private String externalKycCheckId;
     private String externalKycRequestId;
     private String externalKycStatus;
+    private String kycReadinessStatus;
+    private String kycReadinessCode;
+    private String kycReadinessReason;
+    private String panVerificationStatus;
+    private String panVerificationCode;
+    private String panVerificationReason;
+    private String panAadhaarLinkStatus;
+    private String panAadhaarLinkReason;
+
+    // FP KYC Check (/api/kyc/check) compliance result — the authoritative KRA
+    // "is this PAN already KYC compliant?" signal, with granular reason/action.
+    private String externalKycComplianceId;
+    private Boolean kycComplianceStatus;
+    private String kycComplianceReason;
+    private String kycComplianceAction;
+
+    @Column(columnDefinition = "TEXT")
+    private String kycConstraintsJson;
 
     @Column(columnDefinition = "TEXT")
     private String externalKycPayloadJson;
 
-    @Transient
+    @Column(nullable = false)
     private Boolean externalSyncPending = Boolean.FALSE;
 
-    @Transient
+    @Column(length = 1000)
     private String externalSyncMessage;
 
     private String onboardingNotes;
@@ -137,6 +155,32 @@ public class Investor extends BaseEntity {
     public void setExternalKycRequestId(String externalKycRequestId) { this.externalKycRequestId = externalKycRequestId; }
     public String getExternalKycStatus() { return externalKycStatus; }
     public void setExternalKycStatus(String externalKycStatus) { this.externalKycStatus = externalKycStatus; }
+    public String getKycReadinessStatus() { return kycReadinessStatus; }
+    public void setKycReadinessStatus(String kycReadinessStatus) { this.kycReadinessStatus = kycReadinessStatus; }
+    public String getKycReadinessCode() { return kycReadinessCode; }
+    public void setKycReadinessCode(String kycReadinessCode) { this.kycReadinessCode = kycReadinessCode; }
+    public String getKycReadinessReason() { return kycReadinessReason; }
+    public void setKycReadinessReason(String kycReadinessReason) { this.kycReadinessReason = kycReadinessReason; }
+    public String getPanVerificationStatus() { return panVerificationStatus; }
+    public void setPanVerificationStatus(String panVerificationStatus) { this.panVerificationStatus = panVerificationStatus; }
+    public String getPanVerificationCode() { return panVerificationCode; }
+    public void setPanVerificationCode(String panVerificationCode) { this.panVerificationCode = panVerificationCode; }
+    public String getPanVerificationReason() { return panVerificationReason; }
+    public void setPanVerificationReason(String panVerificationReason) { this.panVerificationReason = panVerificationReason; }
+    public String getPanAadhaarLinkStatus() { return panAadhaarLinkStatus; }
+    public void setPanAadhaarLinkStatus(String panAadhaarLinkStatus) { this.panAadhaarLinkStatus = panAadhaarLinkStatus; }
+    public String getPanAadhaarLinkReason() { return panAadhaarLinkReason; }
+    public void setPanAadhaarLinkReason(String panAadhaarLinkReason) { this.panAadhaarLinkReason = panAadhaarLinkReason; }
+    public String getExternalKycComplianceId() { return externalKycComplianceId; }
+    public void setExternalKycComplianceId(String externalKycComplianceId) { this.externalKycComplianceId = externalKycComplianceId; }
+    public Boolean getKycComplianceStatus() { return kycComplianceStatus; }
+    public void setKycComplianceStatus(Boolean kycComplianceStatus) { this.kycComplianceStatus = kycComplianceStatus; }
+    public String getKycComplianceReason() { return kycComplianceReason; }
+    public void setKycComplianceReason(String kycComplianceReason) { this.kycComplianceReason = kycComplianceReason; }
+    public String getKycComplianceAction() { return kycComplianceAction; }
+    public void setKycComplianceAction(String kycComplianceAction) { this.kycComplianceAction = kycComplianceAction; }
+    public String getKycConstraintsJson() { return kycConstraintsJson; }
+    public void setKycConstraintsJson(String kycConstraintsJson) { this.kycConstraintsJson = kycConstraintsJson; }
     public String getExternalKycPayloadJson() { return externalKycPayloadJson; }
     public void setExternalKycPayloadJson(String externalKycPayloadJson) { this.externalKycPayloadJson = externalKycPayloadJson; }
     public Boolean getExternalSyncPending() { return externalSyncPending; }

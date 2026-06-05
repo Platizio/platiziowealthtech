@@ -34,15 +34,25 @@ public interface CybrillaClient {
     }
 
     String createInvestorProfile(Investor investor);
+    void updateInvestorProfile(Investor investor);
     String createMfInvestmentAccount(Investor investor);
     void captureBankAccount(Investor investor, InvestorBankAccount bankAccount);
+    void startBankAccountVerification(Investor investor, InvestorBankAccount bankAccount);
     SchemeFetchResult fetchProductSchemes();
     String createOrder(TransactionOrder order, Investor investor, ProductScheme productScheme);
     JsonNode fetchBankAccountVerification(String bankAccountVerificationId);
+    JsonNode fetchBankAccountVerificationWithPayloadSnapshot(String bankAccountVerificationId, Map<String, Object> payloadSnapshot);
     JsonNode createPreVerification(Map<String, Object> payload);
     JsonNode createKycCheck(Investor investor);
     JsonNode fetchKycCheck(String kycCheckId);
     JsonNode refetchKycCheck(String kycCheckId);
+
+    // FP KYC Check (KRA compliance status). FP tenant surface:
+    // POST /api/kyc/check, GET /api/kyc/{id}, PUT /api/kyc/{id}/refetch.
+    // Pass dateOfBirth only to also fetch demographic entity_details (RIA/AMC licence).
+    JsonNode createKycComplianceCheck(String pan, java.time.LocalDate dateOfBirth);
+    JsonNode fetchKycComplianceCheck(String kycComplianceCheckId);
+    JsonNode refetchKycComplianceCheck(String kycComplianceCheckId);
     JsonNode listKycRequests(String pan, String status);
     JsonNode createKycRequest(Map<String, Object> payload);
     JsonNode fetchKycRequest(String kycRequestId);
@@ -51,7 +61,16 @@ public interface CybrillaClient {
     JsonNode createIdentityDocument(Map<String, Object> payload);
     JsonNode fetchIdentityDocument(String identityDocumentId);
     JsonNode listIdentityDocuments(String kycRequestId, String fetchStatus);
+
+    // Cybrilla POA KYC Forms API (modify workflow). POST/PATCH /poa/kyc_forms,
+    // GET /poa/kyc_forms/{id}, plus signature upload and proof-fetch retry.
+    JsonNode createKycForm(Map<String, Object> payload);
+    JsonNode updateKycForm(String kycFormId, Map<String, Object> payload);
+    JsonNode fetchKycForm(String kycFormId);
+    JsonNode uploadKycFormSignature(String kycFormId, byte[] fileBytes, String filename, String contentType);
+    JsonNode retryKycFormProofDetailsFetch(String kycFormId);
     String generateInvestorActionUrl(TransactionOrder order);
     String createRedemption(TransactionOrder order, Investor investor, ProductScheme productScheme);
     void cancelOrder(TransactionOrder order);
+    JsonNode getFundSchemesPageWithPayloadSnapshot(int page, int size, Map<String, Object> payloadSnapshot);
 }

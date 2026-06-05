@@ -4,6 +4,7 @@ import com.platizio.wealthtech.common.AccountNotApprovedException;
 import com.platizio.wealthtech.domain.Distributor;
 import com.platizio.wealthtech.domain.DistributorRole;
 import com.platizio.wealthtech.domain.DistributorStatus;
+import com.platizio.wealthtech.domain.OtpPurpose;
 import com.platizio.wealthtech.dto.AuthLoginRequest;
 import com.platizio.wealthtech.dto.AuthResponse;
 import com.platizio.wealthtech.dto.AuthSignupRequest;
@@ -12,6 +13,7 @@ import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import java.util.Locale;
 import java.util.UUID;
 
 @Service
@@ -106,6 +108,43 @@ public class AuthService {
         return new AuthResponse(
                 token, distributor.getId(), distributor.getEmail(),
                 distributor.getFullName(), distributor.getRole(), distributor.getStatus(), "Login successful");
+    }
+
+    /**
+     * Decides whether an OTP should actually be generated for an email, without
+     * revealing account existence to the caller (anti-enumeration): for LOGIN
+     * the account must exist; for SIGNUP it must NOT already exist. The endpoint
+     * returns the same generic response either way.
+     */
+    public boolean isOtpEligible(String email, OtpPurpose purpose) {
+        boolean registered = distributorRepository.findByEmail(normalizeEmail(email)).isPresent();
+        return switch (purpose) {
+            case LOGIN -> registered;
+            case SIGNUP -> !registered;
+        };
+    }
+
+    /**
+     * Passwordless login after a verified email OTP. Mirrors {@link #login} but
+     * skips the password check (the OTP already proved control of the inbox).
+     */
+    public AuthResponse otpLogin(String email) {
+        Distributor distributor = distributorRepository.findByEmail(normalizeEmail(email))
+                .orElseThrow(() -> new BadCredentialsException("Invalid email or code"));
+
+        if (distributor.getStatus() != DistributorStatus.APPROVED) {
+            throw new AccountNotApprovedException(distributor.getStatus());
+        }
+
+        String token = jwtService.generateToken(
+                distributor.getId(), distributor.getEmail(), distributor.getRole().name());
+        return new AuthResponse(
+                token, distributor.getId(), distributor.getEmail(),
+                distributor.getFullName(), distributor.getRole(), distributor.getStatus(), "Login successful");
+    }
+
+    private String normalizeEmail(String email) {
+        return email == null ? "" : email.trim().toLowerCase(Locale.ROOT);
     }
 
     public UUID createRefreshToken(UUID distributorId) {

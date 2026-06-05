@@ -17,11 +17,37 @@ spring:
     properties:
       hibernate:
         format_sql: true
+  # Email OTP delivery. Point these at any free SMTP provider:
+  #   Gmail   -> host smtp.gmail.com, port 587, username <gmail>, password <app-password>
+  #   Brevo   -> host smtp-relay.brevo.com, port 587
+  #   Mailtrap-> host sandbox.smtp.mailtrap.io, port 587 (testing inbox)
+  # Leave MAIL_HOST empty to run without SMTP: the OTP is logged (and, on the
+  # local profile, returned in the API response) instead of being emailed.
+  mail:
+    host: ${MAIL_HOST:}
+    port: ${MAIL_PORT:587}
+    username: ${MAIL_USERNAME:}
+    password: ${MAIL_PASSWORD:}
+    properties:
+      mail:
+        smtp:
+          auth: ${MAIL_SMTP_AUTH:true}
+          starttls:
+            enable: ${MAIL_SMTP_STARTTLS:true}
+        transport:
+          protocol: smtp
+    test-connection: false
   flyway:
     enabled: true
     locations: classpath:db/migration
     clean-disabled: true
     clean-on-validation-error: false
+    # V1..V36 were squashed into V1..V3. Existing DBs keep history rows for the
+    # removed versions; ignore them during validation (the repair-before-migrate
+    # strategy in FlywayConfig also marks them deleted and realigns checksums).
+    baseline-on-migrate: true
+    baseline-version: 0
+    ignore-migration-patterns: "*:missing"
 
 management:
   endpoints:
@@ -35,13 +61,19 @@ server:
 cybrilla:
   integration:
     real-client-enabled: ${CYBRILLA_REAL_CLIENT_ENABLED:true}
+    # Skip full Finprim catalogue re-import when a sync ran recently (aligns with ~30m JWT lifetime).
+    catalogue-refresh-min-interval-minutes: ${CYBRILLA_CATALOGUE_REFRESH_MIN_INTERVAL_MINUTES:25}
+  kyc-form:
+    # Frontend origin the investor is redirected back to after the Digilocker
+    # and eSign journeys. Used to build proof_details_callback_url / esign_callback_url.
+    callback-base-url: ${CYBRILLA_KYC_FORM_CALLBACK_BASE_URL:http://localhost:3000}
   pre-verification:
     base-url: ${CYBRILLA_PRE_VERIFICATION_BASE_URL:https://api.sandbox.cybrilla.com}
     auth:
       token-url: ${CYBRILLA_PRE_VERIFICATION_TOKEN_URL:https://s.finprim.com/v2/auth/cybrillarta/token}
       client-id: ${CYBRILLA_PRE_VERIFICATION_CLIENT_ID:}
       client-secret: ${CYBRILLA_PRE_VERIFICATION_CLIENT_SECRET:}
-      refresh-buffer-seconds: ${CYBRILLA_TOKEN_REFRESH_BUFFER_SECONDS:0}
+      refresh-buffer-seconds: ${CYBRILLA_TOKEN_REFRESH_BUFFER_SECONDS:120}
 
 finprim:
   base-url: ${FINPRIM_BASE_URL:https://s.finprim.com}
@@ -52,7 +84,7 @@ finprim:
       token-url: ${FINPRIM_TENANT_TOKEN_URL:}
       client-id: ${FINPRIM_TENANT_CLIENT_ID:}
       client-secret: ${FINPRIM_TENANT_CLIENT_SECRET:}
-      refresh-buffer-seconds: ${FINPRIM_TOKEN_REFRESH_BUFFER_SECONDS:0}
+      refresh-buffer-seconds: ${FINPRIM_TOKEN_REFRESH_BUFFER_SECONDS:120}
 
 external-auth:
   auto-refresh:
@@ -81,6 +113,24 @@ app:
     cookie-same-site: ${AUTH_COOKIE_SAME_SITE:Lax}
     blocked-token-purge-interval-ms: ${AUTH_BLOCKED_TOKEN_PURGE_INTERVAL_MS:3600000}
     blocked-token-purge-initial-delay-ms: ${AUTH_BLOCKED_TOKEN_PURGE_INITIAL_DELAY_MS:${random.int[30000,90000]}}
+  otp:
+    # One-time passcode for email login/signup verification.
+    length: ${OTP_LENGTH:6}
+    expiration-minutes: ${OTP_EXPIRATION_MINUTES:5}
+    max-attempts: ${OTP_MAX_ATTEMPTS:5}
+    resend-cooldown-seconds: ${OTP_RESEND_COOLDOWN_SECONDS:30}
+    from-address: ${MAIL_FROM:no-reply@platizio.local}
+    from-name: ${MAIL_FROM_NAME:Platizio}
+  kyc-sync:
+    failure-backoff-ms: ${KYC_SYNC_FAILURE_BACKOFF_MS:900000}
+  kyc-form-sync:
+    # Polling fallback for the KYC Forms (modify) workflow. Webhooks are primary;
+    # enable this only if you cannot rely on webhook delivery.
+    enabled: ${KYC_FORM_SYNC_ENABLED:false}
+    interval-ms: ${KYC_FORM_SYNC_INTERVAL_MS:180000}
+    batch-size: ${KYC_FORM_SYNC_BATCH_SIZE:50}
+  bank-sync:
+    failure-backoff-ms: ${BANK_SYNC_FAILURE_BACKOFF_MS:900000}
 
 logging:
   pattern:

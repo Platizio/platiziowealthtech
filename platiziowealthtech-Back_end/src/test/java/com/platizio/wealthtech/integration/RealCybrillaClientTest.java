@@ -24,6 +24,7 @@ import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.io.IOException;
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
@@ -91,6 +92,131 @@ class RealCybrillaClientTest {
 
         fixture.server.verify();
         assertThat(response.path("id").asText()).isEqualTo("pv_payload");
+    }
+
+    @Test
+    void fetchProductSchemesUsesDocumentedFundSchemeListEndpoint() {
+        ClientFixture fixture = clientFixture(new StaticBearerTokenService("tenant-token"));
+
+        fixture.server.expect(once(), requestTo("https://finprim.test/api/oms/fund_schemes?page=0&size=100"))
+                .andExpect(method(HttpMethod.GET))
+                .andExpect(header(HttpHeaders.AUTHORIZATION, "Bearer tenant-token"))
+                .andExpect(header("x-tenant-id", "tenant-123"))
+                .andRespond(withSuccess("""
+                        {
+                          "fund_schemes": [
+                            {
+                              "fund_scheme_id": 101,
+                              "isin": "INF001",
+                              "name": "Alpha Liquid Fund",
+                              "amc_id": 12,
+                              "active": true
+                            }
+                          ]
+                        }
+                        """, MediaType.APPLICATION_JSON));
+
+        fixture.server.expect(once(), requestTo(
+                        "https://finprim.test/v2/sif_scheme_plans/cybrillapoa?expand=sif_scheme,sif_fund&page=0&size=100"))
+                .andExpect(method(HttpMethod.GET))
+                .andRespond(withStatus(org.springframework.http.HttpStatus.NOT_FOUND));
+
+        CybrillaClient.SchemeFetchResult result = fixture.client.fetchProductSchemes();
+
+        fixture.server.verify();
+        assertThat(result.complete()).isTrue();
+        assertThat(result.schemes()).hasSize(1);
+        ProductScheme scheme = result.schemes().getFirst();
+        assertThat(scheme.getSchemeName()).isEqualTo("Alpha Liquid Fund");
+        assertThat(scheme.getAmcName()).isEqualTo("AMC 12");
+        assertThat(scheme.getCategory()).isEqualTo(ProductCategory.MF);
+        assertThat(scheme.getExternalSchemeCode()).isEqualTo("INF001");
+        assertThat(scheme.getExternalIsin()).isEqualTo("INF001");
+        assertThat(scheme.getActive()).isTrue();
+    }
+
+    @Test
+    void fetchProductSchemesMergesSifSchemePlansFromFinprimGateway() {
+        ClientFixture fixture = clientFixture(new StaticBearerTokenService("tenant-token"));
+
+        fixture.server.expect(once(), requestTo("https://finprim.test/api/oms/fund_schemes?page=0&size=100"))
+                .andExpect(method(HttpMethod.GET))
+                .andRespond(withSuccess("""
+                        {
+                          "fund_schemes": [
+                            {
+                              "isin": "INF001",
+                              "name": "Alpha Liquid Fund",
+                              "active": true
+                            }
+                          ]
+                        }
+                        """, MediaType.APPLICATION_JSON));
+
+        fixture.server.expect(once(), requestTo(
+                        "https://finprim.test/v2/sif_scheme_plans/cybrillapoa?expand=sif_scheme,sif_fund&page=0&size=100"))
+                .andExpect(method(HttpMethod.GET))
+                .andRespond(withSuccess("""
+                        {
+                          "data": [
+                            {
+                              "object": "sif_scheme_plan",
+                              "gateway": "cybrillapoa",
+                              "isin": "INF900000001",
+                              "active": true,
+                              "sif_scheme": { "name": "Impact Venture SIF" },
+                              "sif_fund": { "name": "Impact Capital" }
+                            }
+                          ]
+                        }
+                        """, MediaType.APPLICATION_JSON));
+
+        CybrillaClient.SchemeFetchResult result = fixture.client.fetchProductSchemes();
+
+        fixture.server.verify();
+        assertThat(result.complete()).isTrue();
+        assertThat(result.schemes()).hasSize(2);
+        assertThat(result.schemes())
+                .filteredOn(scheme -> scheme.getCategory() == ProductCategory.SIF)
+                .singleElement()
+                .satisfies(scheme -> {
+                    assertThat(scheme.getSchemeName()).isEqualTo("Impact Venture SIF");
+                    assertThat(scheme.getAmcName()).isEqualTo("Impact Capital");
+                    assertThat(scheme.getExternalIsin()).isEqualTo("INF900000001");
+                    assertThat(scheme.getProductType()).isEqualTo("SIF");
+                });
+    }
+
+    @Test
+    void updateInvestorProfilePatchesMutableProfileFields() {
+        ClientFixture fixture = clientFixture(new StaticBearerTokenService("tenant-token"));
+        Investor investor = investor("invp_1", null);
+        investor.setFullName("Rani Gupta");
+        investor.setDateOfBirth(LocalDate.of(1955, 10, 25));
+        investor.setCity("Mumbai");
+
+        fixture.server.expect(once(), requestTo("https://finprim.test/v2/investor_profiles"))
+                .andExpect(method(HttpMethod.PATCH))
+                .andExpect(header(HttpHeaders.AUTHORIZATION, "Bearer tenant-token"))
+                .andExpect(header("x-tenant-id", "tenant-123"))
+                .andExpect(content().json("""
+                        {
+                          "id": "invp_1",
+                          "tax_status": "resident_individual",
+                          "name": "Rani Gupta",
+                          "date_of_birth": "1955-10-25",
+                          "place_of_birth": "Mumbai",
+                          "nationality_country": "IN",
+                          "source_of_wealth": "salary",
+                          "income_slab": "upto_1lakh",
+                          "pep_details": "not_applicable"
+                        }
+                        """))
+                .andRespond(withSuccess("{\"object\":\"investor_profile\",\"id\":\"invp_1\"}", MediaType.APPLICATION_JSON));
+
+        fixture.client.updateInvestorProfile(investor);
+
+        fixture.server.verify();
     }
 
     @Test
@@ -271,7 +397,8 @@ class RealCybrillaClientTest {
                 new StaticBearerTokenService("tenant-token"),
                 properties,
                 new CybrillaPreVerificationProperties(),
-                new SimpleMeterRegistry()
+                new SimpleMeterRegistry(),
+                new NoopExternalApiSnapshotService()
         );
 
         assertThatThrownBy(() -> client.createOrder(order(TransactionType.LUMPSUM_PURCHASE), investor("profile-1", "mfia-1"), productScheme("INF209KA1K47")))
@@ -328,7 +455,7 @@ class RealCybrillaClientTest {
     }
 
     @Test
-    void captureBankAccountCreatesBankAccountAndVerificationRequest() {
+    void captureBankAccountCreatesBankAccountAndPoaPreVerificationRequest() {
         ClientFixture fixture = clientFixture(new StaticBearerTokenService("tenant-token"));
         Investor investor = investor("profile-1", "mfia-1");
         InvestorBankAccount bankAccount = bankAccount();
@@ -345,21 +472,52 @@ class RealCybrillaClientTest {
                         }
                         """))
                 .andRespond(withSuccess("{\"id\":\"bac_1\"}", MediaType.APPLICATION_JSON));
-        fixture.server.expect(once(), requestTo("https://finprim.test/v2/bank_account_verifications"))
+        fixture.server.expect(once(), requestTo("https://poa.test/poa/pre_verifications"))
                 .andExpect(method(HttpMethod.POST))
                 .andExpect(content().json("""
                         {
-                          "bank_account": "bac_1"
+                          "investor_identifier": "AAAPX1234A",
+                          "pan": {
+                            "value": "AAAPX1234A"
+                          },
+                          "name": {
+                            "value": "Alice Investor"
+                          },
+                          "date_of_birth": {
+                            "value": "1990-01-01"
+                          },
+                          "bank_accounts": [
+                            {
+                              "value": {
+                                "account_number": "98123459204",
+                                "ifsc_code": "HDFC0001330",
+                                "account_type": "savings"
+                              }
+                            }
+                          ]
                         }
                         """))
-                .andRespond(withSuccess("{\"id\":\"bav_1\",\"status\":\"pending\",\"confidence\":null}", MediaType.APPLICATION_JSON));
+                .andRespond(withSuccess("""
+                        {
+                          "object": "pre_verification",
+                          "id": "pv_bank_1",
+                          "status": "accepted",
+                          "bank_accounts": [
+                            {
+                              "status": null,
+                              "code": null,
+                              "reason": null
+                            }
+                          ]
+                        }
+                        """, MediaType.APPLICATION_JSON));
 
         fixture.client.captureBankAccount(investor, bankAccount);
 
         fixture.server.verify();
         assertThat(bankAccount.getCybrillaBankId()).isEqualTo("bac_1");
-        assertThat(bankAccount.getCybrillaBankVerificationId()).isEqualTo("bav_1");
-        assertThat(bankAccount.getCybrillaBankVerificationStatus()).isEqualTo("pending");
+        assertThat(bankAccount.getCybrillaBankVerificationId()).isEqualTo("pv_bank_1");
+        assertThat(bankAccount.getCybrillaBankVerificationStatus()).isEqualTo("accepted");
     }
 
     private ClientFixture clientFixture(ExternalBearerTokenService tokenService) {
@@ -376,7 +534,8 @@ class RealCybrillaClientTest {
                 tokenService,
                 properties,
                 poaProperties,
-                new SimpleMeterRegistry()
+                new SimpleMeterRegistry(),
+                new NoopExternalApiSnapshotService()
         );
 
         return new ClientFixture(client, server);
@@ -398,6 +557,9 @@ class RealCybrillaClientTest {
         Investor investor = new Investor();
         investor.setCybrillaInvestorId(profileId);
         investor.setExternalMfInvestmentAccountId(mfInvestmentAccountId);
+        investor.setFullName("Alice Investor");
+        investor.setPan("AAAPX1234A");
+        investor.setDateOfBirth(LocalDate.of(1990, 1, 1));
         return investor;
     }
 

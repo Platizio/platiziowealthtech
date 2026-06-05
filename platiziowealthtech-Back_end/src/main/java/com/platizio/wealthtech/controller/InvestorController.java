@@ -11,6 +11,7 @@ import com.platizio.wealthtech.dto.InvestorKycCheckRequest;
 import com.platizio.wealthtech.dto.InvestorKycRequestCreateRequest;
 import com.platizio.wealthtech.dto.InvestorKycRequestUpdateRequest;
 import com.platizio.wealthtech.dto.InvestorKycSimulationRequest;
+import com.platizio.wealthtech.dto.InvestorOnboardingResumeResponse;
 import com.platizio.wealthtech.dto.InvestorPreVerificationRequest;
 import com.platizio.wealthtech.dto.InvestorPreVerificationResponse;
 import com.platizio.wealthtech.dto.IdentityDocumentCreateRequest;
@@ -73,16 +74,17 @@ public class InvestorController {
     @ApiResponse(responseCode = "200", description = "Investor created successfully", 
                  content = @Content(schema = @Schema(implementation = Investor.class)))
     @PostMapping
-    public Investor create(@Valid @RequestBody InvestorCreateRequest request) {
-        return investorService.createInvestor(request);
+    public Investor create(@Valid @RequestBody InvestorCreateRequest request, Authentication auth) {
+        return investorService.createInvestor(request, actorId(auth));
     }
 
     @GetMapping("/filter/kyc")
     public List<Investor> filterByKycStatus(
             @RequestParam(defaultValue = "ALL") String status,
-            @RequestParam(required = false) UUID distributorId
+            @RequestParam(required = false) UUID distributorId,
+            Authentication auth
     ) {
-        return investorService.filterByKycStatus(status, distributorId);
+        return investorService.filterByKycStatus(status, distributorId, actorId(auth));
     }
 
     @GetMapping("/search")
@@ -106,16 +108,21 @@ public class InvestorController {
     }
 
     @GetMapping("/by-distributor/{distributorId}")
-    public List<Investor> listByDistributor(@PathVariable UUID distributorId) {
-        return investorService.listByDistributor(distributorId);
+    public List<Investor> listByDistributor(@PathVariable UUID distributorId, Authentication auth) {
+        return investorService.listVisibleToDistributor(actorId(auth), distributorId);
     }
 
     @GetMapping("/by-distributor/{distributorId}/visible-to/{requesterId}")
     public List<Investor> listByDistributorForRequester(
             @PathVariable UUID distributorId,
-            @PathVariable UUID requesterId
+            @PathVariable UUID requesterId,
+            Authentication auth
     ) {
-        return investorService.listVisibleToDistributor(requesterId, distributorId);
+        UUID actorId = actorId(auth);
+        if (!actorId.equals(requesterId)) {
+            throw new AccessDeniedException("Requester id must match authenticated principal");
+        }
+        return investorService.listVisibleToDistributor(actorId, distributorId);
     }
 
     @PreAuthorize("hasAnyRole('ADMIN','MASTER_DISTRIBUTOR','SUB_DISTRIBUTOR')")
@@ -129,8 +136,12 @@ public class InvestorController {
     }
 
     @GetMapping("/visible-to/{requesterId}")
-    public List<Investor> listVisibleToRequester(@PathVariable UUID requesterId) {
-        return investorService.listVisibleToMaster(requesterId);
+    public List<Investor> listVisibleToRequester(@PathVariable UUID requesterId, Authentication auth) {
+        UUID actorId = actorId(auth);
+        if (!actorId.equals(requesterId)) {
+            throw new AccessDeniedException("Requester id must match authenticated principal");
+        }
+        return investorService.listVisibleToMaster(actorId);
     }
 
     @PreAuthorize("hasRole('ADMIN')")
@@ -168,6 +179,33 @@ public class InvestorController {
         return investorKycService.createKycCheck(investorId, request, actorId(auth));
     }
 
+    @PostMapping("/{investorId}/kyc-compliance-check")
+    public InvestorExternalKycResponse runKycComplianceCheck(
+            @PathVariable UUID investorId,
+            @RequestParam(defaultValue = "false") boolean fetchData,
+            Authentication auth
+    ) {
+        return investorKycService.runKycComplianceCheck(investorId, fetchData, actorId(auth));
+    }
+
+    @PostMapping("/{investorId}/kyc/apply")
+    public InvestorExternalKycResponse applyKyc(
+            @PathVariable UUID investorId,
+            @Valid @RequestBody(required = false) InvestorKycCheckRequest request,
+            Authentication auth
+    ) {
+        return investorKycService.applyInvestorKyc(investorId, request, actorId(auth));
+    }
+
+    @PostMapping({"/{investorId}/kyc/rekyc", "/{investorId}/kyc/reapply", "/{investorId}/kyc/re-apply"})
+    public InvestorExternalKycResponse reapplyKyc(
+            @PathVariable UUID investorId,
+            @Valid @RequestBody(required = false) InvestorKycCheckRequest request,
+            Authentication auth
+    ) {
+        return investorKycService.reapplyInvestorKyc(investorId, request, actorId(auth));
+    }
+
     @GetMapping("/{investorId}/kyc-checks/{kycCheckId}")
     public InvestorExternalKycResponse fetchKycCheck(
             @PathVariable UUID investorId,
@@ -184,6 +222,17 @@ public class InvestorController {
             Authentication auth
     ) {
         return investorKycService.refetchKycCheck(investorId, kycCheckId, actorId(auth));
+    }
+
+    @RequestMapping(
+            value = {"/{investorId}/kyc-sync", "/{investorId}/kyc/refresh"},
+            method = {RequestMethod.GET, RequestMethod.POST}
+    )
+    public InvestorExternalKycResponse syncSavedKycStatus(
+            @PathVariable UUID investorId,
+            Authentication auth
+    ) {
+        return investorKycService.syncInvestorExternalKycStatus(investorId, actorId(auth));
     }
 
     @GetMapping("/{investorId}/kyc-requests")
@@ -294,16 +343,25 @@ public class InvestorController {
     }
 
     @GetMapping("/{investorId}")
-    public Investor getInvestorById(@PathVariable UUID investorId) {
-        return investorService.getInvestor(investorId);
+    public Investor getInvestorById(@PathVariable UUID investorId, Authentication auth) {
+        return investorService.getInvestor(investorId, actorId(auth));
+    }
+
+    @GetMapping({"/{investorId}/onboarding", "/{investorId}/onboarding/resume"})
+    public InvestorOnboardingResumeResponse getOnboardingResume(
+            @PathVariable UUID investorId,
+            Authentication auth
+    ) {
+        return investorService.getOnboardingResume(investorId, actorId(auth));
     }
 
     @PutMapping("/{investorId}")
     public Investor updateInvestor(
             @PathVariable UUID investorId,
-            @Valid @RequestBody InvestorUpdateRequest request
+            @Valid @RequestBody InvestorUpdateRequest request,
+            Authentication auth
     ) {
-        return investorService.updateInvestor(investorId, request);
+        return investorService.updateInvestor(investorId, request, actorId(auth));
     }
 
     @PutMapping(value = "/{investorId}/documents", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
@@ -321,7 +379,7 @@ public class InvestorController {
         return investorService.findByPostalCode(postalCode);
     }
 
-    @PreAuthorize("hasRole('ADMIN')")
+    @PreAuthorize("hasAnyRole('ADMIN','MASTER_DISTRIBUTOR','SUB_DISTRIBUTOR')")
     @DeleteMapping("/{investorId}")
     public void deleteInvestor(@PathVariable UUID investorId, Authentication auth) {
         investorService.deleteInvestor(investorId, actorId(auth));

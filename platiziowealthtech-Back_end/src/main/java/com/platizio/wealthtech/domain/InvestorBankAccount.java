@@ -31,11 +31,15 @@ public class InvestorBankAccount extends BaseEntity {
     private String cybrillaBankVerificationId;
     private String cybrillaBankVerificationStatus;
     private String cybrillaBankVerificationConfidence;
+    @Column(columnDefinition = "TEXT")
+    private String externalVerificationRequestJson;
+    @Column(columnDefinition = "TEXT")
+    private String externalVerificationResponseJson;
 
-    @Transient
+    @Column(nullable = false)
     private Boolean externalSyncPending = Boolean.FALSE;
 
-    @Transient
+    @Column(length = 1000)
     private String externalSyncMessage;
 
     public UUID getInvestorId() { return investorId; }
@@ -60,6 +64,10 @@ public class InvestorBankAccount extends BaseEntity {
     public void setCybrillaBankVerificationStatus(String cybrillaBankVerificationStatus) { this.cybrillaBankVerificationStatus = cybrillaBankVerificationStatus; }
     public String getCybrillaBankVerificationConfidence() { return cybrillaBankVerificationConfidence; }
     public void setCybrillaBankVerificationConfidence(String cybrillaBankVerificationConfidence) { this.cybrillaBankVerificationConfidence = cybrillaBankVerificationConfidence; }
+    public String getExternalVerificationRequestJson() { return externalVerificationRequestJson; }
+    public void setExternalVerificationRequestJson(String externalVerificationRequestJson) { this.externalVerificationRequestJson = externalVerificationRequestJson; }
+    public String getExternalVerificationResponseJson() { return externalVerificationResponseJson; }
+    public void setExternalVerificationResponseJson(String externalVerificationResponseJson) { this.externalVerificationResponseJson = externalVerificationResponseJson; }
     public Boolean getExternalSyncPending() { return externalSyncPending; }
     public void setExternalSyncPending(Boolean externalSyncPending) { this.externalSyncPending = externalSyncPending; }
     public String getExternalSyncMessage() { return externalSyncMessage; }

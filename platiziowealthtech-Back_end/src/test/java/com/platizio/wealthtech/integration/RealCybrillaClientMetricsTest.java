@@ -35,7 +35,8 @@ class RealCybrillaClientMetricsTest {
                 tokenService,
                 properties,
                 new CybrillaPreVerificationProperties(),
-                meterRegistry
+                meterRegistry,
+                new NoopExternalApiSnapshotService()
         );
 
         server.expect(once(), requestTo("https://finprim.test/v2/investor_profiles"))

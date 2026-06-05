@@ -1,13 +1,18 @@
 package com.platizio.wealthtech.controller;
 
+import com.platizio.wealthtech.domain.OtpPurpose;
 import com.platizio.wealthtech.dto.AuthLoginRequest;
 import com.platizio.wealthtech.dto.AuthResponse;
 import com.platizio.wealthtech.dto.AuthSignupRequest;
 import com.platizio.wealthtech.dto.ForgotPasswordRequest;
 import com.platizio.wealthtech.dto.ForgotPasswordResponse;
+import com.platizio.wealthtech.dto.OtpRequest;
+import com.platizio.wealthtech.dto.OtpRequestResponse;
+import com.platizio.wealthtech.dto.OtpVerifyRequest;
 import com.platizio.wealthtech.dto.ResetPasswordRequest;
 import com.platizio.wealthtech.service.AuthCookieService;
 import com.platizio.wealthtech.service.AuthService;
+import com.platizio.wealthtech.service.OtpService;
 import com.platizio.wealthtech.service.PasswordResetService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.media.Content;
@@ -31,15 +36,18 @@ public class AuthController {
     private final AuthService authService;
     private final AuthCookieService authCookieService;
     private final PasswordResetService passwordResetService;
+    private final OtpService otpService;
 
     public AuthController(
             AuthService authService,
             AuthCookieService authCookieService,
-            PasswordResetService passwordResetService
+            PasswordResetService passwordResetService,
+            OtpService otpService
     ) {
         this.authService = authService;
         this.authCookieService = authCookieService;
         this.passwordResetService = passwordResetService;
+        this.otpService = otpService;
     }
 
     @Operation(summary = "Register a new distributor", description = "Creates a new distributor account and sets an HttpOnly JWT cookie.")
@@ -64,7 +72,34 @@ public class AuthController {
         authCookieService.writeAccessToken(response, authResponse.token());
         UUID refreshToken = authService.createRefreshToken(authResponse.distributorId());
         authCookieService.writeRefreshToken(response, refreshToken);
-        return authResponse;
+        return withoutToken(authResponse);
+    }
+
+    @Operation(summary = "Request an email OTP", description = "Emails a one-time passcode for LOGIN or SIGNUP. Always returns a generic message to avoid leaking which emails are registered.")
+    @PostMapping("/otp/request")
+    public OtpRequestResponse requestOtp(@Valid @RequestBody OtpRequest request) {
+        if (!authService.isOtpEligible(request.email(), request.purpose())) {
+            return otpService.genericResponse();
+        }
+        return otpService.requestOtp(request.email(), request.purpose());
+    }
+
+    @Operation(summary = "Verify an email OTP", description = "Validates the passcode. For LOGIN it issues HttpOnly auth cookies; for SIGNUP it confirms the email is verified.")
+    @ApiResponse(responseCode = "401", description = "Invalid or expired code")
+    @PostMapping("/otp/verify")
+    public AuthResponse verifyOtp(@Valid @RequestBody OtpVerifyRequest request, HttpServletResponse response) {
+        otpService.verify(request.email(), request.purpose(), request.code());
+
+        if (request.purpose() == OtpPurpose.LOGIN) {
+            AuthResponse authResponse = authService.otpLogin(request.email());
+            authCookieService.writeAccessToken(response, authResponse.token());
+            UUID refreshToken = authService.createRefreshToken(authResponse.distributorId());
+            authCookieService.writeRefreshToken(response, refreshToken);
+            return withoutToken(authResponse);
+        }
+
+        // SIGNUP: the email is now proven; the client proceeds to the signup form.
+        return new AuthResponse(null, null, request.email(), null, null, null, "Email verified");
     }
 
     @PostMapping("/forgot-password")
@@ -84,7 +119,7 @@ public class AuthController {
         AuthService.RefreshResult refreshResult = authService.refresh(refreshToken);
         authCookieService.writeAccessToken(response, refreshResult.authResponse().token());
         authCookieService.writeRefreshToken(response, refreshResult.refreshToken());
-        return refreshResult.authResponse();
+        return withoutToken(refreshResult.authResponse());
     }
 
     @GetMapping("/me")
@@ -102,5 +137,17 @@ public class AuthController {
         authCookieService.clearAccessToken(response);
         authCookieService.clearRefreshToken(response);
         return Map.of("status", "logged_out");
+    }
+
+    private AuthResponse withoutToken(AuthResponse response) {
+        return new AuthResponse(
+                null,
+                response.distributorId(),
+                response.email(),
+                response.fullName(),
+                response.role(),
+                response.status(),
+                response.message()
+        );
     }
 }

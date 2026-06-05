@@ -37,6 +37,13 @@
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-security</artifactId>
         </dependency>
+        <!-- Email OTP delivery (login/signup). JavaMailSender auto-config; SMTP
+             host is supplied via env (any free SMTP, e.g. Gmail/Brevo/Mailtrap).
+             When no host is configured the app falls back to logging the code. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-mail</artifactId>
+        </dependency>
         <dependency>
             <groupId>io.jsonwebtoken</groupId>
             <artifactId>jjwt-api</artifactId>

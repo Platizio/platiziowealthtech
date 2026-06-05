@@ -41,7 +41,12 @@ public class ExternalAuthTokenAutoRefreshScheduler {
     private void refreshCybrillaPreVerificationToken(String trigger) {
         try {
             logger.info("external_auth_auto_refresh trigger='{}' provider='Cybrilla pre-verification'", trigger);
-            tokenService.getCybrillaPreVerificationAccessToken();
+            boolean refreshed = tokenService.refreshCybrillaPreVerificationTokenIfCachedAndDue();
+            logger.info(
+                    "external_auth_auto_refresh trigger='{}' provider='Cybrilla pre-verification' refreshed='{}'",
+                    trigger,
+                    refreshed
+            );
         } catch (RuntimeException ex) {
             logger.warn("external_auth_auto_refresh failed trigger='{}' provider='Cybrilla pre-verification' reason='{}'", trigger, ex.getMessage());
         }
@@ -50,7 +55,12 @@ public class ExternalAuthTokenAutoRefreshScheduler {
     private void refreshFinprimTenantToken(String trigger) {
         try {
             logger.info("external_auth_auto_refresh trigger='{}' provider='Fintech Primitives tenant'", trigger);
-            tokenService.getFinprimTenantAccessToken();
+            boolean refreshed = tokenService.refreshFinprimTenantTokenIfCachedAndDue();
+            logger.info(
+                    "external_auth_auto_refresh trigger='{}' provider='Fintech Primitives tenant' refreshed='{}'",
+                    trigger,
+                    refreshed
+            );
         } catch (RuntimeException ex) {
             logger.warn("external_auth_auto_refresh failed trigger='{}' provider='Fintech Primitives tenant' reason='{}'", trigger, ex.getMessage());
         }

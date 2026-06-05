@@ -4,6 +4,7 @@ import com.platizio.wealthtech.domain.*;
 import com.platizio.wealthtech.dto.BulkOrderCreateRequest;
 import com.platizio.wealthtech.dto.OrderCreateRequest;
 import com.platizio.wealthtech.integration.CybrillaClient;
+import com.platizio.wealthtech.integration.CybrillaUnavailableException;
 import com.platizio.wealthtech.repository.ProductSchemeRepository;
 import com.platizio.wealthtech.repository.RedemptionRecordRepository;
 import com.platizio.wealthtech.repository.TransactionOrderRepository;
@@ -167,7 +168,6 @@ public class OrderService {
         if (investor.getBankVerificationStatus() != BankVerificationStatus.VERIFIED) {
             throw new IllegalStateException("Verified bank account is required before order creation");
         }
-        investor = investorService.ensureMfInvestmentAccount(request.investorId());
         validateSipRequest(request);
         ProductScheme productScheme = resolveProductScheme(request.productSchemeId());
 
@@ -186,8 +186,35 @@ public class OrderService {
         order.setInvestorActionToken(UUID.randomUUID().toString());
         order.setOrderStatus(OrderStatus.CREATED);
 
+        // Persist the local order first so a later provider failure does not discard
+        // the distributor's order; the external sync can then be retried.
         TransactionOrder saved = transactionOrderRepository.save(order);
-        String externalOrderId = cybrillaClient.createOrder(saved, investor, productScheme);
+
+        Investor investorWithAccount;
+        try {
+            investorWithAccount = investorService.ensureMfInvestmentAccount(request.investorId());
+        } catch (CybrillaUnavailableException ex) {
+            persistDeferredOrder(saved,
+                    "Order saved locally, but the MF investment account could not be opened because "
+                            + "Cybrilla/Fintech Primitives is unreachable (network/DNS). Retry once connectivity is restored.");
+            throw new CybrillaUnavailableException(
+                    "Order deferred: MF investment account could not be created because the provider is unreachable. "
+                            + ex.getMessage(),
+                    ex);
+        }
+
+        String externalOrderId;
+        try {
+            externalOrderId = cybrillaClient.createOrder(saved, investorWithAccount, productScheme);
+        } catch (CybrillaUnavailableException ex) {
+            persistDeferredOrder(saved,
+                    "Order saved locally, but it could not be submitted because Cybrilla/Fintech Primitives "
+                            + "is unreachable (network/DNS). Retry once connectivity is restored.");
+            throw new CybrillaUnavailableException(
+                    "Order deferred: it could not be submitted because the provider is unreachable. " + ex.getMessage(),
+                    ex);
+        }
+
         saved.setExternalOrderId(externalOrderId);
         saved.setOrderStatus(OrderStatus.PENDING_INVESTOR_ACTION);
         saved.setInvestorActionUrl(cybrillaClient.generateInvestorActionUrl(saved));
@@ -196,6 +223,26 @@ public class OrderService {
         auditService.log("ORDER", saved.getId(), "ORDER_CREATED", distributorId, "{\"externalOrderId\":\"" + externalOrderId + "\"}");
         notificationService.createForDistributor(distributorId, request.investorId(), NotificationType.PAYMENT_PENDING, "Investor action pending", "Order created and waiting for investor action.");
         return saved;
+    }
+
+    /**
+     * Commits the local order in a RETRY_AVAILABLE state in its OWN transaction so it
+     * survives the rollback of the surrounding @Transactional createOrder method when we
+     * rethrow a provider-unreachable error. Mirrors the deferred-persist used for KYC.
+     */
+    private void persistDeferredOrder(TransactionOrder order, String message) {
+        order.setOrderStatus(OrderStatus.RETRY_AVAILABLE);
+        order.setFailureReason(message);
+        if (transactionTemplate == null) {
+            transactionOrderRepository.save(order);
+            return;
+        }
+        try {
+            transactionTemplate.executeWithoutResult(status -> transactionOrderRepository.save(order));
+        } catch (RuntimeException persistEx) {
+            logger.warn("order_deferred_persist_failed order_id='{}' reason='{}'",
+                    order.getId(), persistEx.getMessage());
+        }
     }
 
     @Transactional

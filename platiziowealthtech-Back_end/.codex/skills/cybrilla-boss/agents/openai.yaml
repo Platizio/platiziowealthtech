@@ -1,0 +1,4 @@
+interface:
+  display_name: "Cybrilla Boss"
+  short_description: "Expert for Cybrilla backend/frontend integration"
+  default_prompt: "Use $cybrilla-boss to design and implement Cybrilla integration with backend-only provider calls, dual 30-minute token audiences (POA + Finprim), persisted request copies, and resilient webhook/polling flows."

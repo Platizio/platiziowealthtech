@@ -46,7 +46,14 @@ public class LoginRateLimitFilter extends OncePerRequestFilter {
 
     /** Only these exact POST paths are throttled. Uses /api/v1 (the real prefix). */
     private static final Set<String> RATE_LIMITED_PATHS =
-            Set.of("/api/v1/auth/login", "/api/v1/auth/signup");
+            Set.of(
+                    "/api/v1/auth/login",
+                    "/api/v1/auth/signup",
+                    // Throttle OTP issuance so an attacker can't email-bomb an
+                    // address by rotating accounts (per-email cooldown already
+                    // caps repeats for a single inbox). Verify is bounded by the
+                    // per-code attempt counter in OtpService.
+                    "/api/v1/auth/otp/request");
 
     private static final int CAPACITY = 5;
     private static final int REFILL_TOKENS = 5;

@@ -1,14 +1,19 @@
 package com.platizio.wealthtech.integration.auth;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Base64;
 import java.util.HexFormat;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
@@ -26,11 +31,13 @@ public class ExternalBearerTokenService {
 
     private static final Logger logger = LoggerFactory.getLogger(ExternalBearerTokenService.class);
     private static final long DEFAULT_EXPIRES_IN_SECONDS = 1800;
+    private static final JwtTimeClaims NO_JWT_TIME_CLAIMS = new JwtTimeClaims(Optional.empty(), Optional.empty());
 
     private final CybrillaPreVerificationProperties cybrillaPreVerificationProperties;
     private final FinprimTenantProperties finprimTenantProperties;
     private final ExternalAuthTokenCacheStore tokenCacheStore;
     private final RestClient authClient;
+    private final ObjectMapper objectMapper = new ObjectMapper();
     private final Clock clock;
     @Value("${external-auth.debug.log-raw-tokens:false}")
     private boolean logRawTokens;
@@ -88,6 +95,20 @@ public class ExternalBearerTokenService {
         tokenCacheStore.remove(TokenAudience.FINPRIM_TENANT.cacheKey());
     }
 
+    public boolean refreshCybrillaPreVerificationTokenIfCachedAndDue() {
+        return refreshTokenIfCachedAndDue(
+                TokenAudience.CYBRILLA_PRE_VERIFICATION,
+                cybrillaPreVerificationProperties.credentials()
+        );
+    }
+
+    public boolean refreshFinprimTenantTokenIfCachedAndDue() {
+        return refreshTokenIfCachedAndDue(
+                TokenAudience.FINPRIM_TENANT,
+                finprimTenantProperties.credentials()
+        );
+    }
+
     private String getAccessToken(TokenAudience audience, OAuthClientCredentials credentials) {
         CachedBearerToken cachedToken = tokenCache.get(audience);
         if (cachedToken != null && cachedToken.isUsable(clock)) {
@@ -115,18 +136,63 @@ public class ExternalBearerTokenService {
                 );
             }
 
-            CachedBearerToken freshToken = fetchToken(audience, credentials);
-            tokenCache.put(audience, freshToken);
-            tokenCacheStore.save(audience.cacheKey(), freshToken.toStoredToken());
-            logTokenState(audience, freshToken, "refreshed");
-            return freshToken.value();
+            return fetchAndCacheLatestToken(audience, credentials).value();
+        }
+    }
+
+    private boolean refreshTokenIfCachedAndDue(TokenAudience audience, OAuthClientCredentials credentials) {
+        synchronized (refreshLocks.get(audience)) {
+            CachedBearerToken cachedToken = tokenCache.get(audience);
+            if (cachedToken != null && cachedToken.isUsable(clock)) {
+                logTokenState(audience, cachedToken, "cached");
+                return false;
+            }
+
+            CachedBearerToken storedToken = loadStoredToken(audience);
+            if (storedToken == null && cachedToken == null) {
+                logger.info(
+                        "external_auth_auto_refresh status='skipped_no_cached_token' provider='{}'",
+                        audience.label()
+                );
+                return false;
+            }
+            if (storedToken != null && storedToken.isUsable(clock)) {
+                tokenCache.put(audience, storedToken);
+                logTokenState(audience, storedToken, "cached_after_restart");
+                return false;
+            }
+
+            fetchAndCacheLatestToken(audience, credentials);
+            return true;
         }
     }
 
     private CachedBearerToken loadStoredToken(TokenAudience audience) {
         return tokenCacheStore.load(audience.cacheKey())
-                .map(token -> new CachedBearerToken(token.value(), token.refreshAt(), token.expiresAt()))
+                .map(token -> new CachedBearerToken(
+                        token.value(),
+                        jwtTimeClaims(token.value()).issuedAt().orElse(Instant.EPOCH),
+                        token.refreshAt(),
+                        token.expiresAt()
+                ))
                 .orElse(null);
+    }
+
+    private CachedBearerToken fetchAndCacheLatestToken(TokenAudience audience, OAuthClientCredentials credentials) {
+        CachedBearerToken freshToken = fetchToken(audience, credentials);
+        CachedBearerToken storedAfterFetch = loadStoredToken(audience);
+        if (storedAfterFetch != null
+                && storedAfterFetch.isUsable(clock)
+                && storedAfterFetch.isIssuedAfter(freshToken)) {
+            tokenCache.put(audience, storedAfterFetch);
+            logTokenState(audience, storedAfterFetch, "cached_newer_token");
+            return storedAfterFetch;
+        }
+
+        tokenCache.put(audience, freshToken);
+        tokenCacheStore.save(audience.cacheKey(), freshToken.toStoredToken());
+        logTokenState(audience, freshToken, "refreshed");
+        return freshToken;
     }
 
     private CachedBearerToken fetchToken(TokenAudience audience, OAuthClientCredentials credentials) {
@@ -170,27 +236,51 @@ public class ExternalBearerTokenService {
             );
         }
 
-        Instant issuedAt = Instant.now(clock);
+        Instant receivedAt = Instant.now(clock);
+        JwtTimeClaims jwtTimeClaims = jwtTimeClaims(response.accessToken());
+        Instant issuedAt = jwtTimeClaims.issuedAt().orElse(receivedAt);
         long expiresInSeconds = response.expiresIn() != null && response.expiresIn() > 0
                 ? response.expiresIn()
                 : DEFAULT_EXPIRES_IN_SECONDS;
-        Instant expiresAt = issuedAt.plusSeconds(expiresInSeconds);
-        Instant refreshAt = calculateRefreshAt(issuedAt, expiresAt, credentials.safeRefreshBuffer());
+        Instant responseExpiresAt = receivedAt.plusSeconds(expiresInSeconds);
+        Instant expiresAt = jwtTimeClaims.expiresAt()
+                .filter(expiry -> expiry.isAfter(receivedAt))
+                .orElse(responseExpiresAt);
+        if (response.expiresIn() != null && response.expiresIn() > 0 && responseExpiresAt.isBefore(expiresAt)) {
+            expiresAt = responseExpiresAt;
+        }
+        if (!expiresAt.isAfter(receivedAt)) {
+            throw new ExternalApiAuthenticationException(
+                    "Authentication response from " + audience.label() + " included an already-expired access token"
+            );
+        }
+        Instant refreshAt = calculateRefreshAt(receivedAt, expiresAt, credentials.safeRefreshBuffer());
 
-        return new CachedBearerToken(response.accessToken(), refreshAt, expiresAt);
+        return new CachedBearerToken(response.accessToken(), issuedAt, refreshAt, expiresAt);
     }
 
     private void logTokenState(TokenAudience audience, CachedBearerToken token, String source) {
         Instant now = Instant.now(clock);
         String visibleToken = logRawTokens ? token.value() : token.fingerprint();
-        logger.info(
-                "external_auth provider='{}' status='{}' token='{}' new_token_in='{} mins' expires_in='{} mins'",
+        String message = "external_auth provider='{}' status='{}' token='{}' new_token_in='{} mins' expires_in='{} mins'";
+        Object[] args = {
                 audience.label(),
                 source,
                 visibleToken,
                 minutesUntil(now, token.refreshAt()),
                 minutesUntil(now, token.expiresAt())
-        );
+        };
+        if (isOAuthRefreshLogSource(source)) {
+            logger.info(message, args);
+        } else if (logger.isDebugEnabled()) {
+            logger.debug(message, args);
+        }
+    }
+
+    private static boolean isOAuthRefreshLogSource(String source) {
+        return "refreshed".equals(source)
+                || "cached_newer_token".equals(source)
+                || "cached_after_restart".equals(source);
     }
 
     private long minutesUntil(Instant now, Instant instant) {
@@ -222,6 +312,41 @@ public class ExternalBearerTokenService {
         return issuedAt.plusSeconds(halfLifeSeconds);
     }
 
+    private JwtTimeClaims jwtTimeClaims(String token) {
+        if (!StringUtils.hasText(token)) {
+            return NO_JWT_TIME_CLAIMS;
+        }
+        String[] segments = token.split("\\.");
+        if (segments.length < 2) {
+            return NO_JWT_TIME_CLAIMS;
+        }
+        try {
+            byte[] payloadBytes = Base64.getUrlDecoder().decode(padBase64Url(segments[1]));
+            JsonNode payload = objectMapper.readTree(payloadBytes);
+            return new JwtTimeClaims(epochSecondClaim(payload, "iat"), epochSecondClaim(payload, "exp"));
+        } catch (IllegalArgumentException | IOException ex) {
+            logger.debug("external_auth jwt timing claims could not be decoded: {}", ex.getMessage());
+            return NO_JWT_TIME_CLAIMS;
+        }
+    }
+
+    private Optional<Instant> epochSecondClaim(JsonNode payload, String claimName) {
+        JsonNode claim = payload == null ? null : payload.get(claimName);
+        if (claim == null || claim.isNull() || !claim.canConvertToLong()) {
+            return Optional.empty();
+        }
+        long epochSeconds = claim.asLong();
+        if (epochSeconds <= 0) {
+            return Optional.empty();
+        }
+        return Optional.of(Instant.ofEpochSecond(epochSeconds));
+    }
+
+    private String padBase64Url(String value) {
+        int padding = (4 - (value.length() % 4)) % 4;
+        return padding == 0 ? value : value + "=".repeat(padding);
+    }
+
     private enum TokenAudience {
         CYBRILLA_PRE_VERIFICATION("Cybrilla pre-verification"),
         FINPRIM_TENANT("Fintech Primitives tenant");
@@ -241,9 +366,16 @@ public class ExternalBearerTokenService {
         }
     }
 
-    private record CachedBearerToken(String value, Instant refreshAt, Instant expiresAt) {
+    private record JwtTimeClaims(Optional<Instant> issuedAt, Optional<Instant> expiresAt) {
+    }
+
+    private record CachedBearerToken(String value, Instant issuedAt, Instant refreshAt, Instant expiresAt) {
         boolean isUsable(Clock clock) {
             return Instant.now(clock).isBefore(refreshAt);
+        }
+
+        boolean isIssuedAfter(CachedBearerToken other) {
+            return issuedAt.isAfter(other.issuedAt());
         }
 
         String fingerprint() {
