@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from 'recharts';
 import { DollarSign, BarChart2, TrendingUp, Users } from 'lucide-react';
 import { apiFetch } from '../config/api';
+import { getPageContent } from '../utils/pagination';
 
 function fmt(n: number) {
   if (n >= 10_000_000) return `₹${(n / 10_000_000).toFixed(2)}Cr`;
@@ -25,7 +26,7 @@ export default function Portfolio({ userData }: { userData?: any }) {
     Promise.all([
       apiFetch(`/orders/by-distributor/${userData.id}`, { headers }).then(r => r.ok ? r.json() : []),
       apiFetch(`/investors/by-distributor/${userData.id}`, { headers }).then(r => r.ok ? r.json() : []),
-      apiFetch('/products/schemes', { headers }).then(r => r.ok ? r.json() : []),
+      apiFetch('/products/schemes', { headers }).then(async r => r.ok ? getPageContent(await r.json()) : []),
     ])
       .then(([ord, inv, sch]) => {
         setOrders(Array.isArray(ord) ? ord : []);

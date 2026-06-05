@@ -12,6 +12,7 @@ import {
   getPreVerificationRows,
   normalizeMobile,
   normalizePan,
+  parseStoredPreVerification,
   preVerificationStatusClasses,
   validateInvestorIdentityForKyc,
 } from '../utils/kycPreVerification';
@@ -58,6 +59,9 @@ interface Props {
     email?: string;
     role?: string;
   } | null;
+  resumeInvestor?: any | null;
+  resumeInvestorId?: string | null;
+  resumeStep?: number | string | null;
   onComplete: () => void;
   onBack: () => void;
 }
@@ -86,6 +90,72 @@ const ALLOWED_DOCUMENT_EXTENSIONS = new Set(['pdf', 'jpg', 'jpeg', 'png']);
 const IFSC_REGEX = /^[A-Z]{4}0[A-Z0-9]{6}$/;
 const ACCOUNT_NUMBER_REGEX = /^\d{9,18}$/;
 
+const normalizeStatus = (value?: string) => String(value || '').trim().toUpperCase();
+
+const splitFullName = (value?: string) => {
+  const parts = String(value || '').trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return { firstName: '', lastName: '' };
+  return {
+    firstName: parts[0],
+    lastName: parts.slice(1).join(' '),
+  };
+};
+
+const noteValue = (notes: string | undefined, key: string) => {
+  const entry = String(notes || '')
+    .split(';')
+    .map(item => item.trim())
+    .find(item => item.toLowerCase().startsWith(`${key.toLowerCase()}=`));
+  return entry ? entry.slice(entry.indexOf('=') + 1).trim() : '';
+};
+
+const clampResumeStep = (value: number | string | null | undefined) => {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? Math.min(Math.max(Math.round(numeric), 1), STEPS.length) : null;
+};
+
+const deriveResumeStep = (investor: any, requestedStep?: number | string | null) => {
+  const explicitStep = clampResumeStep(requestedStep);
+  if (explicitStep) return explicitStep;
+
+  const kycStatus = normalizeStatus(investor?.kycStatus);
+  const bankStatus = normalizeStatus(investor?.bankVerificationStatus);
+  if (kycStatus !== 'COMPLETED' && kycStatus !== 'VERIFIED') return 3;
+  if (!bankStatus || ['NOT_CAPTURED', 'VERIFICATION_PENDING', 'PENDING', 'FAILED'].includes(bankStatus)) return 5;
+  return 6;
+};
+
+const identitySnapshot = (identity: {
+  firstName?: string;
+  lastName?: string;
+  pan?: string;
+  dob?: string;
+  mobile?: string;
+  email?: string;
+  relationshipType?: string;
+  guardianPan?: string;
+}) => {
+  const fullName = `${identity.firstName || ''} ${identity.lastName || ''}`.replace(/\s+/g, ' ').trim();
+  return JSON.stringify({
+    fullName: fullName.toUpperCase(),
+    pan: normalizePan(identity.pan || ''),
+    dob: identity.dob || '',
+    mobile: normalizeMobile(identity.mobile || ''),
+    email: String(identity.email || '').trim().toLowerCase(),
+    relationshipType: identity.relationshipType || 'SELF',
+    guardianPan: normalizePan(identity.guardianPan || ''),
+  });
+};
+
+const kycPhaseFromInvestor = (investor: any, fallback: 'idle' | 'checking' | 'accepted' | 'verified' | 'failed' | 'retry' | 'pending' = 'idle') => {
+  const status = normalizeStatus(investor?.kycStatus);
+  if (status === 'COMPLETED' || status === 'VERIFIED') return 'verified';
+  if (status === 'IN_PROGRESS' || status === 'PENDING') return 'pending';
+  if (status === 'FAILED' || status === 'REJECTED') return 'failed';
+  if (status === 'RETRY_REQUIRED') return 'retry';
+  return fallback;
+};
+
 const validateDocumentFile = (file: File) => {
   const extension = file.name.split('.').pop()?.toLowerCase() || '';
   if (!ALLOWED_DOCUMENT_TYPES.has(file.type) && !ALLOWED_DOCUMENT_EXTENSIONS.has(extension)) {
@@ -98,28 +168,34 @@ const validateDocumentFile = (file: File) => {
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════
-export default function InvestorOnboarding({ prospect, userData, onComplete, onBack }: Props) {
-  const [step, setStep] = useState(1);
+export default function InvestorOnboarding({ prospect, userData, resumeInvestor, resumeInvestorId, resumeStep, onComplete, onBack }: Props) {
+  const isResumeMode = Boolean(resumeInvestor?.id || resumeInvestorId);
+  const [step, setStep] = useState(() => clampResumeStep(resumeStep) || 1);
   const [submitted, setSubmitted] = useState(false);
   const [externalSyncPending, setExternalSyncPending] = useState(false);
   const [externalSyncMessage, setExternalSyncMessage] = useState('');
   const [showExternalSyncNotice, setShowExternalSyncNotice] = useState(false);
+  const [bankVerificationResult, setBankVerificationResult] = useState<any | null>(null);
+  const [bankVerificationMessage, setBankVerificationMessage] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState('');
+  const [resumeLoading, setResumeLoading] = useState(Boolean(resumeInvestorId && !resumeInvestor?.id));
+  const [resumeError, setResumeError] = useState('');
   const [serverErrors, setServerErrors] = useState<Record<string, string>>({});
   const [refNum] = useState(() => 'APX' + Date.now().toString().slice(-8));
 
   // ── Step 1 — Basic Identity ─────────────────────────────────────────────────
+  const initialResumeName = splitFullName(resumeInvestor?.fullName || resumeInvestor?.name);
   const [s1, setS1] = useState({
-    firstName: prospect?.firstName || '',
-    lastName: prospect?.lastName || '',
-    pan: prospect?.pan || '',
-    dob: prospect?.dob || '',
-    mobile: prospect?.mobile || '',
-    email: prospect?.email || '',
-    relationshipType: 'SELF',
-    householdName: '',
-    guardianPan: '',
+    firstName: initialResumeName.firstName || prospect?.firstName || '',
+    lastName: initialResumeName.lastName || prospect?.lastName || '',
+    pan: resumeInvestor?.pan || prospect?.pan || '',
+    dob: resumeInvestor?.dateOfBirth || resumeInvestor?.dob || prospect?.dob || '',
+    mobile: resumeInvestor?.mobileNumber || resumeInvestor?.mobile || prospect?.mobile || '',
+    email: resumeInvestor?.email || prospect?.email || '',
+    relationshipType: resumeInvestor?.relationshipType || 'SELF',
+    householdName: resumeInvestor?.householdName || '',
+    guardianPan: resumeInvestor?.guardianPan || '',
   });
 
   // ── Step 2 — Consent ────────────────────────────────────────────────────────
@@ -142,18 +218,29 @@ export default function InvestorOnboarding({ prospect, userData, onComplete, onB
   const [creatingKycRequest, setCreatingKycRequest] = useState(false);
 
   // ── Step 4 — Personal ───────────────────────────────────────────────────────
-  const [s4, setS4] = useState({ gender: '', occupation: '', income: '', contactOwner: 'Self' });
+  const [s4, setS4] = useState({
+    gender: noteValue(resumeInvestor?.onboardingNotes, 'gender'),
+    occupation: noteValue(resumeInvestor?.onboardingNotes, 'occupation'),
+    income: noteValue(resumeInvestor?.onboardingNotes, 'income'),
+    contactOwner: noteValue(resumeInvestor?.onboardingNotes, 'contact_owner') || 'Self',
+  });
   const [showNominee, setShowNominee] = useState(false);
   const [nominee, setNominee] = useState({ name: '', relation: '' });
 
   // ── Step 5 — Bank ────────────────────────────────────────────────────────────
   const [s5, setS5] = useState({ accNumber: '', ifsc: '', accType: 'Savings', primary: true });
   const [bankName, setBankName] = useState('');
+  const [existingBanks, setExistingBanks] = useState<any[]>([]);
+  const [bankAccountsLoading, setBankAccountsLoading] = useState(false);
+  const [bankEditMode, setBankEditMode] = useState(false);
 
   // ── Step 6 — FATCA ───────────────────────────────────────────────────────────
   const [s6, setS6] = useState({
-    taxResidency: 'India', taxCountry: '', incomeSlab: '',
-    politicalExp: 'No', declared: false,
+    taxResidency: noteValue(resumeInvestor?.onboardingNotes, 'tax_residency') || 'India',
+    taxCountry: '',
+    incomeSlab: '',
+    politicalExp: noteValue(resumeInvestor?.onboardingNotes, 'pep') || 'No',
+    declared: false,
   });
 
   // ── Step 7 — Documents ───────────────────────────────────────────────────────
@@ -177,6 +264,97 @@ export default function InvestorOnboarding({ prospect, userData, onComplete, onB
     guardianPan: normalizePan(s1.guardianPan),
   });
   const kycDecision = getPreVerificationDecision(kycPreVerification);
+  const currentKycStatus = normalizeStatus(draftInvestor?.kycStatus || resumeInvestor?.kycStatus);
+  const isExistingKycVerified = currentKycStatus === 'COMPLETED' || currentKycStatus === 'VERIFIED';
+  const isKycFailed =
+    kycPhase === 'failed'
+    || kycPhase === 'retry'
+    || kycDecision.state === 'failed'
+    || kycDecision.state === 'retry'
+    || ['FAILED', 'REJECTED', 'RETRY_REQUIRED'].includes(currentKycStatus);
+
+  // Once an investor's KYC is verified (persisted status), identity/consent/KYC
+  // steps must stay locked so the verified PAN/name/DOB cannot be altered. The
+  // earliest reachable step is the first post-KYC stage (Personal = step 4).
+  const kycLocked = isExistingKycVerified;
+  const minStep = kycLocked ? 4 : 1;
+
+  // Consent is a one-time gate. After OTP (or when resuming past step 2), going
+  // forward from Basic Info jumps straight to KYC — never back through Consent.
+  const [consentCompleted, setConsentCompleted] = useState(() => {
+    const explicit = clampResumeStep(resumeStep);
+    if (explicit != null && explicit >= 3) return true;
+    if (resumeInvestor?.id) {
+      const kyc = normalizeStatus(resumeInvestor.kycStatus);
+      return kyc !== 'NOT_STARTED' || Boolean(resumeInvestor.externalKycPayloadJson);
+    }
+    return false;
+  });
+  const [editingForKycRetry, setEditingForKycRetry] = useState(false);
+
+  // Verified bank detection for the read-only bank summary (step 5).
+  const bankIsVerified = (bank: any) => {
+    const status = normalizeStatus(bank?.verificationStatus || bank?.cybrillaBankVerificationStatus);
+    return status === 'VERIFIED' || status === 'COMPLETED';
+  };
+  const verifiedBank = existingBanks.find(bankIsVerified) || null;
+  const showBankReadOnly = Boolean(verifiedBank) && !bankEditMode;
+
+  const applyResumeInvestorToForm = React.useCallback((investor: any) => {
+    if (!investor?.id) return;
+    const name = splitFullName(investor.fullName || investor.name);
+    const external = parseStoredPreVerification(investor.externalKycPayloadJson);
+    const status = normalizeStatus(investor.kycStatus);
+    const decision = getPreVerificationDecision(external);
+
+    setS1({
+      firstName: name.firstName,
+      lastName: name.lastName,
+      pan: investor.pan || '',
+      dob: investor.dateOfBirth || investor.dob || '',
+      mobile: investor.mobileNumber || investor.mobile || '',
+      email: investor.email || '',
+      relationshipType: investor.relationshipType || 'SELF',
+      householdName: investor.householdName || '',
+      guardianPan: investor.guardianPan || '',
+    });
+    setS4({
+      gender: noteValue(investor.onboardingNotes, 'gender'),
+      occupation: noteValue(investor.onboardingNotes, 'occupation'),
+      income: noteValue(investor.onboardingNotes, 'income'),
+      contactOwner: noteValue(investor.onboardingNotes, 'contact_owner') || 'Self',
+    });
+    setS6({
+      taxResidency: noteValue(investor.onboardingNotes, 'tax_residency') || 'India',
+      taxCountry: '',
+      incomeSlab: '',
+      politicalExp: noteValue(investor.onboardingNotes, 'pep') || 'No',
+      declared: false,
+    });
+    setDraftInvestor(investor);
+    setDraftIdentityFingerprint('');
+    setKycPreVerification(external);
+    setKycPhase(
+      status === 'COMPLETED' || status === 'VERIFIED'
+        ? 'verified'
+        : status === 'IN_PROGRESS' || status === 'PENDING'
+          ? 'pending'
+          : status === 'FAILED' || status === 'RETRY_REQUIRED' || status === 'REJECTED'
+            ? 'retry'
+            : decision.state,
+    );
+    setKycActionError('');
+    setKycActionMessage(
+      status === 'COMPLETED' || status === 'VERIFIED'
+        ? 'KYC is already verified. Continue with the remaining onboarding stages.'
+        : decision.message,
+    );
+    if (status !== 'NOT_STARTED' || external) {
+      setConsentCompleted(true);
+    }
+    setEditingForKycRetry(false);
+    setStep(deriveResumeStep(investor, resumeStep));
+  }, [resumeStep]);
 
   const buildInvestorPayload = () => ({
     distributorId,
@@ -212,6 +390,39 @@ export default function InvestorOnboarding({ prospect, userData, onComplete, onB
 
   // ── Effects ─────────────────────────────────────────────────────────────────
 
+  useEffect(() => {
+    if (!resumeInvestor?.id) return;
+    applyResumeInvestorToForm(resumeInvestor);
+    setResumeLoading(false);
+    setResumeError('');
+  }, [resumeInvestor, applyResumeInvestorToForm]);
+
+  useEffect(() => {
+    if (!resumeInvestorId || resumeInvestor?.id) return;
+    let cancelled = false;
+
+    const loadInvestorForResume = async () => {
+      setResumeLoading(true);
+      setResumeError('');
+      try {
+        const response = await apiFetch(`/investors/${resumeInvestorId}`);
+        const data = await response.json().catch(() => null);
+        if (!response.ok) {
+          throw new Error(data?.message || `Investor resume failed with HTTP ${response.status}.`);
+        }
+        if (!cancelled) applyResumeInvestorToForm(data);
+      } catch (err) {
+        console.error('Investor resume load failed:', err);
+        if (!cancelled) setResumeError(err instanceof Error ? err.message : 'Investor could not be loaded for onboarding.');
+      } finally {
+        if (!cancelled) setResumeLoading(false);
+      }
+    };
+
+    loadInvestorForResume();
+    return () => { cancelled = true; };
+  }, [resumeInvestorId, resumeInvestor?.id, applyResumeInvestorToForm]);
+
   // Countdown tick
   useEffect(() => {
     if (!countdown) return;
@@ -225,16 +436,53 @@ export default function InvestorOnboarding({ prospect, userData, onComplete, onB
     setBankName(prefix.length === 4 ? (IFSC_MAP[prefix] ?? 'Unknown Bank') : '');
   }, [s5.ifsc]);
 
+  // Load existing bank accounts so a verified bank can be shown read-only.
+  const investorIdForBank = draftInvestor?.id || resumeInvestor?.id || resumeInvestorId || null;
+  useEffect(() => {
+    if (!investorIdForBank) return;
+    let cancelled = false;
+    setBankAccountsLoading(true);
+    apiFetch(`/investors/${investorIdForBank}/bank-accounts`)
+      .then(res => (res.ok ? res.json() : null))
+      .then(data => {
+        if (cancelled) return;
+        setExistingBanks(Array.isArray(data) ? data : []);
+      })
+      .catch(err => {
+        console.error('Failed to load investor bank accounts for onboarding', err);
+        if (!cancelled) setExistingBanks([]);
+      })
+      .finally(() => {
+        if (!cancelled) setBankAccountsLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [investorIdForBank]);
+
+  const startBankEdit = () => {
+    if (verifiedBank) {
+      const rawAccount = String(verifiedBank.accountNumber || '');
+      setS5({
+        accNumber: /^\d{9,18}$/.test(rawAccount) ? rawAccount : '',
+        ifsc: verifiedBank.ifscCode || '',
+        accType: verifiedBank.accountType || 'Savings',
+        primary: true,
+      });
+    }
+    setBankEditMode(true);
+  };
+
   // Reset the POA pre-verification result if identity fields change.
   useEffect(() => {
     if (!draftIdentityFingerprint || draftIdentityFingerprint === identityFingerprint) return;
-    setDraftInvestor(null);
+    if (!isResumeMode) {
+      setDraftInvestor(null);
+    }
     setDraftIdentityFingerprint('');
     setKycPreVerification(null);
     setKycPhase('idle');
     setKycActionError('');
     setKycActionMessage('Identity details changed. Run POA pre-verification again.');
-  }, [draftIdentityFingerprint, identityFingerprint]);
+  }, [draftIdentityFingerprint, identityFingerprint, isResumeMode]);
 
   // ── OTP helpers ──────────────────────────────────────────────────────────────
   const sendOtp = () => {
@@ -283,9 +531,9 @@ export default function InvestorOnboarding({ prospect, userData, onComplete, onB
         guardianPan: s1.guardianPan,
       })).length === 0;
       case 2: return otpCorrect;
-      case 3: return kycDecision.canProceed;
+      case 3: return kycDecision.canProceed || isExistingKycVerified;
       case 4: return !!(s4.gender && s4.occupation && s4.income);
-      case 5: return ACCOUNT_NUMBER_REGEX.test(s5.accNumber) && IFSC_REGEX.test(s5.ifsc);
+      case 5: return showBankReadOnly || (ACCOUNT_NUMBER_REGEX.test(s5.accNumber) && IFSC_REGEX.test(s5.ifsc));
       case 6: return !!(s6.incomeSlab && s6.declared);
       case 7: return !!(docs.pan && docs.address && docs.signature);
       default: return true;
@@ -305,6 +553,20 @@ export default function InvestorOnboarding({ prospect, userData, onComplete, onB
   const maskAccountNumber = (value: string) => {
     if (!value) return '';
     return value.length <= 4 ? '****' : `${'*'.repeat(Math.max(value.length - 4, 4))}${value.slice(-4)}`;
+  };
+
+  const isKycComplete = (investor: any) => {
+    const status = normalizeStatus(investor?.kycStatus);
+    return status === 'COMPLETED' || status === 'VERIFIED';
+  };
+
+  const bankVerificationStatusText = (bank: any) => {
+    const status = normalizeStatus(bank?.verificationStatus || bank?.cybrillaBankVerificationStatus);
+    if (status === 'VERIFIED' || status === 'COMPLETED') return 'Bank account verified by Cybrilla.';
+    if (status === 'VERIFICATION_FAILED' || status === 'FAILED') return 'Bank verification failed. Collect a corrected bank account or retry.';
+    if (bank?.cybrillaBankVerificationId) return 'Cybrilla bank verification is in progress.';
+    if (bank?.externalSyncPending) return bank.externalSyncMessage || 'Bank details were saved locally and will be retried.';
+    return 'Bank details saved. Verification will start after KYC is completed.';
   };
 
   const handleDocumentSelect = (key: keyof typeof docs, file?: File) => {
@@ -344,6 +606,31 @@ export default function InvestorOnboarding({ prospect, userData, onComplete, onB
     setShowExternalSyncNotice(true);
   };
 
+  const clearFieldWarnings = (...fields: string[]) => {
+    const keys = new Set(fields);
+    setServerErrors(prev => {
+      const next = { ...prev };
+      keys.forEach(key => delete next[key]);
+      return next;
+    });
+    setKycValidationErrors(prev => {
+      const next = { ...prev };
+      keys.forEach(key => delete next[key]);
+      return next;
+    });
+    setKycActionError('');
+  };
+
+  const setIdentityField = (field: keyof typeof s1, value: string, warningFields?: string[]) => {
+    setS1(prev => ({ ...prev, [field]: value }));
+    clearFieldWarnings(...(warningFields || [String(field)]));
+  };
+
+  const setBankField = (field: keyof typeof s5, value: string | boolean, warningFields?: string[]) => {
+    setS5(prev => ({ ...prev, [field]: value }));
+    clearFieldWarnings(...(warningFields || [String(field)]));
+  };
+
   const validateIdentityBeforePreVerification = () => {
     const errors = validateInvestorIdentityForKyc({
       firstName: s1.firstName,
@@ -376,6 +663,30 @@ export default function InvestorOnboarding({ prospect, userData, onComplete, onB
   const ensureInvestorDraftForKyc = async () => {
     if (draftInvestor?.id && draftIdentityFingerprint === identityFingerprint) {
       return draftInvestor;
+    }
+    if (draftInvestor?.id && isResumeMode) {
+      const updatePayload = buildInvestorUpdatePayload();
+      const response = await apiFetch(`/investors/${draftInvestor.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updatePayload),
+      });
+      const result = await readJsonSafely(response);
+      if (!response.ok) {
+        if (response.status === 400) {
+          const validation = parseServerValidation(result);
+          setServerErrors(mapServerErrorsToState(validation.fieldErrors, {
+            fullName: 'firstName',
+            mobileNumber: 'mobile',
+            dateOfBirth: 'dob',
+          }));
+          throw new Error(buildValidationSummary(validation));
+        }
+        throw new Error(typeof result === 'string' ? result : result?.message || 'Investor update failed');
+      }
+      setDraftInvestor(result);
+      setDraftIdentityFingerprint(identityFingerprint);
+      return result;
     }
     if (!distributorId) {
       throw new Error('Distributor session was not found. Please log in again and retry.');
@@ -577,92 +888,64 @@ export default function InvestorOnboarding({ prospect, userData, onComplete, onB
 
   const runInitialKycApis = async (createdInvestor: any) => {
     if (!createdInvestor?.id) return createdInvestor;
-    if (createdInvestor.externalKycRequestId) {
-      console.log('step_1a_kyc_check_skipped=', 'Fresh KYC request was already created during onboarding.');
-      return createdInvestor;
-    }
-    if (kycDecision.canProceed && kycPreVerification?.id) {
-      try {
-        console.log('step_1a_attach_pre_verification_request=', {
-          endpoint: `GET /api/v1/investors/${createdInvestor.id}/kyc-checks/${kycPreVerification.id}`,
-        });
-        const attachResponse = await apiFetch(`/investors/${createdInvestor.id}/kyc-checks/${kycPreVerification.id}`);
-        const attachResult = await readJsonSafely(attachResponse);
-        console.log('step_1a_attach_pre_verification_response=', {
-          status: attachResponse.status,
-          ok: attachResponse.ok,
-          body: attachResult,
-        });
-        if (!attachResponse.ok) {
-          throw new Error(typeof attachResult === 'string' ? attachResult : attachResult?.message || 'Unable to attach POA pre-verification');
-        }
-        return attachResult?.investor || createdInvestor;
-      } catch (err) {
-        const message = err instanceof Error ? err.message : 'Unable to attach POA pre-verification';
-        console.warn('step_1a_attach_pre_verification_external_sync=', message);
-        appendExternalSyncWarning(`Unable to save POA pre-verification on the investor record: ${message}`);
-        return createdInvestor;
-      }
-    }
-    let latestInvestor = createdInvestor;
-
     try {
-      console.log('step_1a_kyc_check_request=', {
-        endpoint: `POST /api/v1/investors/${createdInvestor.id}/kyc-checks`,
+      console.log('step_1a_apply_kyc_request=', {
+        endpoint: `POST /api/v1/investors/${createdInvestor.id}/kyc/apply`,
         pan: createdInvestor.pan,
       });
-      const kycCheckResponse = await apiFetch(`/investors/${createdInvestor.id}/kyc-checks`, {
+      const response = await apiFetch(`/investors/${createdInvestor.id}/kyc/apply`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ dateOfBirth: createdInvestor.dateOfBirth || s1.dob || null }),
       });
-      const kycCheckResult = await readJsonSafely(kycCheckResponse);
-      console.log('step_1a_kyc_check_response=', {
-        status: kycCheckResponse.status,
-        ok: kycCheckResponse.ok,
-        body: kycCheckResult,
+      const result = await readJsonSafely(response);
+      console.log('step_1a_apply_kyc_response=', {
+        status: response.status,
+        ok: response.ok,
+        body: result,
       });
 
-      if (!kycCheckResponse.ok) {
-        throw new Error(typeof kycCheckResult === 'string' ? kycCheckResult : kycCheckResult?.message || 'KYC check failed');
+      if (!response.ok) {
+        throw new Error(typeof result === 'string' ? result : result?.message || 'KYC workflow failed');
       }
-      latestInvestor = kycCheckResult?.investor || latestInvestor;
+      return result?.investor || createdInvestor;
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Unable to complete KYC check';
-      console.warn('step_1a_kyc_check_external_sync=', message);
-      appendExternalSyncWarning(`Unable to complete KYC status check with Cybrilla/Fintech Primitives: ${message}`);
-      return latestInvestor;
+      const message = err instanceof Error ? err.message : 'Unable to apply KYC workflow';
+      console.warn('step_1a_apply_kyc_external_sync=', message);
+      appendExternalSyncWarning(`Unable to apply KYC workflow through Cybrilla/Fintech Primitives: ${message}`);
+      return createdInvestor;
     }
+  };
 
-    if (latestInvestor?.kycStatus === 'COMPLETED') {
-      return latestInvestor;
+  const refreshBankVerificationIfStarted = async (investorId: string, bank: any) => {
+    if (!investorId || !bank?.id || !bank?.cybrillaBankVerificationId) {
+      return bank;
     }
 
     try {
-      console.log('step_1a_kyc_request_create_request=', {
-        endpoint: `POST /api/v1/investors/${createdInvestor.id}/kyc-requests`,
+      console.log('step_2b_refresh_bank_verification_request=', {
+        endpoint: `PATCH /api/v1/investors/${investorId}/bank-accounts/${bank.id}/verification`,
+        localBankId: bank.id,
+        cybrillaBankVerificationId: bank.cybrillaBankVerificationId,
       });
-      const kycRequestResponse = await apiFetch(`/investors/${createdInvestor.id}/kyc-requests`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ fields: {} }),
+      const response = await apiFetch(`/investors/${investorId}/bank-accounts/${bank.id}/verification`, {
+        method: 'PATCH',
       });
-      const kycRequestResult = await readJsonSafely(kycRequestResponse);
-      console.log('step_1a_kyc_request_create_response=', {
-        status: kycRequestResponse.status,
-        ok: kycRequestResponse.ok,
-        body: kycRequestResult,
+      const result = await readJsonSafely(response);
+      console.log('step_2b_refresh_bank_verification_response=', {
+        status: response.status,
+        ok: response.ok,
+        body: result,
       });
-
-      if (!kycRequestResponse.ok) {
-        throw new Error(typeof kycRequestResult === 'string' ? kycRequestResult : kycRequestResult?.message || 'KYC request creation failed');
+      if (!response.ok) {
+        throw new Error(typeof result === 'string' ? result : result?.message || `Bank verification refresh failed with HTTP ${response.status}`);
       }
-      return kycRequestResult?.investor || latestInvestor;
+      return result || bank;
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Unable to create KYC request';
-      console.warn('step_1a_kyc_request_external_sync=', message);
-      appendExternalSyncWarning(`Unable to create digital KYC request with Cybrilla/Fintech Primitives: ${message}`);
-      return latestInvestor;
+      const message = err instanceof Error ? err.message : 'Unable to refresh bank verification';
+      console.warn('step_2b_refresh_bank_verification_error=', message);
+      appendExternalSyncWarning(`Bank verification was started but the latest Cybrilla status could not be fetched: ${message}`);
+      return bank;
     }
   };
 
@@ -688,6 +971,8 @@ export default function InvestorOnboarding({ prospect, userData, onComplete, onB
     setExternalSyncPending(false);
     setExternalSyncMessage('');
     setShowExternalSyncNotice(false);
+    setBankVerificationResult(null);
+    setBankVerificationMessage('');
     setServerErrors({});
     console.groupCollapsed('[Cybrilla Workflow] Investor onboarding submit');
     console.log('frontend_route=', '/distributor/investor-onboarding');
@@ -702,7 +987,7 @@ export default function InvestorOnboarding({ prospect, userData, onComplete, onB
 
     try {
       let investorResult: any = null;
-      const shouldReuseDraft = draftInvestor?.id && draftIdentityFingerprint === identityFingerprint;
+      const shouldReuseDraft = Boolean(draftInvestor?.id && (isResumeMode || draftIdentityFingerprint === identityFingerprint));
 
       if (shouldReuseDraft) {
         const updatePayload = buildInvestorUpdatePayload();
@@ -783,6 +1068,10 @@ export default function InvestorOnboarding({ prospect, userData, onComplete, onB
       }
 
       investorResult = await runInitialKycApis(investorResult);
+      setDraftInvestor(investorResult);
+      if (!isKycComplete(investorResult)) {
+        appendExternalSyncWarning('KYC is not complete yet. Bank verification will start automatically after Cybrilla marks KYC as completed.');
+      }
 
       console.log('step_1b_upload_documents_request=', {
         endpoint: `PUT /api/v1/investors/${investorResult.id}/documents`,
@@ -799,43 +1088,59 @@ export default function InvestorOnboarding({ prospect, userData, onComplete, onB
         }
       }
 
-      console.log('step_2_add_bank_request=', {
-        ...bankPayload,
-        accountNumber: maskAccountNumber(bankPayload.accountNumber),
-      });
-      console.log('step_2_expected_backend_work=', [
-        `POST /api/v1/investors/${investorResult.id}/bank-accounts?actorId=${distributorId}`,
-        'InvestorService saves local bank copy',
-        'Backend creates FP/Cybrilla bank account using cybrillaInvestorId',
-        'Backend stores cybrillaBankId on the local bank account',
-      ]);
+      let finalBankResult: any;
+      if (showBankReadOnly && verifiedBank) {
+        // Verified bank already on file and the user did not choose to edit it —
+        // reuse it instead of creating a duplicate bank account.
+        console.log('step_2_skip_bank_create=', 'Verified bank already on file; skipping bank creation.');
+        finalBankResult = verifiedBank;
+      } else {
+        console.log('step_2_add_bank_request=', {
+          ...bankPayload,
+          accountNumber: maskAccountNumber(bankPayload.accountNumber),
+        });
+        console.log('step_2_expected_backend_work=', [
+          `POST /api/v1/investors/${investorResult.id}/bank-accounts`,
+          'InvestorService saves local bank copy',
+          'If KYC is complete, backend creates the FP bank account using cybrillaInvestorId',
+          'Backend starts Cybrilla POA bank pre-verification and stores the verification id',
+          'If KYC is not complete, backend saves the bank locally and starts verification when KYC completes',
+        ]);
 
-      const bankResponse = await apiFetch(`/investors/${investorResult.id}/bank-accounts?actorId=${distributorId}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(bankPayload),
-      });
-      const bankResult = await readJsonSafely(bankResponse);
-      console.log('step_2_add_bank_response=', {
-        status: bankResponse.status,
-        ok: bankResponse.ok,
-        body: bankResult,
-        cybrillaBankId: bankResult?.cybrillaBankId,
-      });
+        const bankResponse = await apiFetch(`/investors/${investorResult.id}/bank-accounts`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(bankPayload),
+        });
+        const bankResult = await readJsonSafely(bankResponse);
+        console.log('step_2_add_bank_response=', {
+          status: bankResponse.status,
+          ok: bankResponse.ok,
+          body: bankResult,
+          cybrillaBankId: bankResult?.cybrillaBankId,
+        });
 
-      if (!bankResponse.ok) {
-        if (bankResponse.status === 400) {
-          const validation = parseServerValidation(bankResult);
-          setServerErrors(mapServerErrorsToState(validation.fieldErrors, {
-            accountNumber: 'accNumber',
-            ifscCode: 'ifsc',
-          }));
-          throw new Error(buildValidationSummary(validation));
+        if (!bankResponse.ok) {
+          if (bankResponse.status === 400) {
+            const validation = parseServerValidation(bankResult);
+            setServerErrors(mapServerErrorsToState(validation.fieldErrors, {
+              accountNumber: 'accNumber',
+              ifscCode: 'ifsc',
+            }));
+            throw new Error(buildValidationSummary(validation));
+          }
+          throw new Error(typeof bankResult === 'string' ? bankResult : bankResult?.message || 'Bank account creation failed');
         }
-        throw new Error(typeof bankResult === 'string' ? bankResult : bankResult?.message || 'Bank account creation failed');
+        finalBankResult = bankResult;
+        if (isKycComplete(investorResult) && bankResult?.cybrillaBankVerificationId) {
+          finalBankResult = await refreshBankVerificationIfStarted(investorResult.id, bankResult);
+        }
       }
-      if (Boolean(bankResult?.externalSyncPending) || !bankResult?.cybrillaBankId) {
-        const message = bankResult?.externalSyncMessage
+      setBankVerificationResult(finalBankResult);
+      setBankVerificationMessage(bankVerificationStatusText(finalBankResult));
+
+      if (Boolean(finalBankResult?.externalSyncPending) || (isKycComplete(investorResult) && !finalBankResult?.cybrillaBankId)) {
+        const message = finalBankResult?.externalSyncMessage
           || 'Unable to post bank data to Cybrilla/Fintech Primitives. Bank details were saved locally for retry.';
         setExternalSyncPending(true);
         setExternalSyncMessage(prev => prev ? `${prev}\n${message}` : message);
@@ -860,29 +1165,68 @@ export default function InvestorOnboarding({ prospect, userData, onComplete, onB
       submitInvestorToBackend();
       return;
     }
-    setStep(s=> s + 1);
+    if (step === 1) {
+      setEditingForKycRetry(false);
+      setStep(consentCompleted ? 3 : 2);
+      return;
+    }
+    if (step === 2) {
+      setConsentCompleted(true);
+      setStep(3);
+      return;
+    }
+    setStep(s => s + 1);
   };
 
   const goBack = () => {
-    if (step === 1) { onBack(); return; }
-    if (step === 2) { setOtpSent(false); setOtp(['', '', '', '', '', '']); setDemoOtp(''); }
+    if (step <= minStep) {
+      // Non-locked first step acts as Cancel; once KYC is locked the in-form Back
+      // is a no-op (use the top-left Back to leave onboarding entirely).
+      if (!kycLocked && step === 1) onBack();
+      return;
+    }
+    // On KYC: no back unless pre-verification failed — then edit identity only (skip Consent).
+    if (step === 3) {
+      if (!isKycFailed) return;
+      setEditingForKycRetry(true);
+      setStep(1);
+      setKycActionMessage('Update identity details if needed, then continue to run POA pre-verification again.');
+      return;
+    }
+    if (step === 2) {
+      setOtpSent(false);
+      setOtp(['', '', '', '', '', '']);
+      setDemoOtp('');
+      setStep(1);
+      return;
+    }
     setStep(s => s - 1);
   };
 
   // ═══════════════════════════════════════════════════════════════════════════
   // ── Submitted screen ──────────────────────────────────────────────────────
   if (submitted) {
+    const normalizedBankStatus = normalizeStatus(
+      bankVerificationResult?.verificationStatus || bankVerificationResult?.cybrillaBankVerificationStatus,
+    );
+    const bankVerificationDone = normalizedBankStatus === 'VERIFIED' || normalizedBankStatus === 'COMPLETED';
+    const bankVerificationFailed = normalizedBankStatus === 'VERIFICATION_FAILED' || normalizedBankStatus === 'FAILED';
+    const bankVerificationSub = bankVerificationMessage
+      || (bankVerificationResult?.cybrillaBankVerificationId
+        ? 'Cybrilla bank verification is in progress'
+        : 'Bank verification will start after KYC completes');
+    const submittedKycComplete = isKycComplete(draftInvestor);
     const statusRows = externalSyncPending
       ? [
           { label: 'Investor Saved', sub: 'Local profile created successfully', color: 'green', done: true },
-          { label: 'KYC Pending', sub: 'PAN/external verification will be retried later', color: 'amber', done: false },
-          { label: 'Bank Mandate', sub: 'Bank details saved locally for later sync', color: 'amber', done: false },
+          { label: 'KYC Status', sub: submittedKycComplete ? 'KYC completed through Cybrilla' : 'PAN/external verification will be retried later', color: submittedKycComplete ? 'green' : 'amber', done: submittedKycComplete },
+          { label: 'Bank Verification', sub: bankVerificationSub, color: bankVerificationFailed ? 'red' : 'amber', done: bankVerificationDone },
           { label: 'Compliance Review', sub: 'FATCA & PMLA check in queue', color: 'blue', done: false },
         ]
       : [
           { label: 'Identity Verified', sub: 'PAN and consent OTP captured', color: 'green', done: true },
           { label: 'KYC Processed', sub: 'POA pre-verification completed', color: 'green', done: true },
-          { label: 'Bank Mandate', sub: 'eNACH registration pending', color: 'amber', done: false },
+          { label: 'Bank Verification', sub: bankVerificationSub, color: bankVerificationDone ? 'green' : bankVerificationFailed ? 'red' : 'amber', done: bankVerificationDone },
           { label: 'Compliance Review', sub: 'FATCA & PMLA check in queue', color: 'blue', done: false },
         ];
 
@@ -903,11 +1247,15 @@ export default function InvestorOnboarding({ prospect, userData, onComplete, onB
           </motion.div>
 
           <h1 className="text-2xl font-bold text-slate-800 mb-2">
-            {externalSyncPending ? 'Investor created, KYC incomplete' : 'Application Submitted!'}
+            {externalSyncPending
+              ? submittedKycComplete ? 'Investor created, bank verification pending' : 'Investor created, KYC incomplete'
+              : 'Application Submitted!'}
           </h1>
           <p className="text-slate-500 text-sm mb-6 leading-relaxed">
             {externalSyncPending
-              ? (externalSyncMessage || `${s1.firstName} ${s1.lastName}'s profile has been saved with KYC pending. External verification will be retried once the platform is available.`)
+              ? (externalSyncMessage || (submittedKycComplete
+                ? `${s1.firstName} ${s1.lastName}'s KYC is complete. Bank verification will be retried once the platform is available.`
+                : `${s1.firstName} ${s1.lastName}'s profile has been saved with KYC pending. External verification will be retried once the platform is available.`))
               : `${s1.firstName} ${s1.lastName}'s onboarding application has been submitted and is under review.`}
           </p>
 
@@ -1002,6 +1350,17 @@ export default function InvestorOnboarding({ prospect, userData, onComplete, onB
 
   // ═══════════════════════════════════════════════════════════════════════════
   // ── Main layout ───────────────────────────────────────────────────────────
+  if (resumeLoading) {
+    return (
+      <div className="flex min-h-full items-center justify-center p-10">
+        <div className="text-center">
+          <Loader2 className="mx-auto h-8 w-8 animate-spin text-blue-600" />
+          <p className="mt-3 text-sm font-medium text-slate-600">Loading investor onboarding...</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="p-8 max-w-4xl">
 
@@ -1021,6 +1380,23 @@ export default function InvestorOnboarding({ prospect, userData, onComplete, onB
       </div>
 
       {/* ── Progress stepper ──────────────────────────────────────────────── */}
+      {isResumeMode && !resumeError && (
+        <div className="mb-6 rounded-xl border border-emerald-100 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-700">
+          Continuing saved onboarding for this investor. Changes will update the existing local and Cybrilla-linked record.
+        </div>
+      )}
+      {resumeError && (
+        <div className="mb-6 rounded-xl border border-red-100 bg-red-50 px-4 py-3 text-sm font-medium text-red-700">
+          {resumeError}
+        </div>
+      )}
+      {kycLocked && (
+        <div className="mb-6 flex items-center gap-2 rounded-xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm font-medium text-blue-700">
+          <ShieldCheck className="h-4 w-4 flex-shrink-0" />
+          KYC is verified for this investor. Identity, consent, and KYC steps are locked and can no longer be edited.
+        </div>
+      )}
+
       <div className="flex items-start mb-8 overflow-x-auto pb-2">
         {STEPS.map((s, i) => {
           const done = s.id < step;
@@ -1063,29 +1439,37 @@ export default function InvestorOnboarding({ prospect, userData, onComplete, onB
             <div>
               <h2 className="text-lg font-semibold text-slate-800 mb-1">Basic Identity</h2>
               <p className="text-sm text-slate-500 mb-6">Investor's core identification details</p>
+              {editingForKycRetry && (
+                <div className="mb-5 flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                  <AlertTriangle className="h-4 w-4 mt-0.5 flex-shrink-0" />
+                  <span>
+                    KYC pre-verification did not pass. Update PAN, name, or date of birth if needed, then continue — you will return directly to the KYC step (consent is not required again).
+                  </span>
+                </div>
+              )}
               <div className="grid grid-cols-2 gap-5">
                 <Field label="First Name" required error={serverErrors.firstName}>
-                  <input value={s1.firstName} onChange={e => setS1({ ...s1, firstName: e.target.value })} placeholder="Rahul" className={inp} />
+                  <input value={s1.firstName} onChange={e => setIdentityField('firstName', e.target.value, ['firstName', 'fullName'])} placeholder="Rahul" className={inp} />
                 </Field>
                 <Field label="Last Name" required error={serverErrors.lastName}>
-                  <input value={s1.lastName} onChange={e => setS1({ ...s1, lastName: e.target.value })} placeholder="Verma" className={inp} />
+                  <input value={s1.lastName} onChange={e => setIdentityField('lastName', e.target.value, ['lastName', 'fullName'])} placeholder="Verma" className={inp} />
                 </Field>
                 <Field label="PAN Number" required error={serverErrors.pan}>
                   <input
                     value={s1.pan}
-                    onChange={e => setS1({ ...s1, pan: e.target.value.toUpperCase() })}
+                    onChange={e => setIdentityField('pan', e.target.value.toUpperCase(), ['pan'])}
                     placeholder="ABCDE1234F"
                     maxLength={10}
                     className={inp + ' font-mono tracking-widest'}
                   />
                 </Field>
                 <Field label="Date of Birth" required error={serverErrors.dob}>
-                  <input type="date" value={s1.dob} onChange={e => setS1({ ...s1, dob: e.target.value })} className={inp} />
+                  <input type="date" value={s1.dob} onChange={e => setIdentityField('dob', e.target.value, ['dob', 'dateOfBirth'])} className={inp} />
                 </Field>
                 <Field label="Relationship Type">
                   <select
                     value={s1.relationshipType}
-                    onChange={e => setS1({ ...s1, relationshipType: e.target.value })}
+                    onChange={e => setIdentityField('relationshipType', e.target.value, ['relationshipType', 'guardianPan'])}
                     className={sel}
                   >
                     <option value="SELF">Self / Primary</option>
@@ -1097,7 +1481,7 @@ export default function InvestorOnboarding({ prospect, userData, onComplete, onB
                 <Field label="Household Name">
                   <input
                     value={s1.householdName}
-                    onChange={e => setS1({ ...s1, householdName: e.target.value })}
+                    onChange={e => setIdentityField('householdName', e.target.value, ['householdName'])}
                     placeholder="Sharma Family"
                     className={inp}
                   />
@@ -1106,7 +1490,7 @@ export default function InvestorOnboarding({ prospect, userData, onComplete, onB
                   <Field label="Guardian PAN" required error={serverErrors.guardianPan}>
                     <input
                       value={s1.guardianPan}
-                      onChange={e => setS1({ ...s1, guardianPan: e.target.value.toUpperCase() })}
+                      onChange={e => setIdentityField('guardianPan', e.target.value.toUpperCase(), ['guardianPan'])}
                       placeholder="ABCDE1234F"
                       maxLength={10}
                       className={inp + ' font-mono tracking-widest'}
@@ -1114,10 +1498,10 @@ export default function InvestorOnboarding({ prospect, userData, onComplete, onB
                   </Field>
                 )}
                 <Field label="Mobile Number" required error={serverErrors.mobile}>
-                  <input value={s1.mobile} onChange={e => setS1({ ...s1, mobile: e.target.value.replace(/\D/g, '') })} placeholder="9876543210" maxLength={13} className={inp} />
+                  <input value={s1.mobile} onChange={e => setIdentityField('mobile', e.target.value.replace(/\D/g, ''), ['mobile', 'mobileNumber'])} placeholder="9876543210" maxLength={13} className={inp} />
                 </Field>
                 <Field label="Email Address" required error={serverErrors.email}>
-                  <input type="email" value={s1.email} onChange={e => setS1({ ...s1, email: e.target.value })} placeholder="investor@email.com" className={inp} />
+                  <input type="email" value={s1.email} onChange={e => setIdentityField('email', e.target.value, ['email'])} placeholder="investor@email.com" className={inp} />
                 </Field>
               </div>
             </div>
@@ -1406,60 +1790,138 @@ export default function InvestorOnboarding({ prospect, userData, onComplete, onB
           {step === 5 && (
             <div>
               <h2 className="text-lg font-semibold text-slate-800 mb-1">Bank Details</h2>
-              <p className="text-sm text-slate-500 mb-6">Link the investor's bank account for transactions</p>
-              <div className="grid grid-cols-2 gap-5">
-                <Field label="Account Number" required error={serverErrors.accNumber}>
-                  <input
-                    value={s5.accNumber}
-                    onChange={e => setS5({ ...s5, accNumber: e.target.value.replace(/\D/g, '') })}
-                    placeholder="12345678901234"
-                    maxLength={18}
-                    className={inp + ' font-mono'}
-                  />
-                </Field>
-                <Field label="Account Type">
-                  <select value={s5.accType} onChange={e => setS5({ ...s5, accType: e.target.value })} className={sel}>
-                    {['Savings', 'Current', 'NRE', 'NRO'].map(t => <option key={t}>{t}</option>)}
-                  </select>
-                </Field>
-                <div className="col-span-2">
-                  <Field label="IFSC Code" required error={serverErrors.ifsc}>
-                    <div className="flex gap-3 items-start flex-wrap">
+              <p className="text-sm text-slate-500 mb-6">
+                {showBankReadOnly
+                  ? "Review the investor's verified bank account."
+                  : "Link the investor's bank account for transactions"}
+              </p>
+
+              {bankAccountsLoading && existingBanks.length === 0 && (
+                <div className="mb-4 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-500">
+                  Loading saved bank account...
+                </div>
+              )}
+
+              {showBankReadOnly ? (
+                <div className="rounded-2xl border border-green-200 bg-green-50/60 p-5">
+                  <div className="flex items-start gap-3">
+                    <div className="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-xl bg-green-100 text-green-700">
+                      <Building2 className="h-5 w-5" />
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <h3 className="text-sm font-bold text-slate-800">{verifiedBank?.bankName || 'Bank account'}</h3>
+                        <span className="inline-flex items-center gap-1 rounded-full bg-green-100 px-2 py-0.5 text-[10px] font-bold uppercase text-green-700">
+                          <CheckCircle2 className="h-3 w-3" /> Verified
+                        </span>
+                      </div>
+                      <p className="mt-1 text-xs text-slate-500">
+                        This bank account is verified by Cybrilla and is ready for transactions.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="mt-4 grid grid-cols-2 gap-4">
+                    <div>
+                      <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Account Number</p>
+                      <p className="mt-0.5 font-mono text-sm text-slate-800">{maskAccountNumber(String(verifiedBank?.accountNumber || ''))}</p>
+                    </div>
+                    <div>
+                      <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">IFSC</p>
+                      <p className="mt-0.5 font-mono text-sm text-slate-800">{verifiedBank?.ifscCode || '—'}</p>
+                    </div>
+                    <div>
+                      <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Account Holder</p>
+                      <p className="mt-0.5 text-sm text-slate-800">{verifiedBank?.accountHolderName || fullName}</p>
+                    </div>
+                    <div>
+                      <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Status</p>
+                      <p className="mt-0.5 text-sm font-semibold text-green-700">Verified</p>
+                    </div>
+                  </div>
+
+                  <div className="mt-5 flex flex-col gap-3 border-t border-green-200 pt-4 sm:flex-row sm:items-center sm:justify-between">
+                    <p className="text-xs text-slate-500">Need to change the bank account? Open the edit form to capture new details.</p>
+                    <button
+                      type="button"
+                      onClick={startBankEdit}
+                      className="inline-flex flex-shrink-0 items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-50"
+                    >
+                      Edit bank details
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div>
+                  {verifiedBank && bankEditMode && (
+                    <div className="mb-4 flex flex-col gap-2 rounded-xl border border-amber-100 bg-amber-50 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+                      <p className="text-xs font-medium leading-5 text-amber-800">
+                        Editing bank details. Saving replaces the current verified account and starts a new Cybrilla verification.
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => setBankEditMode(false)}
+                        className="flex-shrink-0 text-xs font-semibold text-slate-600 hover:underline"
+                      >
+                        Cancel edit
+                      </button>
+                    </div>
+                  )}
+                  <div className="grid grid-cols-2 gap-5">
+                    <Field label="Account Number" required error={serverErrors.accNumber}>
                       <input
-                        value={s5.ifsc}
-                        onChange={e => setS5({ ...s5, ifsc: e.target.value.toUpperCase() })}
-                        placeholder="HDFC0001234"
-                        maxLength={11}
-                        className={inp + ' font-mono w-44'}
+                        value={s5.accNumber}
+                        onChange={e => setBankField('accNumber', e.target.value.replace(/\D/g, ''), ['accNumber', 'accountNumber'])}
+                        placeholder="12345678901234"
+                        maxLength={18}
+                        className={inp + ' font-mono'}
                       />
-                      <AnimatePresence>
-                        {bankName && (
-                          <motion.div
-                            initial={{ opacity: 0, scale: 0.9 }}
-                            animate={{ opacity: 1, scale: 1 }}
-                            className="flex items-center gap-2 bg-green-50 border border-green-200 rounded-xl px-3.5 py-2.5"
-                          >
-                            <Building2 className="w-4 h-4 text-green-600 flex-shrink-0" />
-                            <span className="text-sm font-semibold text-green-700">{bankName}</span>
-                          </motion.div>
-                        )}
-                      </AnimatePresence>
+                    </Field>
+                    <Field label="Account Type">
+                      <select value={s5.accType} onChange={e => setBankField('accType', e.target.value, ['accType', 'accountType'])} className={sel}>
+                        {['Savings', 'Current', 'NRE', 'NRO'].map(t => <option key={t}>{t}</option>)}
+                      </select>
+                    </Field>
+                    <div className="col-span-2">
+                      <Field label="IFSC Code" required error={serverErrors.ifsc}>
+                        <div className="flex gap-3 items-start flex-wrap">
+                          <input
+                            value={s5.ifsc}
+                            onChange={e => setBankField('ifsc', e.target.value.toUpperCase(), ['ifsc', 'ifscCode'])}
+                            placeholder="HDFC0001234"
+                            maxLength={11}
+                            className={inp + ' font-mono w-44'}
+                          />
+                          <AnimatePresence>
+                            {bankName && (
+                              <motion.div
+                                initial={{ opacity: 0, scale: 0.9 }}
+                                animate={{ opacity: 1, scale: 1 }}
+                                className="flex items-center gap-2 bg-green-50 border border-green-200 rounded-xl px-3.5 py-2.5"
+                              >
+                                <Building2 className="w-4 h-4 text-green-600 flex-shrink-0" />
+                                <span className="text-sm font-semibold text-green-700">{bankName}</span>
+                              </motion.div>
+                            )}
+                          </AnimatePresence>
+                        </div>
+                      </Field>
                     </div>
-                  </Field>
-                </div>
-                <div className="col-span-2">
-                  <label
-                    className="flex items-center gap-3 cursor-pointer"
-                    onClick={() => setS5({ ...s5, primary: !s5.primary })}
-                  >
-                    <div className={`w-5 h-5 rounded border-2 flex items-center justify-center transition-all flex-shrink-0 ${s5.primary ? 'bg-[#0B1B3E] border-[#0B1B3E]' : 'border-slate-300 bg-white'
-                      }`}>
-                      {s5.primary && <Check className="w-3 h-3 text-white" />}
+                    <div className="col-span-2">
+                      <label
+                        className="flex items-center gap-3 cursor-pointer"
+                        onClick={() => setBankField('primary', !s5.primary, ['primary'])}
+                      >
+                        <div className={`w-5 h-5 rounded border-2 flex items-center justify-center transition-all flex-shrink-0 ${s5.primary ? 'bg-[#0B1B3E] border-[#0B1B3E]' : 'border-slate-300 bg-white'
+                          }`}>
+                          {s5.primary && <Check className="w-3 h-3 text-white" />}
+                        </div>
+                        <span className="text-sm text-slate-700 select-none">Set as primary bank account</span>
+                      </label>
                     </div>
-                    <span className="text-sm text-slate-700 select-none">Set as primary bank account</span>
-                  </label>
+                  </div>
                 </div>
-              </div>
+              )}
             </div>
           )}
 
@@ -1597,10 +2059,18 @@ export default function InvestorOnboarding({ prospect, userData, onComplete, onB
       <div className="flex items-center justify-between mt-6">
         <button
           onClick={goBack}
-          className="flex items-center gap-2 px-5 py-2.5 text-sm font-semibold text-slate-600 border border-slate-200 bg-white rounded-xl hover:bg-slate-50 transition-colors"
+          disabled={(kycLocked && step <= minStep) || (step === 3 && !isKycFailed)}
+          title={
+            kycLocked && step <= minStep
+              ? 'KYC is verified — earlier steps are locked'
+              : step === 3 && !isKycFailed
+                ? 'Complete or resolve KYC on this step before going back'
+                : undefined
+          }
+          className="flex items-center gap-2 px-5 py-2.5 text-sm font-semibold text-slate-600 border border-slate-200 bg-white rounded-xl hover:bg-slate-50 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
         >
           <ArrowLeft className="w-4 h-4" />
-          {step === 1 ? 'Cancel' : 'Back'}
+          {step === 1 && !kycLocked ? 'Cancel' : step === 3 && isKycFailed ? 'Edit details' : 'Back'}
         </button>
 
         <div className="flex items-center gap-3">
@@ -1610,7 +2080,7 @@ export default function InvestorOnboarding({ prospect, userData, onComplete, onB
             disabled={!canNext || submitting}
             className="flex items-center gap-2 px-6 py-2.5 text-sm font-semibold bg-[#0B1B3E] text-white rounded-xl hover:bg-[#1A3066] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
           >
-            {submitting ? 'Submitting...' : step === 7 ? 'Submit Application' : 'Continue'}
+            {submitting ? 'Submitting...' : step === 7 ? 'Submit Application' : step === 1 && (consentCompleted || editingForKycRetry) ? 'Continue to KYC' : 'Continue'}
             {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : step < 7 && <ArrowRight className="w-4 h-4" />}
           </button>
         </div>

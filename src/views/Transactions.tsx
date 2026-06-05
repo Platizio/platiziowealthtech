@@ -235,7 +235,8 @@ export default function Transactions({ userData }: { userData?: any }) {
         const orders = getPageContent(ordersPayload);
         const meta = getPageMeta(ordersPayload, orders.length);
         const investors = investorsRes.ok ? await investorsRes.json() : [];
-        const schemes = schemesRes.ok ? await schemesRes.json() : [];
+        const schemesPayload = schemesRes.ok ? await schemesRes.json() : [];
+        const schemes = getPageContent(schemesPayload);
 
         const investorMap = new Map(investors.map((i: any) => [i.id, i]));
         const schemeMap = new Map(schemes.map((s: any) => [s.id, s]));

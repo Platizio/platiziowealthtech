@@ -1,9 +1,11 @@
 import React, { useState, useEffect } from 'react';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   Search, Filter, ChevronLeft, Download, ShieldCheck, Users,
-  TrendingUp, AreaChart as AreaChartIcon, Activity,
+  TrendingUp, TrendingDown, AreaChart as AreaChartIcon, Activity,
   CheckCircle2, Clock, XCircle, AlertCircle, Upload, RefreshCw, ExternalLink, Pencil,
+  Trash2, Plus, ArrowRight,
 } from 'lucide-react';
 import {
   AreaChart as RechartsArea, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
@@ -39,6 +41,7 @@ const KYC_BADGE_CONFIG: Record<string, { label: string; bg: string; text: string
 const statusConfig: Record<string, string> = {
   DRAFT: 'bg-slate-100 text-slate-600',
   ONBOARDING: 'bg-blue-50 text-blue-600',
+  PENDING: 'bg-amber-50 text-amber-700',
   READY_FOR_TRANSACTIONS: 'bg-green-50 text-green-700',
   ACTIVE: 'bg-green-50 text-green-700',
   BLOCKED: 'bg-red-50 text-red-600',
@@ -83,6 +86,34 @@ const validateKycDocument = (file: File) => {
     return 'File size must be 5 MB or less.';
   }
   return '';
+};
+
+const normalizeWorkflowStatus = (value?: string) => String(value || '').trim().toUpperCase();
+
+const isKycVerifiedStatus = (status?: string) => {
+  const normalized = normalizeWorkflowStatus(status);
+  return normalized === 'COMPLETED' || normalized === 'VERIFIED';
+};
+
+const shouldShowContinueOnboarding = (investor: any) => {
+  const investorStatus = normalizeWorkflowStatus(investor?.investorStatus);
+  const kycStatus = normalizeWorkflowStatus(investor?.kycStatus);
+  const bankStatus = normalizeWorkflowStatus(investor?.bankVerificationStatus);
+
+  if (investorStatus === 'READY_FOR_TRANSACTIONS' || investorStatus === 'ACTIVE') return false;
+  return ['DRAFT', 'ONBOARDING', 'PENDING'].includes(investorStatus)
+    || ['NOT_STARTED', 'PENDING', 'IN_PROGRESS', 'FAILED', 'RETRY_REQUIRED', 'REJECTED'].includes(kycStatus)
+    || bankStatus === 'NOT_CAPTURED'
+    || bankStatus === 'VERIFICATION_PENDING'
+    || bankStatus === 'PENDING';
+};
+
+const getOnboardingResumeStep = (investor: any) => {
+  const kycStatus = normalizeWorkflowStatus(investor?.kycStatus);
+  const bankStatus = normalizeWorkflowStatus(investor?.bankVerificationStatus);
+  if (!isKycVerifiedStatus(kycStatus)) return 3;
+  if (!bankStatus || ['NOT_CAPTURED', 'VERIFICATION_PENDING', 'PENDING', 'FAILED'].includes(bankStatus)) return 5;
+  return 6;
 };
 
 const maskAccountNumber = (value?: string) => {
@@ -199,13 +230,24 @@ function KycDocumentUpload({
 function BankAccountsPanel({
   investorId,
   onBankUpdated,
+  defaultAccountHolderName,
 }: {
   investorId?: string;
   onBankUpdated?: (patch: any) => void;
+  defaultAccountHolderName?: string;
 }) {
   const [accounts, setAccounts] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [refreshingId, setRefreshingId] = useState('');
+  const [adding, setAdding] = useState(false);
+  const [savingAccount, setSavingAccount] = useState(false);
+  const [addForm, setAddForm] = useState({
+    accountHolderName: defaultAccountHolderName || '',
+    accountNumber: '',
+    ifscCode: '',
+    bankName: '',
+    branchName: '',
+  });
   const [error, setError] = useState('');
 
   const loadAccounts = React.useCallback(async () => {
@@ -231,6 +273,64 @@ function BankAccountsPanel({
   useEffect(() => {
     loadAccounts();
   }, [loadAccounts]);
+
+  useEffect(() => {
+    setAddForm(prev => ({
+      ...prev,
+      accountHolderName: prev.accountHolderName || defaultAccountHolderName || '',
+    }));
+  }, [defaultAccountHolderName]);
+
+  const addBankAccount = async () => {
+    if (!investorId) return;
+    const payload = {
+      ...addForm,
+      accountHolderName: addForm.accountHolderName.trim(),
+      accountNumber: addForm.accountNumber.trim(),
+      ifscCode: addForm.ifscCode.trim().toUpperCase(),
+      bankName: addForm.bankName.trim() || undefined,
+      branchName: addForm.branchName.trim() || undefined,
+    };
+
+    if (!payload.accountHolderName || !payload.accountNumber || !payload.ifscCode) {
+      setError('Account holder, account number, and IFSC are required.');
+      return;
+    }
+
+    setSavingAccount(true);
+    setError('');
+    try {
+      const response = await apiFetch(`/investors/${investorId}/bank-accounts`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const data = await response.json().catch(() => null);
+      if (!response.ok) {
+        throw new Error(data?.message || `Bank account save failed with HTTP ${response.status}.`);
+      }
+
+      setAccounts(prev => [data, ...prev.filter(account => account.id !== data?.id)]);
+      if (data?.verificationStatus || data?.cybrillaBankVerificationStatus) {
+        onBankUpdated?.({
+          bankVerificationStatus: data.verificationStatus || data.cybrillaBankVerificationStatus,
+        });
+      }
+      setAddForm({
+        accountHolderName: defaultAccountHolderName || '',
+        accountNumber: '',
+        ifscCode: '',
+        bankName: '',
+        branchName: '',
+      });
+      setAdding(false);
+    } catch (err) {
+      console.error('Bank account save failed:', err);
+      setError(err instanceof Error ? err.message : 'Bank account could not be saved.');
+    } finally {
+      setSavingAccount(false);
+    }
+  };
 
   const refreshVerification = async (accountId: string) => {
     if (!investorId || !accountId) return;
@@ -263,21 +363,89 @@ function BankAccountsPanel({
           <p className="text-sm font-semibold text-slate-800">Bank Verification</p>
           <p className="mt-0.5 text-xs text-slate-500">FP bank accounts and verification status.</p>
         </div>
-        <button
-          type="button"
-          onClick={loadAccounts}
-          disabled={loading}
-          className="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-50 disabled:opacity-50"
-        >
-          <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
-          Refresh list
-        </button>
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={() => setAdding(prev => !prev)}
+            className="inline-flex items-center justify-center gap-2 rounded-lg border border-blue-200 px-3 py-2 text-xs font-semibold text-blue-700 transition-colors hover:bg-blue-50"
+          >
+            <Plus className="h-3.5 w-3.5" />
+            Add bank
+          </button>
+          <button
+            type="button"
+            onClick={loadAccounts}
+            disabled={loading}
+            className="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-50 disabled:opacity-50"
+          >
+            <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
+            Refresh list
+          </button>
+        </div>
       </div>
 
       {error && (
         <p className="mt-3 flex items-center gap-1.5 text-xs font-medium text-red-600">
           <AlertCircle className="h-3.5 w-3.5" /> {error}
         </p>
+      )}
+
+      {adding && (
+        <div className="mt-4 rounded-xl border border-blue-100 bg-blue-50 p-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <input
+              value={addForm.accountHolderName}
+              onChange={event => setAddForm(prev => ({ ...prev, accountHolderName: event.target.value }))}
+              placeholder="Account holder name"
+              className="rounded-lg border border-blue-100 bg-white px-3 py-2 text-xs font-medium text-slate-700 outline-none focus:border-blue-400"
+            />
+            <input
+              value={addForm.accountNumber}
+              onChange={event => setAddForm(prev => ({ ...prev, accountNumber: event.target.value.replace(/\D/g, '') }))}
+              placeholder="Account number"
+              maxLength={18}
+              className="rounded-lg border border-blue-100 bg-white px-3 py-2 text-xs font-mono text-slate-700 outline-none focus:border-blue-400"
+            />
+            <input
+              value={addForm.ifscCode}
+              onChange={event => setAddForm(prev => ({ ...prev, ifscCode: event.target.value.toUpperCase() }))}
+              placeholder="IFSC"
+              maxLength={11}
+              className="rounded-lg border border-blue-100 bg-white px-3 py-2 text-xs font-mono text-slate-700 outline-none focus:border-blue-400"
+            />
+            <input
+              value={addForm.bankName}
+              onChange={event => setAddForm(prev => ({ ...prev, bankName: event.target.value }))}
+              placeholder="Bank name"
+              className="rounded-lg border border-blue-100 bg-white px-3 py-2 text-xs font-medium text-slate-700 outline-none focus:border-blue-400"
+            />
+            <input
+              value={addForm.branchName}
+              onChange={event => setAddForm(prev => ({ ...prev, branchName: event.target.value }))}
+              placeholder="Branch"
+              className="rounded-lg border border-blue-100 bg-white px-3 py-2 text-xs font-medium text-slate-700 outline-none focus:border-blue-400 sm:col-span-2"
+            />
+          </div>
+          <div className="mt-3 flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => setAdding(false)}
+              disabled={savingAccount}
+              className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600 transition-colors hover:bg-slate-50 disabled:opacity-50"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={addBankAccount}
+              disabled={savingAccount}
+              className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-3 py-2 text-xs font-semibold text-white transition-colors hover:bg-blue-700 disabled:opacity-50"
+            >
+              <Plus className="h-3.5 w-3.5" />
+              {savingAccount ? 'Saving...' : 'Save bank'}
+            </button>
+          </div>
+        </div>
       )}
 
       <div className="mt-4 space-y-3">
@@ -330,6 +498,10 @@ export default function Investors({
   onInvest?: (investor: any) => void;
   userData?: any;
 }) {
+  const navigate = useNavigate();
+  const location = useLocation();
+  const focusInvestorId: string | undefined = (location.state as any)?.focusInvestorId;
+  const focusHandledRef = React.useRef(false);
   const [investors, setInvestors] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -343,10 +515,15 @@ export default function Investors({
   const [totalPages, setTotalPages] = useState(1);
   const [totalElements, setTotalElements] = useState(0);
   const [kycRefreshingIds, setKycRefreshingIds] = useState<Record<string, boolean>>({});
+  const [kycApplyingIds, setKycApplyingIds] = useState<Record<string, boolean>>({});
+  const [deletingInvestorIds, setDeletingInvestorIds] = useState<Record<string, boolean>>({});
   const [bulkKycRefreshing, setBulkKycRefreshing] = useState(false);
   const [kycRefreshNotice, setKycRefreshNotice] = useState('');
+  const [investorActionNotice, setInvestorActionNotice] = useState('');
+  const [investorActionError, setInvestorActionError] = useState('');
   const hasLoadedRef = React.useRef(false);
   const baseInvestorsRef = React.useRef<any[]>([]);
+  const listScrollRef = React.useRef(0);
   const distributorId = userData?.id;
 
   useEffect(() => {
@@ -415,7 +592,7 @@ export default function Investors({
   }, [debouncedSearch, distributorId]);
 
   const KYC_OPTIONS = ['All', 'COMPLETED', 'PENDING', 'IN_PROGRESS', 'FAILED', 'RETRY_REQUIRED', 'NOT_STARTED'];
-  const STATUS_OPTIONS = ['All', 'ACTIVE', 'READY_FOR_TRANSACTIONS', 'ONBOARDING', 'DRAFT', 'BLOCKED', 'ARCHIVED'];
+  const STATUS_OPTIONS = ['All', 'ACTIVE', 'READY_FOR_TRANSACTIONS', 'ONBOARDING', 'DRAFT', 'PENDING', 'BLOCKED', 'ARCHIVED'];
 
   const filtered = investors.filter(inv => {
     const matchSearch = matchesInvestorSearch(inv, search.trim());
@@ -434,6 +611,102 @@ export default function Investors({
     setSelectedInvestor(prev => prev?.id === updatedInvestor.id ? { ...prev, ...updatedInvestor } : prev);
   };
 
+  const openInvestorDetail = (investor: any) => {
+    listScrollRef.current = typeof window !== 'undefined' ? window.scrollY : 0;
+    setSelectedInvestor(investor);
+  };
+
+  // When navigated here from the dashboard onboarding pipeline (or any caller
+  // that passes location.state.focusInvestorId), auto-open that investor's
+  // detail page. Falls back to a single-investor fetch if it isn't in the
+  // currently loaded list (e.g. filtered out or on another page).
+  useEffect(() => {
+    if (!focusInvestorId || focusHandledRef.current || loading) return;
+    let cancelled = false;
+
+    const found = investors.find(inv => inv.id === focusInvestorId);
+    if (found) {
+      focusHandledRef.current = true;
+      openInvestorDetail(found);
+      return;
+    }
+
+    (async () => {
+      try {
+        const res = await apiFetch(apiUrl(`/investors/${focusInvestorId}`));
+        if (!res.ok) return;
+        const inv = await res.json().catch(() => null);
+        if (!cancelled && inv?.id) {
+          focusHandledRef.current = true;
+          openInvestorDetail(inv);
+        }
+      } catch (e) {
+        console.error('Failed to open investor from pipeline:', e);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [focusInvestorId, loading, investors]);
+
+  const continueInvestorOnboarding = (investor: any) => {
+    if (!investor?.id) return;
+    listScrollRef.current = typeof window !== 'undefined' ? window.scrollY : 0;
+    navigate('/distributor/investor-onboarding', {
+      state: {
+        investor,
+        investorId: investor.id,
+        resumeStep: getOnboardingResumeStep(investor),
+        returnTo: '/distributor/investors',
+      },
+    });
+  };
+
+  const backToInvestorList = () => {
+    setSelectedInvestor(null);
+    if (typeof window !== 'undefined') {
+      window.requestAnimationFrame(() => window.scrollTo({ top: listScrollRef.current }));
+    }
+  };
+
+  const removeInvestorFromState = (investorId: string) => {
+    setInvestors(prev => prev.filter(inv => inv.id !== investorId));
+    baseInvestorsRef.current = baseInvestorsRef.current.filter(inv => inv.id !== investorId);
+    setSelectedInvestor(prev => prev?.id === investorId ? null : prev);
+  };
+
+  const deleteInvestor = async (investor: any) => {
+    if (!investor?.id) return false;
+    const name = investor.fullName || 'this investor';
+    const confirmed = window.confirm(`Archive ${name}? This is a soft delete in your database and the investor will disappear from active lists.`);
+    if (!confirmed) return false;
+
+    setDeletingInvestorIds(prev => ({ ...prev, [investor.id]: true }));
+    setInvestorActionNotice('');
+    setInvestorActionError('');
+    try {
+      const response = await apiFetch(`/investors/${investor.id}`, { method: 'DELETE' });
+      const data = await response.json().catch(() => null);
+      if (!response.ok) {
+        throw new Error(data?.message || `Investor delete failed with HTTP ${response.status}.`);
+      }
+      removeInvestorFromState(investor.id);
+      setInvestorActionNotice(`${name} archived successfully.`);
+      return true;
+    } catch (err) {
+      console.error('Investor soft delete failed:', err);
+      setInvestorActionError(err instanceof Error ? err.message : 'Investor could not be archived.');
+      return false;
+    } finally {
+      setDeletingInvestorIds(prev => {
+        const next = { ...prev };
+        delete next[investor.id];
+        return next;
+      });
+    }
+  };
+
   const readKycActionResponse = async (response: Response, fallbackMessage: string) => {
     const data = await response.json().catch(() => null);
     if (!response.ok) {
@@ -446,26 +719,8 @@ export default function Investors({
   };
 
   const refreshInvestorKycWithSavedIds = async (investor: any) => {
-    let latestInvestor = investor;
-    let latestData: any = null;
-
-    if (investor.externalKycCheckId) {
-      const response = await apiFetch(`/investors/${investor.id}/kyc-checks/${investor.externalKycCheckId}`);
-      latestData = await readKycActionResponse(response, 'KYC check refresh');
-      if (latestData?.investor) {
-        latestInvestor = { ...latestInvestor, ...latestData.investor };
-      }
-    }
-
-    if (latestInvestor.kycStatus !== 'COMPLETED' && investor.externalKycRequestId) {
-      const response = await apiFetch(`/investors/${investor.id}/kyc-requests/${investor.externalKycRequestId}`);
-      latestData = await readKycActionResponse(response, 'KYC request refresh');
-    }
-
-    if (!latestData) {
-      throw new Error('This investor does not have a saved Cybrilla KYC check or KYC request id.');
-    }
-    return latestData;
+    const response = await apiFetch(`/investors/${investor.id}/kyc-sync`, { method: 'POST' });
+    return readKycActionResponse(response, 'KYC status sync');
   };
 
   const refreshInvestorKycStatus = async (investor: any, showNotice = true) => {
@@ -484,6 +739,34 @@ export default function Investors({
       return data;
     } finally {
       setKycRefreshingIds(prev => {
+        const next = { ...prev };
+        delete next[investor.id];
+        return next;
+      });
+    }
+  };
+
+  const applyInvestorKycWorkflow = async (investor: any, showNotice = true) => {
+    if (!investor?.id) return null;
+    setKycApplyingIds(prev => ({ ...prev, [investor.id]: true }));
+    if (showNotice) setKycRefreshNotice('');
+    try {
+      const response = await apiFetch(`/investors/${investor.id}/kyc/apply`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dateOfBirth: investor.dateOfBirth || null }),
+      });
+      const data = await readKycActionResponse(response, 'KYC workflow');
+      if (data?.investor) {
+        updateInvestorInState(data.investor);
+      }
+      if (showNotice) {
+        const status = data?.investor?.kycStatus || investor.kycStatus || 'updated';
+        setKycRefreshNotice(`${investor.fullName || 'Investor'} KYC applied: ${String(status).replace(/_/g, ' ')}.`);
+      }
+      return data;
+    } finally {
+      setKycApplyingIds(prev => {
         const next = { ...prev };
         delete next[investor.id];
         return next;
@@ -519,9 +802,12 @@ export default function Investors({
     return (
       <InvestorDetail
         investor={selectedInvestor}
-        onBack={() => setSelectedInvestor(null)}
+        onBack={backToInvestorList}
         onInvest={onInvest}
         onInvestorUpdated={updateInvestorInState}
+        onInvestorDeleted={deleteInvestor}
+        onContinueOnboarding={continueInvestorOnboarding}
+        isDeleting={Boolean(deletingInvestorIds[selectedInvestor.id])}
       />
     );
   }
@@ -551,6 +837,16 @@ export default function Investors({
       {kycRefreshNotice && (
         <div className="mb-4 rounded-xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm font-medium text-blue-700">
           {kycRefreshNotice}
+        </div>
+      )}
+      {investorActionNotice && (
+        <div className="mb-4 rounded-xl border border-green-100 bg-green-50 px-4 py-3 text-sm font-medium text-green-700">
+          {investorActionNotice}
+        </div>
+      )}
+      {investorActionError && (
+        <div className="mb-4 rounded-xl border border-red-100 bg-red-50 px-4 py-3 text-sm font-medium text-red-700">
+          {investorActionError}
         </div>
       )}
 
@@ -624,12 +920,13 @@ export default function Investors({
                   const stCls = statusConfig[inv.investorStatus] || 'bg-slate-100 text-slate-500';
                   const riskCls = riskConfig[inv.riskProfile] || 'bg-slate-50 text-slate-500';
                   const initials = (inv.fullName || 'IN').split(' ').map((n: string) => n[0]).join('').substring(0, 2).toUpperCase();
-                  const isKycDone = inv.kycStatus === 'COMPLETED' || inv.kycStatus === 'VERIFIED';
+                  const isKycDone = isKycVerifiedStatus(inv.kycStatus);
+                  const canContinueOnboarding = shouldShowContinueOnboarding(inv);
 
                   return (
                     <tr key={inv.id} className="group hover:bg-slate-50 transition-colors">
                       <td className="px-6 py-4">
-                        <button onClick={() => setSelectedInvestor(inv)} className="flex items-center gap-3 text-left">
+                        <button onClick={() => openInvestorDetail(inv)} className="flex items-center gap-3 text-left">
                           <div className="w-8 h-8 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center text-xs font-bold flex-shrink-0">
                             {initials}
                           </div>
@@ -657,7 +954,33 @@ export default function Investors({
                       </td>
                       <td className="px-6 py-4 text-sm text-slate-500">{inv.city || '—'}</td>
                       <td className="px-6 py-4 text-right">
-                        <div className="flex items-center gap-2 justify-end opacity-0 group-hover:opacity-100 transition-opacity">
+                        <div className="flex flex-wrap items-center gap-2 justify-end">
+                          {canContinueOnboarding && (
+                            <button
+                              onClick={() => continueInvestorOnboarding(inv)}
+                              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-emerald-700 border border-emerald-200 rounded-lg hover:bg-emerald-50 transition-colors"
+                              title="Resume this investor's onboarding from the next pending stage"
+                            >
+                              <ArrowRight className="w-3.5 h-3.5" />
+                              Continue
+                            </button>
+                          )}
+                          {!isKycDone && (
+                            <button
+                              onClick={() => {
+                                applyInvestorKycWorkflow(inv).catch(err => {
+                                  console.error('KYC apply failed:', err);
+                                  setKycRefreshNotice(err instanceof Error ? err.message : 'KYC apply failed.');
+                                });
+                              }}
+                              disabled={Boolean(kycApplyingIds[inv.id])}
+                              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-amber-700 border border-amber-200 rounded-lg hover:bg-amber-50 transition-colors disabled:opacity-50"
+                              title="Apply or retry KYC through our backend"
+                            >
+                              <RefreshCw className={`w-3.5 h-3.5 ${kycApplyingIds[inv.id] ? 'animate-spin' : ''}`} />
+                              {kycApplyingIds[inv.id] ? 'Running' : 'Re-KYC'}
+                            </button>
+                          )}
                           {(inv.externalKycCheckId || inv.externalKycRequestId) && (
                             <button
                               onClick={() => {
@@ -675,11 +998,29 @@ export default function Investors({
                             </button>
                           )}
                           <button
-                            onClick={() => setSelectedInvestor(inv)}
+                            onClick={() => openInvestorDetail(inv)}
                             className="px-3 py-1.5 text-xs font-semibold text-blue-600 border border-blue-200 rounded-lg hover:bg-blue-50 transition-colors"
                           >
                             View
                           </button>
+                          <button
+                            onClick={() => deleteInvestor(inv)}
+                            disabled={Boolean(deletingInvestorIds[inv.id])}
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-red-600 border border-red-200 rounded-lg hover:bg-red-50 transition-colors disabled:opacity-50"
+                            title="Archive investor with backend soft delete"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                            {deletingInvestorIds[inv.id] ? 'Archiving' : 'Archive'}
+                          </button>
+                          {isKycDone && (
+                            <button
+                              onClick={() => navigate(`/distributor/investors/${inv.id}/kyc-modify`)}
+                              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-indigo-700 border border-indigo-200 rounded-lg hover:bg-indigo-50 transition-colors"
+                              title="Modify this investor's verified KYC record via Cybrilla (Aadhaar + eSign)"
+                            >
+                              <Pencil className="w-3.5 h-3.5" /> Modify KYC
+                            </button>
+                          )}
                           {isKycDone && onInvest && (
                             <button
                               onClick={() => onInvest(inv)}
@@ -688,9 +1029,18 @@ export default function Investors({
                               <TrendingUp className="w-3.5 h-3.5" /> Invest
                             </button>
                           )}
+                          {isKycDone && (
+                            <button
+                              onClick={() => navigate(`/distributor/investors/${inv.id}/redeem`, { state: { investor: inv } })}
+                              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-amber-700 border border-amber-200 rounded-lg hover:bg-amber-50 transition-colors"
+                              title="Redeem (sell) this investor's mutual-fund holdings via Cybrilla"
+                            >
+                              <TrendingDown className="w-3.5 h-3.5" /> Redeem
+                            </button>
+                          )}
                         </div>
                       </td>
-                    </tr>
+                      </tr>
                   );
                 })}
               </tbody>
@@ -708,11 +1058,17 @@ function InvestorDetail({
   onBack,
   onInvest,
   onInvestorUpdated,
+  onInvestorDeleted,
+  onContinueOnboarding,
+  isDeleting,
 }: {
   investor: any;
   onBack: () => void;
   onInvest?: (investor: any) => void;
   onInvestorUpdated?: (investor: any) => void;
+  onInvestorDeleted?: (investor: any) => Promise<boolean>;
+  onContinueOnboarding?: (investor: any) => void;
+  isDeleting?: boolean;
 }) {
   const [activeTab, setActiveTab] = useState('overview');
   const [currentInvestor, setCurrentInvestor] = useState(investor);
@@ -729,6 +1085,7 @@ function InvestorDetail({
   // that auto-fades a few seconds after a successful PUT.
   const [isEditing, setIsEditing] = useState(false);
   const [savedFlash, setSavedFlash] = useState(false);
+  const editScrollTopRef = React.useRef(0);
   useEffect(() => {
     setCurrentInvestor(investor);
     setKycPreVerification(parseStoredPreVerification(investor.externalKycPayloadJson));
@@ -781,8 +1138,25 @@ function InvestorDetail({
 
   const kyc = KYC_BADGE_CONFIG[currentInvestor.kycStatus] || KYC_BADGE_CONFIG['NOT_STARTED'];
   const stCls = statusConfig[currentInvestor.investorStatus] || 'bg-slate-100 text-slate-500';
-  const isKycDone = currentInvestor.kycStatus === 'COMPLETED' || currentInvestor.kycStatus === 'VERIFIED';
+  const isKycDone = isKycVerifiedStatus(currentInvestor.kycStatus);
+  const canContinueOnboarding = shouldShowContinueOnboarding(currentInvestor);
   const initials = (currentInvestor.fullName || 'IN').split(' ').map((n: string) => n[0]).join('').substring(0, 2).toUpperCase();
+
+  const restoreEditScroll = () => {
+    if (typeof window !== 'undefined') {
+      window.requestAnimationFrame(() => window.scrollTo({ top: editScrollTopRef.current }));
+    }
+  };
+
+  const startEditing = () => {
+    editScrollTopRef.current = typeof window !== 'undefined' ? window.scrollY : 0;
+    setIsEditing(true);
+  };
+
+  const stopEditing = () => {
+    setIsEditing(false);
+    restoreEditScroll();
+  };
 
   const runKycAction = async (
     key: string,
@@ -892,39 +1266,33 @@ function InvestorDetail({
     }
   };
 
+  const applyKycWorkflow = async () => {
+    const errors = validateInvestorIdentityForKyc({
+      fullName: currentInvestor.fullName,
+      pan: currentInvestor.pan,
+      dob: currentInvestor.dateOfBirth,
+    }, { requireContact: false });
+    if (Object.keys(errors).length > 0) {
+      setKycActionError(Object.values(errors)[0] || 'Investor identity details are incomplete.');
+      setKycActionMessage('');
+      return;
+    }
+
+    return runKycAction(
+      'kyc-apply',
+      () => apiFetch(`/investors/${currentInvestor.id}/kyc/apply`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dateOfBirth: currentInvestor.dateOfBirth || null }),
+      }),
+      'KYC workflow applied through backend and saved locally.',
+    );
+  };
+
   const syncSavedKycStatus = () => runKycAction(
     'kyc-sync',
-    async () => {
-      const checkId = currentInvestor.externalKycCheckId || kycPreVerification?.id;
-      let latestData: any = null;
-      let latestInvestor: any = currentInvestor;
-      if (checkId) {
-        const checkResponse = await apiFetch(`/investors/${currentInvestor.id}/kyc-checks/${checkId}`);
-        latestData = await checkResponse.clone().json().catch(() => null);
-        if (!checkResponse.ok) {
-          return checkResponse;
-        }
-        if (latestData?.investor) {
-          latestInvestor = { ...latestInvestor, ...latestData.investor };
-        }
-      }
-      if (latestInvestor.kycStatus !== 'COMPLETED' && currentInvestor.externalKycRequestId) {
-        return apiFetch(`/investors/${currentInvestor.id}/kyc-requests/${currentInvestor.externalKycRequestId}`);
-      }
-      if (latestData) {
-        return new Response(JSON.stringify(latestData), {
-          status: 200,
-          headers: { 'Content-Type': 'application/json' },
-        });
-      }
-      return new Response(JSON.stringify({
-        message: 'This investor does not have a saved Cybrilla KYC check or KYC request id.',
-      }), {
-        status: 400,
-        headers: { 'Content-Type': 'application/json' },
-      });
-    },
-    'KYC status refreshed from saved Cybrilla IDs.',
+    () => apiFetch(`/investors/${currentInvestor.id}/kyc-sync`, { method: 'POST' }),
+    'KYC status synced through backend and saved locally.',
   );
 
   const fetchKycCheck = () => {
@@ -1048,12 +1416,29 @@ function InvestorDetail({
               <CheckCircle2 className="w-3.5 h-3.5" /> Saved
             </span>
           )}
+          {canContinueOnboarding && onContinueOnboarding && (
+            <button
+              onClick={() => onContinueOnboarding(currentInvestor)}
+              className="flex items-center gap-2 px-4 py-2 text-sm font-medium bg-emerald-600 text-white rounded-lg shadow-sm hover:bg-emerald-700 transition-colors"
+            >
+              <ArrowRight className="w-4 h-4" /> Continue Onboarding
+            </button>
+          )}
           {!isEditing && (
             <button
-              onClick={() => setIsEditing(true)}
+              onClick={startEditing}
               className="flex items-center gap-2 px-4 py-2 text-sm font-medium bg-white border border-slate-200 text-slate-700 rounded-lg shadow-sm hover:bg-slate-50 transition-colors"
             >
               <Pencil className="w-4 h-4" /> Edit
+            </button>
+          )}
+          {onInvestorDeleted && (
+            <button
+              onClick={() => onInvestorDeleted(currentInvestor)}
+              disabled={isDeleting}
+              className="flex items-center gap-2 px-4 py-2 text-sm font-medium bg-white border border-red-200 text-red-600 rounded-lg shadow-sm hover:bg-red-50 transition-colors disabled:opacity-50"
+            >
+              <Trash2 className="w-4 h-4" /> {isDeleting ? 'Archiving...' : 'Archive'}
             </button>
           )}
           <button className="flex items-center gap-2 px-4 py-2 text-sm font-medium bg-white border border-slate-200 text-slate-700 rounded-lg shadow-sm hover:bg-slate-50 transition-colors">
@@ -1100,8 +1485,9 @@ function InvestorDetail({
                   onInvestorUpdated?.(updated);
                   setIsEditing(false);
                   setSavedFlash(true);
+                  restoreEditScroll();
                 }}
-                onCancel={() => setIsEditing(false)}
+                onCancel={stopEditing}
               />
             ) : (<>
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -1184,9 +1570,11 @@ function InvestorDetail({
 
             <BankAccountsPanel
               investorId={currentInvestor.id}
+              defaultAccountHolderName={currentInvestor.fullName}
               onBankUpdated={patch => {
+                const nextInvestor = { ...currentInvestor, ...patch };
                 setCurrentInvestor((prev: any) => ({ ...prev, ...patch }));
-                if (patch?.id) onInvestorUpdated?.(patch);
+                onInvestorUpdated?.(nextInvestor);
               }}
             />
 
@@ -1200,14 +1588,24 @@ function InvestorDetail({
                     Validate PAN, name, date of birth, and readiness before accepting investments.
                   </p>
                 </div>
-                <button
-                  onClick={createKycCheck}
-                  disabled={Boolean(kycActionLoading)}
-                  className="inline-flex items-center justify-center gap-2 rounded-lg bg-[#0B1B3E] px-4 py-2 text-xs font-semibold text-white transition-colors hover:bg-[#1A3066] disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  {kycActionLoading === 'kyc-check' ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <ShieldCheck className="h-3.5 w-3.5" />}
-                  Run check
-                </button>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    onClick={applyKycWorkflow}
+                    disabled={Boolean(kycActionLoading)}
+                    className="inline-flex items-center justify-center gap-2 rounded-lg bg-[#0B1B3E] px-4 py-2 text-xs font-semibold text-white transition-colors hover:bg-[#1A3066] disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {kycActionLoading === 'kyc-apply' ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <ShieldCheck className="h-3.5 w-3.5" />}
+                    Apply KYC
+                  </button>
+                  <button
+                    onClick={createKycCheck}
+                    disabled={Boolean(kycActionLoading)}
+                    className="inline-flex items-center justify-center gap-2 rounded-lg border border-blue-200 px-4 py-2 text-xs font-semibold text-blue-700 transition-colors hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {kycActionLoading === 'kyc-check' ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <ShieldCheck className="h-3.5 w-3.5" />}
+                    Run pre-check
+                  </button>
+                </div>
               </div>
               <div className={`mt-4 rounded-xl border p-3 text-xs font-medium ${kycDecision.canProceed ? 'border-green-100 bg-green-50 text-green-700' : 'border-slate-200 bg-slate-50 text-slate-600'}`}>
                 <p className="font-bold">{kycDecision.title}</p>

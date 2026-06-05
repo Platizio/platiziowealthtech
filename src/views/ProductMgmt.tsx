@@ -4,7 +4,7 @@ import { Search, Filter, Trash2, X, ChevronDown, Lock, Rocket, Eye, EyeOff, Refr
 import { Product } from '../data/products';
 import { apiFetch } from '../config/api';
 import Pagination from '../components/Pagination';
-import { getPageContent, getPageMeta } from '../utils/pagination';
+import { getPageContent, getPageMeta, isPagePayload } from '../utils/pagination';
 import { useDebounce } from '../hooks/useDebounce';
 import EmptyState from '../components/EmptyState';
 import { useFocusTrap } from '../hooks/useFocusTrap';
@@ -36,6 +36,10 @@ const riskColor: Record<string, string> = {
 const ASSET_CLASSES = ['All', 'MF', 'SIF'];
 const CATEGORIES    = ['All', 'Equity', 'Debt', 'ELSS', 'Hybrid', 'Strategic'];
 const normalizeRole = (role?: string) => role?.trim().toUpperCase() || '';
+const SYNC_ROLES = new Set(['ADMIN', 'MASTER_DISTRIBUTOR']);
+const LIVE_SCHEME_SYNC_KEY = 'platizio:fundSchemes:lastLiveSync:v2';
+const LIVE_SCHEME_SYNC_BACKOFF_KEY = 'platizio:fundSchemes:liveSyncBackoffUntil:v2';
+const LIVE_SCHEME_SYNC_FAILURE_BACKOFF_MS = 15 * 60 * 1000;
 
 interface BackendProductScheme {
   id?: string;
@@ -169,8 +173,22 @@ export default function ProductMgmt({
   const [size, setSize] = useState(20);
   const [totalPages, setTotalPages] = useState(1);
   const [totalElements, setTotalElements] = useState(0);
+  const [backendPaged, setBackendPaged] = useState(false);
   const refreshInFlightRef = useRef(false);
-  const canRefreshLiveSchemes = normalizeRole(userData?.role) === 'ADMIN';
+  const catalogSyncedOnMountRef = useRef(false);
+  const canRefreshLiveSchemes = SYNC_ROLES.has(normalizeRole(userData?.role));
+
+  const liveSyncBackoffRemainingMs = () => {
+    const backoffUntil = Number(window.localStorage.getItem(LIVE_SCHEME_SYNC_BACKOFF_KEY) || 0);
+    return Math.max(backoffUntil - Date.now(), 0);
+  };
+
+  const markLiveSyncBackoff = () => {
+    window.localStorage.setItem(
+      LIVE_SCHEME_SYNC_BACKOFF_KEY,
+      String(Date.now() + LIVE_SCHEME_SYNC_FAILURE_BACKOFF_MS),
+    );
+  };
 
   const readJsonSafely = async (response: Response) => {
     const text = await response.text();
@@ -182,74 +200,118 @@ export default function ProductMgmt({
     }
   };
 
-  const loadCachedProducts = async () => {
-    setLoadingProducts(true);
-    setSyncError('');
-    try {
-      const params = new URLSearchParams({ page: String(page), size: String(size) });
-      if (debouncedSearch.trim()) params.set('query', debouncedSearch.trim());
-      const response = await apiFetch(`/products/schemes?${params.toString()}`);
-      const result = response.ok ? await response.json() : [];
-      const schemes = getPageContent(result);
-      const meta = getPageMeta(result, schemes.length);
-      setProducts(schemes.map(mapBackendSchemeToProduct));
-      setTotalPages(meta.totalPages);
-      setTotalElements(meta.totalElements);
-    } catch (error) {
-      console.error('Failed to load cached product schemes:', error);
-      setSyncError(error instanceof Error ? error.message : 'Unable to load cached products');
-    } finally {
-      setLoadingProducts(false);
-    }
-  };
-
-  useEffect(() => {
-    loadCachedProducts();
-  }, [page, size, debouncedSearch]);
-
-  const fetchProductsFromCybrilla = async () => {
-    if (!canRefreshLiveSchemes) {
-      setSyncError('Only admin users can sync products from Cybrilla.');
-      return;
+  const loadProducts = async (
+    pageOverride = page,
+    options?: { syncFromCybrilla?: boolean; forceRefresh?: boolean },
+  ) => {
+    const syncFromCybrilla = options?.syncFromCybrilla ?? false;
+    const forceRefresh = options?.forceRefresh ?? false;
+    const backoffRemainingMs = syncFromCybrilla ? liveSyncBackoffRemainingMs() : 0;
+    let useCybrillaSync = syncFromCybrilla;
+    if (backoffRemainingMs > 0) {
+      useCybrillaSync = false;
+      setSyncError(
+        `Live Cybrilla sync is cooling down. Showing cached products; try again in ${Math.ceil(backoffRemainingMs / 60000)} min.`,
+      );
+    } else if (syncFromCybrilla) {
+      setSyncError('');
     }
 
-    if (refreshInFlightRef.current) return;
-    refreshInFlightRef.current = true;
+    if (useCybrillaSync && refreshInFlightRef.current) return;
+    if (useCybrillaSync) refreshInFlightRef.current = true;
     setLoadingProducts(true);
-    setSyncError('');
+
+    const requestPage = useCybrillaSync && forceRefresh ? 0 : pageOverride;
+    const params = new URLSearchParams({ page: String(requestPage), size: String(size) });
+    if (debouncedSearch.trim()) params.set('query', debouncedSearch.trim());
+    if (assetFilter !== 'All') params.set('assetClass', assetFilter);
+    if (categoryFilter !== 'All') params.set('category', categoryFilter);
+    if (useCybrillaSync) params.set('syncFromCybrilla', 'true');
+
     console.groupCollapsed('[Cybrilla Workflow] Fetch fund schemes');
     console.log('frontend_route=', '/admin/product-mgmt');
-    console.log('frontend_request=', 'POST /api/v1/products/schemes/refresh');
-    console.log('backend_expected_external_call=', 'GET https://s.finprim.com/api/oms/fund_schemes?page=0&size=100');
+    console.log(
+      'frontend_request=',
+      `GET /api/v1/products/schemes/page${useCybrillaSync ? '?syncFromCybrilla=true' : ''}`,
+    );
+    console.log(
+      'backend_expected_external_call=',
+      useCybrillaSync
+        ? 'GET https://s.finprim.com/api/oms/fund_schemes (paginated); replaces MF rows in product_schemes'
+        : 'none; reading product_schemes from local DB',
+    );
     console.log('frontend_note=', 'Browser calls Platizio backend only. Backend uses the server-side Fintech Primitives bearer token.');
 
     try {
-      const response = await apiFetch('/products/schemes/refresh', { method: 'POST' });
+      const response = await apiFetch(`/products/schemes/page?${params.toString()}`);
       const result = await readJsonSafely(response);
       console.log('frontend_response=', {
         status: response.status,
         ok: response.ok,
-        count: Array.isArray(result) ? result.length : undefined,
-        sample: Array.isArray(result) ? result.slice(0, 3) : result,
+        count: getPageContent(result).length,
+        sample: getPageContent(result).slice(0, 3),
       });
 
       if (!response.ok) {
-        throw new Error(typeof result === 'string' ? result : result?.message || 'Unable to fetch fund schemes from Cybrilla/FP');
+        throw new Error(typeof result === 'string' ? result : result?.message || 'Unable to load fund schemes');
       }
 
-      const schemes = Array.isArray(result) ? result : [];
+      const schemes = getPageContent(result);
+      const meta = getPageMeta(result, schemes.length);
+      const isPaged = isPagePayload(result);
+      setBackendPaged(isPaged);
       setProducts(schemes.map(mapBackendSchemeToProduct));
+      setTotalPages(isPaged ? meta.totalPages : Math.max(Math.ceil(schemes.length / Math.max(size, 1)), 1));
+      setTotalElements(isPaged ? meta.totalElements : schemes.length);
+      if (useCybrillaSync) {
+        window.localStorage.setItem(LIVE_SCHEME_SYNC_KEY, String(Date.now()));
+        window.localStorage.removeItem(LIVE_SCHEME_SYNC_BACKOFF_KEY);
+        if (forceRefresh) setPage(0);
+      }
       console.log('workflow_status=', 'completed');
     } catch (error) {
       console.error('workflow_status=', 'failed');
       console.error('workflow_error=', error);
-      setSyncError(error instanceof Error ? error.message : 'Unable to fetch fund schemes from Cybrilla/FP');
-      await loadCachedProducts();
+      if (useCybrillaSync) {
+        markLiveSyncBackoff();
+        try {
+          const fallbackParams = new URLSearchParams(params);
+          fallbackParams.delete('syncFromCybrilla');
+          const cachedRes = await apiFetch(`/products/schemes/page?${fallbackParams.toString()}`);
+          const cachedResult = cachedRes.ok ? await readJsonSafely(cachedRes) : [];
+          const cachedSchemes = getPageContent(cachedResult);
+          const cachedMeta = getPageMeta(cachedResult, cachedSchemes.length);
+          setBackendPaged(isPagePayload(cachedResult));
+          setProducts(cachedSchemes.map(mapBackendSchemeToProduct));
+          setTotalPages(cachedMeta.totalPages);
+          setTotalElements(cachedMeta.totalElements);
+          setSyncError(
+            cachedSchemes.length > 0
+              ? 'Showing locally cached products because live Cybrilla sync is temporarily unavailable.'
+              : 'Failed to sync products from Cybrilla. Check backend connectivity to s.finprim.com.',
+          );
+        } catch {
+          setSyncError(error instanceof Error ? error.message : 'Unable to load products');
+        }
+      } else {
+        setSyncError(error instanceof Error ? error.message : 'Unable to load cached products');
+      }
     } finally {
       console.groupEnd();
       refreshInFlightRef.current = false;
       setLoadingProducts(false);
     }
+  };
+
+  useEffect(() => {
+    const syncOnOpen = !catalogSyncedOnMountRef.current;
+    if (syncOnOpen) catalogSyncedOnMountRef.current = true;
+    loadProducts(page, { syncFromCybrilla: syncOnOpen });
+  }, [page, size, debouncedSearch, assetFilter, categoryFilter]);
+
+  const fetchProductsFromCybrilla = async () => {
+    if (refreshInFlightRef.current) return;
+    await loadProducts(0, { syncFromCybrilla: true, forceRefresh: true });
   };
 
   // ── Derived state ──────────────────────────────────────────────────────────
@@ -260,6 +322,14 @@ export default function ProductMgmt({
     const matchCategory = categoryFilter === 'All' || p.category   === categoryFilter;
     return matchSearch && matchAsset && matchCategory;
   });
+  const displayedProducts = backendPaged
+    ? filtered
+    : filtered.slice(page * size, page * size + size);
+  const hasClientOnlyFilters = assetFilter !== 'All' || categoryFilter !== 'All';
+  const effectiveTotalElements = backendPaged && !hasClientOnlyFilters ? totalElements : filtered.length;
+  const effectiveTotalPages = backendPaged
+    ? (hasClientOnlyFilters ? Math.max(Math.ceil(effectiveTotalElements / Math.max(size, 1)), 1) : totalPages)
+    : Math.max(Math.ceil(effectiveTotalElements / Math.max(size, 1)), 1);
 
   const mfCount  = products.filter(p => p.assetClass === 'MF').length;
   const sifCount = products.filter(p => p.assetClass === 'SIF').length;
@@ -468,9 +538,9 @@ export default function ProductMgmt({
           {loadingProducts ? (
             <div className="p-16 text-center text-slate-500">
               <div className="animate-spin w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full mx-auto mb-4" />
-              Fetching fund schemes from Cybrilla…
+              Loading fund schemes from backend catalog...
             </div>
-          ) : filtered.length === 0 ? (
+          ) : displayedProducts.length === 0 ? (
             <EmptyState
               icon={Layers}
               title="No products found"
@@ -491,7 +561,7 @@ export default function ProductMgmt({
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {filtered.map(p => (
+              {displayedProducts.map(p => (
                 <tr
                   key={p.id}
                   className={`group hover:bg-slate-50 transition-colors ${p.status === 'Inactive' ? 'opacity-40' : ''}`}
@@ -552,8 +622,8 @@ export default function ProductMgmt({
         <Pagination
           page={page}
           size={size}
-          totalPages={totalPages}
-          totalElements={totalElements}
+          totalPages={effectiveTotalPages}
+          totalElements={effectiveTotalElements}
           onPageChange={setPage}
           onSizeChange={nextSize => { setSize(nextSize); setPage(0); }}
         />

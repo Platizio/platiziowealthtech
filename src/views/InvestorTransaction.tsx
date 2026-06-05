@@ -306,7 +306,13 @@ export default function InvestorTransaction({ investor, onComplete, onBack }: Pr
 
       const result = await response.json().catch(() => null);
       if (!response.ok) {
-        throw new Error(result?.message || `Order creation failed (${response.status})`);
+        const baseMessage = result?.message || `Order creation failed (${response.status})`;
+        // 503 = provider unreachable; the backend has saved the order for retry.
+        // 502 = provider error/rate-limit. Both are retryable from the UI.
+        if (response.status === 503 || response.status === 502) {
+          throw new Error(`${baseMessage} You can retry placing this order in a moment.`);
+        }
+        throw new Error(baseMessage);
       }
 
       setDone(true);

@@ -3,6 +3,13 @@ export type PageMeta = {
   totalElements: number;
 };
 
+export const isPagePayload = (payload: any) => {
+  if (!payload || Array.isArray(payload)) return false;
+  if (Array.isArray(payload.content)) return true;
+  if (Array.isArray(payload?.data?.content)) return true;
+  return false;
+};
+
 export const getPageContent = <T = any>(payload: any): T[] => {
   if (Array.isArray(payload)) return payload;
   if (Array.isArray(payload?.content)) return payload.content;

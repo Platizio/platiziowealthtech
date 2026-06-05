@@ -12,6 +12,11 @@ interface Investor {
   productClasses: string[];
   invested: string;
   kyc: 'Verified' | 'Pending' | 'In Progress' | 'Failed';
+  kycStatus?: string;
+  investorStatus?: string;
+  externalKycCheckId?: string;
+  externalKycRequestId?: string;
+  raw?: any;
   pan: string;
 }
 
@@ -87,6 +92,11 @@ export default function InvestorMgmt({ userData }: { userData?: any }) {
     productClasses: inv.productClasses || ['MF'],
     invested: inv.invested || '—',
     kyc: getKycLabel(inv.kycStatus || inv.kyc),
+    kycStatus: inv.kycStatus || inv.kyc,
+    investorStatus: inv.investorStatus,
+    externalKycCheckId: inv.externalKycCheckId,
+    externalKycRequestId: inv.externalKycRequestId,
+    raw: inv,
     pan: inv.pan || '—',
   }), [distributorNameById]);
 
@@ -211,38 +221,39 @@ export default function InvestorMgmt({ userData }: { userData?: any }) {
   });
 
   const handleReKyc = async (inv: Investor) => {
+    if (!isUuid(String(inv.id))) {
+      setKycActionError('Re-KYC is available only for saved backend investor records. Refresh the page and try again.');
+      setKycActionMessage('');
+      return;
+    }
+
     setRekycLoadingId(inv.id);
     setKycActionError('');
     setKycActionMessage('');
     try {
-      const checkResponse = await apiFetch(`/investors/${inv.id}/kyc-checks`, {
+      const response = await apiFetch(`/investors/${inv.id}/kyc/apply`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({}),
       });
-      const checkResult = await checkResponse.json().catch(() => null);
-      if (!checkResponse.ok) {
-        throw new Error(checkResult?.message || `KYC check failed with HTTP ${checkResponse.status}`);
+      const result = await response.json().catch(() => null);
+      if (!response.ok) {
+        throw new Error(result?.message || `KYC workflow failed with HTTP ${response.status}`);
       }
 
-      let updatedInvestor = checkResult?.investor;
-      if (updatedInvestor && updatedInvestor.kycStatus !== 'COMPLETED') {
-        const requestResponse = await apiFetch(`/investors/${inv.id}/kyc-requests`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ fields: {} }),
-        });
-        const requestResult = await requestResponse.json().catch(() => null);
-        if (!requestResponse.ok) {
-          throw new Error(requestResult?.message || `KYC request failed with HTTP ${requestResponse.status}`);
+      let updatedInvestor = result?.investor;
+      if (updatedInvestor?.externalKycCheckId || updatedInvestor?.externalKycRequestId) {
+        const syncResponse = await apiFetch(`/investors/${inv.id}/kyc-sync`, { method: 'POST' });
+        const syncResult = await syncResponse.json().catch(() => null);
+        if (syncResponse.ok && syncResult?.investor) {
+          updatedInvestor = syncResult.investor;
         }
-        updatedInvestor = requestResult?.investor || updatedInvestor;
       }
-
       if (updatedInvestor) {
         setInvestors(prev => prev.map(row => row.id === inv.id ? mapInvestor(updatedInvestor) : row));
       }
-      setKycActionMessage(`${inv.name} KYC was refreshed.`);
+      const status = updatedInvestor?.kycStatus || result?.status || inv.kycStatus || 'updated';
+      setKycActionMessage(`${inv.name} KYC updated through backend: ${String(status).replace(/_/g, ' ')}.`);
     } catch (err) {
       console.error('Re-KYC failed:', err);
       setKycActionError(err instanceof Error ? err.message : 'Re-KYC failed.');
@@ -449,7 +460,7 @@ export default function InvestorMgmt({ userData }: { userData?: any }) {
                     <td className="px-6 py-4 text-right">
                       <div className="flex items-center gap-2 justify-end opacity-0 group-hover:opacity-100 transition-opacity">
                         <button className="px-3 py-1.5 text-xs font-semibold text-blue-600 border border-blue-200 rounded-lg hover:bg-blue-50 transition-colors">View</button>
-                        {(inv.kyc === 'Pending' || inv.kyc === 'Failed') && (
+                        {(inv.kyc === 'Pending' || inv.kyc === 'Failed' || inv.kyc === 'In Progress') && (
                           <button
                             onClick={() => handleReKyc(inv)}
                             disabled={rekycLoadingId === inv.id}

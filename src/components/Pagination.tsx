@@ -18,6 +18,9 @@ export default function Pagination({
   const safeTotalPages = Math.max(totalPages || 0, 1);
   const firstItem = totalElements === 0 ? 0 : page * size + 1;
   const lastItem = Math.min((page + 1) * size, totalElements);
+  const sizeOptions = Array.from(new Set([10, 12, 20, 50, 100, size]))
+    .filter(option => Number.isFinite(option) && option > 0)
+    .sort((a, b) => a - b);
 
   return (
     <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 px-4 py-3">
@@ -31,7 +34,7 @@ export default function Pagination({
             onChange={e => onSizeChange(Number(e.target.value))}
             className="rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs font-semibold text-slate-600 outline-none"
           >
-            {[10, 20, 50, 100].map(option => (
+            {sizeOptions.map(option => (
               <option key={option} value={option}>{option} / page</option>
             ))}
           </select>

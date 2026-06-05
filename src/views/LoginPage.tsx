@@ -271,16 +271,44 @@ export default function LoginPage({
   };
 
   /* ── OTP: send ──────────────────────────────────────────────────────── */
-  const handleSendOtp = () => {
-    const id = otpId.trim();
-    if (!id) { setOtpError('Please enter your email or mobile number.'); return; }
-    console.log('[Login] OTP login requested:', { identifier: id });
+  const requestOtp = async (rawEmail: string) => {
+    const res = await apiFetch('/auth/otp/request', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: rawEmail, purpose: 'LOGIN' }),
+      skipAuthRedirect: true,
+    });
+    const data = await res.json().catch(() => null);
+    if (!res.ok) {
+      throw new Error(data?.message || 'Could not send the OTP. Please try again.');
+    }
+    return data;
+  };
+
+  const handleSendOtp = async () => {
+    const id = otpId.trim().toLowerCase();
+    if (!id) { setOtpError('Please enter your email address.'); return; }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(id)) {
+      setOtpError('Please enter a valid email address. (Mobile OTP is coming soon.)');
+      return;
+    }
+    console.log('[Login] OTP login requested:', { email: id });
     setOtpLoading(true);
-    setTimeout(() => {
-      setOtpError('OTP login is not connected to the secure backend yet. Please use password login.');
+    setOtpError('');
+    try {
+      const data = await requestOtp(id);
+      setOtpId(id);
+      setOtpGenerated(data?.devCode || '');
+      setOtpDigits(Array(6).fill(''));
+      setCountdown(typeof data?.resendInSeconds === 'number' ? data.resendInSeconds : 30);
+      setOtpStep('verify');
+      console.log('[Login] OTP request accepted');
+    } catch (error) {
+      console.error('OTP request failed:', error);
+      setOtpError(error instanceof Error ? error.message : 'Could not send the OTP. Please try again.');
+    } finally {
       setOtpLoading(false);
-      console.warn('[Login] OTP login stopped: backend OTP endpoint is not connected yet');
-    }, 800);
+    }
   };
 
   /* ── OTP: digit input handlers ──────────────────────────────────────── */
@@ -308,27 +336,51 @@ export default function LoginPage({
   };
 
   /* ── OTP: verify ────────────────────────────────────────────────────── */
-  const handleVerifyOtp = () => {
+  const handleVerifyOtp = async () => {
     const entered = otpDigits.join('');
     if (entered.length < 6) { setOtpError('Please enter the complete 6-digit OTP.'); return; }
-    if (entered === otpGenerated) {
-      const userToPass = Array.isArray(otpUser) ? otpUser[0] : otpUser;
-      onLogin(userToPass);
-    } else {
-      setOtpError('Incorrect OTP. Please check and try again.');
+    setOtpLoading(true);
+    setOtpError('');
+    try {
+      const res = await apiFetch('/auth/otp/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: otpId.trim().toLowerCase(), purpose: 'LOGIN', code: entered }),
+        skipAuthRedirect: true,
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) {
+        if (data?.error === 'ACCOUNT_NOT_APPROVED' || data?.accountStatus === 'PENDING_APPROVAL') {
+          setApprovalPopup(data?.message || 'Approval remaining. Your account is pending admin approval.');
+          return;
+        }
+        throw new Error(data?.message || 'Incorrect or expired OTP. Please try again.');
+      }
+      console.log('[Login] OTP login successful. HttpOnly cookie should now be set by backend.');
+      onLogin(data);
+    } catch (error) {
+      console.error('OTP verify failed:', error);
+      setOtpError(error instanceof Error ? error.message : 'Incorrect OTP. Please check and try again.');
       setOtpDigits(Array(6).fill(''));
       setTimeout(() => otpRefs.current[0]?.focus(), 50);
+    } finally {
+      setOtpLoading(false);
     }
   };
 
   /* ── OTP: resend ────────────────────────────────────────────────────── */
-  const handleResend = () => {
-    const code = Math.floor(100000 + Math.random() * 900000).toString();
-    setOtpGenerated(code);
-    setOtpDigits(Array(6).fill(''));
+  const handleResend = async () => {
     setOtpError('');
-    setCountdown(30);
-    setTimeout(() => otpRefs.current[0]?.focus(), 50);
+    try {
+      const data = await requestOtp(otpId.trim().toLowerCase());
+      setOtpGenerated(data?.devCode || '');
+      setOtpDigits(Array(6).fill(''));
+      setCountdown(typeof data?.resendInSeconds === 'number' ? data.resendInSeconds : 30);
+      setTimeout(() => otpRefs.current[0]?.focus(), 50);
+    } catch (error) {
+      console.error('OTP resend failed:', error);
+      setOtpError(error instanceof Error ? error.message : 'Could not resend the OTP. Please try again.');
+    }
   };
 
   /* ── OTP: reset to step 1 ───────────────────────────────────────────── */
@@ -701,13 +753,11 @@ export default function LoginPage({
                     {otpStep === 'send' && (
                       <motion.div key="otp-send" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0, x: -16 }}>
 
-                        {/* Demo hint */}
+                        {/* Hint */}
                         <div className="mb-6 bg-blue-50 border border-blue-100 rounded-xl px-4 py-3 flex items-start gap-3">
                           <span className="text-blue-400 mt-0.5 text-sm">ℹ</span>
                           <p className="text-xs text-blue-700 leading-relaxed">
-                            <span className="font-semibold">Demo accounts:</span>{' '}
-                            Email: <span className="font-mono font-bold">aditya@platizio.in</span>&nbsp;|&nbsp;
-                            Mobile: <span className="font-mono font-bold">9876543210</span>
+                            We'll email a 6-digit one-time passcode to your registered address. No password needed.
                           </p>
                         </div>
 
@@ -724,16 +774,16 @@ export default function LoginPage({
 
                         <div className="mb-6">
                           <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5">
-                            Email or Mobile Number <span className="text-red-400">*</span>
+                            Email Address <span className="text-red-400">*</span>
                           </label>
-                          <input type="text" value={otpId}
+                          <input type="email" value={otpId}
                             onChange={e => { setOtpId(e.target.value); setOtpError(''); }}
                             onKeyDown={e => e.key === 'Enter' && handleSendOtp()}
-                            placeholder="e.g. you@example.com or 9876543210"
+                            placeholder="you@example.com"
                             autoFocus
                             className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm focus:ring-2 focus:ring-blue-100 focus:border-blue-500 outline-none transition-all" />
                           <p className="text-[11px] text-slate-400 mt-1">
-                            Enter your registered email address or 10-digit mobile number.
+                            Enter your registered email address. Mobile OTP is coming soon.
                           </p>
                         </div>
 
@@ -771,14 +821,17 @@ export default function LoginPage({
                           </button>
                         </div>
 
-                        {/* Demo OTP reveal */}
-                        <div className="mb-6 bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 flex items-center gap-3">
-                          <span className="text-amber-500 text-base flex-shrink-0">⚡</span>
-                          <p className="text-xs text-amber-800 leading-relaxed">
-                            <span className="font-semibold">Demo — your OTP is: </span>
-                            <span className="font-mono font-bold text-amber-900 tracking-[0.3em]">{otpGenerated}</span>
-                          </p>
-                        </div>
+                        {/* Dev-mode OTP reveal — only when the backend returns a
+                            devCode (local profile with email delivery disabled). */}
+                        {otpGenerated && (
+                          <div className="mb-6 bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 flex items-center gap-3">
+                            <span className="text-amber-500 text-base flex-shrink-0">⚡</span>
+                            <p className="text-xs text-amber-800 leading-relaxed">
+                              <span className="font-semibold">Dev mode — your OTP is: </span>
+                              <span className="font-mono font-bold text-amber-900 tracking-[0.3em]">{otpGenerated}</span>
+                            </p>
+                          </div>
+                        )}
 
                         {/* Error */}
                         <AnimatePresence>
@@ -832,9 +885,9 @@ export default function LoginPage({
                         </div>
 
                         {/* Verify button */}
-                        <button onClick={handleVerifyOtp} disabled={otpDigits.some(d => !d)}
-                          className="w-full py-3.5 bg-[#0B1B3E] text-white font-semibold text-sm rounded-xl hover:bg-[#1A3066] transition-colors disabled:opacity-60 disabled:cursor-not-allowed shadow-lg">
-                          Verify &amp; Sign In
+                        <button onClick={handleVerifyOtp} disabled={otpDigits.some(d => !d) || otpLoading}
+                          className="w-full py-3.5 bg-[#0B1B3E] text-white font-semibold text-sm rounded-xl hover:bg-[#1A3066] transition-colors disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2 shadow-lg">
+                          {otpLoading ? (<><Spinner />Verifying…</>) : (<>Verify &amp; Sign In</>)}
                         </button>
 
                         <p className="text-center text-xs text-slate-400 mt-5">

@@ -1,14 +1,16 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
-  Info, CheckCircle2, ChevronLeft, ChevronRight, X, Search, RefreshCw, AlertCircle,
+  Info, CheckCircle2, ChevronRight, X, Search, RefreshCw, AlertCircle,
   TrendingUp, BarChart2, Layers, FileText, Award, Shield, Calendar, Clock,
   Target, Users, BookOpen, PieChart, Activity, Eye,
 } from 'lucide-react';
 import { apiFetch } from '../config/api';
 import BackendFundDetailModal from '../components/BackendFundDetailModal';
+import Pagination from '../components/Pagination';
 import { useDebounce } from '../hooks/useDebounce';
 import { useFocusTrap } from '../hooks/useFocusTrap';
+import { getPageContent, getPageMeta, isPagePayload } from '../utils/pagination';
 
 // ─── Colour maps ──────────────────────────────────────────────────────────────
 const categoryStyle: Record<string, string> = {
@@ -28,9 +30,10 @@ const productTypeStyle: Record<string, string> = {
   OTHER: 'bg-slate-100 text-slate-500',
 };
 
-const LIVE_SCHEME_SYNC_INTERVAL_MS = 30 * 60 * 1000;
 const LIVE_SCHEME_SYNC_KEY = 'platizio:fundSchemes:lastLiveSync:v2';
-const PAGE_SIZE = 12;
+const LIVE_SCHEME_SYNC_BACKOFF_KEY = 'platizio:fundSchemes:liveSyncBackoffUntil:v2';
+const LIVE_SCHEME_SYNC_FAILURE_BACKOFF_MS = 15 * 60 * 1000;
+const DEFAULT_PAGE_SIZE = 12;
 const ASSET_FILTERS = ['All', 'MF', 'SIF'] as const;
 type AssetFilter = typeof ASSET_FILTERS[number];
 const normalizeRole = (role?: string) => role?.trim().toUpperCase() || '';
@@ -53,11 +56,15 @@ export default function Ledger({ userData }: { userData?: any }) {
   const [typeFilter, setTypeFilter]     = useState('All');
   const [search, setSearch]             = useState('');
   const debouncedSearch                 = useDebounce(search, 300);
-  const [page, setPage]                 = useState(1);
+  const [page, setPage]                 = useState(0);
+  const [size, setSize]                 = useState(DEFAULT_PAGE_SIZE);
+  const [totalPages, setTotalPages]     = useState(1);
+  const [totalElements, setTotalElements] = useState(0);
+  const [backendPaged, setBackendPaged] = useState(false);
   const [investModal, setInvestModal]   = useState<any | null>(null);
   const [detailModal, setDetailModal]   = useState<any | null>(null);
   const refreshInFlightRef = useRef(false);
-  const canRefreshLiveSchemes = normalizeRole(userData?.role) === 'ADMIN';
+  const catalogSyncedOnMountRef = useRef(false);
 
   const readJsonSafely = async (response: Response) => {
     const text = await response.text();
@@ -69,61 +76,102 @@ export default function Ledger({ userData }: { userData?: any }) {
     }
   };
 
-  const shouldSyncLiveOnLoad = () => {
-    if (!canRefreshLiveSchemes) return false;
-    const lastSync = Number(window.localStorage.getItem(LIVE_SCHEME_SYNC_KEY) || 0);
-    return !lastSync || Date.now() - lastSync >= LIVE_SCHEME_SYNC_INTERVAL_MS;
+  const liveSyncBackoffRemainingMs = () => {
+    const backoffUntil = Number(window.localStorage.getItem(LIVE_SCHEME_SYNC_BACKOFF_KEY) || 0);
+    return Math.max(backoffUntil - Date.now(), 0);
   };
 
-  const fetchSchemes = async (isRefresh = false) => {
-    if (isRefresh && !canRefreshLiveSchemes) {
-      return fetchSchemes(false);
+  const markLiveSyncBackoff = () => {
+    window.localStorage.setItem(
+      LIVE_SCHEME_SYNC_BACKOFF_KEY,
+      String(Date.now() + LIVE_SCHEME_SYNC_FAILURE_BACKOFF_MS),
+    );
+  };
+
+  const fetchSchemes = async (options?: { syncFromCybrilla?: boolean; forceRefresh?: boolean }) => {
+    const syncFromCybrilla = options?.syncFromCybrilla ?? false;
+    const forceRefresh = options?.forceRefresh ?? false;
+    const backoffRemainingMs = syncFromCybrilla ? liveSyncBackoffRemainingMs() : 0;
+    let useCybrillaSync = syncFromCybrilla;
+    if (backoffRemainingMs > 0) {
+      useCybrillaSync = false;
     }
 
-    if (isRefresh && refreshInFlightRef.current) return;
-    if (isRefresh) refreshInFlightRef.current = true;
-    if (isRefresh) setRefreshing(true);
+    if (useCybrillaSync && refreshInFlightRef.current) return;
+    if (useCybrillaSync) refreshInFlightRef.current = true;
+    if (useCybrillaSync) setRefreshing(true);
     else setLoading(true);
-    setError('');
+    setError(
+      backoffRemainingMs > 0
+        ? `Live Cybrilla sync is cooling down. Showing cached products; try again in ${Math.ceil(backoffRemainingMs / 60000)} min.`
+        : '',
+    );
+    const requestPage = useCybrillaSync && forceRefresh ? 0 : page;
+    const params = new URLSearchParams({ page: String(requestPage), size: String(size) });
+    if (debouncedSearch.trim()) params.set('query', debouncedSearch.trim());
+    if (assetFilter !== 'All') params.set('assetClass', assetFilter);
+    if (categoryFilter !== 'All') params.set('category', categoryFilter);
+    if (typeFilter !== 'All') params.set('productType', typeFilter);
+    if (useCybrillaSync) params.set('syncFromCybrilla', 'true');
+    const listEndpoint = `/products/schemes/page?${params.toString()}`;
     console.groupCollapsed('[Cybrilla Workflow] Display fund schemes');
     console.log('frontend_route=', '/distributor/ledger');
-    console.log('frontend_request=', isRefresh ? 'POST /api/v1/products/schemes/refresh' : 'GET /api/v1/products/schemes');
-    console.log('backend_expected_external_call=', isRefresh ? 'GET https://s.finprim.com/v2/mf_scheme_plans/cybrillapoa?expand=mf_scheme,mf_fund&page=0&size=100' : 'none; using locally cached schemes');
+    console.log('frontend_request=', `GET /api/v1/products/schemes/page${useCybrillaSync ? '?syncFromCybrilla=true' : ''}`);
+    console.log(
+      'backend_expected_external_call=',
+      useCybrillaSync
+        ? 'GET https://s.finprim.com/api/oms/fund_schemes (paginated); replaces MF rows in product_schemes'
+        : 'none; reading product_schemes from local DB',
+    );
     console.log('frontend_note=', 'Browser calls Platizio backend only. Backend uses the currently valid server-side bearer token and never exposes credentials to the frontend.');
 
     try {
-      const res = await apiFetch(isRefresh ? '/products/schemes/refresh' : '/products/schemes', { method: isRefresh ? 'POST' : 'GET' });
+      const res = await apiFetch(listEndpoint);
       const data = await readJsonSafely(res);
+      const pageContent = getPageContent(data);
       console.log('frontend_response=', {
         status: res.status,
         ok: res.ok,
-        count: Array.isArray(data) ? data.length : undefined,
-        sample: Array.isArray(data) ? data.slice(0, 3) : data,
+        count: pageContent.length,
+        sample: pageContent.slice(0, 3),
       });
 
       if (!res.ok) throw new Error(typeof data === 'string' ? data : data?.message || `HTTP ${res.status}`);
-      // Only show active schemes
-      const active = (Array.isArray(data) ? data : []).filter((s: any) => s.active !== false);
-      setSchemes(active);
-      setPage(1);
-
-      if (isRefresh) {
+      if (useCybrillaSync) {
         window.localStorage.setItem(LIVE_SCHEME_SYNC_KEY, String(Date.now()));
+        window.localStorage.removeItem(LIVE_SCHEME_SYNC_BACKOFF_KEY);
+        if (forceRefresh) setPage(0);
       }
+      const isPaged = isPagePayload(data);
+      const meta = getPageMeta(data, pageContent.length);
+      const active = pageContent.filter((s: any) => s.active !== false);
+      setBackendPaged(isPaged);
+      setSchemes(active);
+      setTotalPages(isPaged ? meta.totalPages : Math.max(Math.ceil(active.length / Math.max(size, 1)), 1));
+      setTotalElements(isPaged ? meta.totalElements : active.length);
 
       console.log('workflow_status=', 'completed');
     } catch (e: any) {
       console.error('Error fetching product schemes:', e);
       console.error('workflow_status=', 'failed');
-      if (isRefresh) {
+      if (useCybrillaSync) {
+        markLiveSyncBackoff();
         try {
-          console.log('fallback_request=', 'GET /api/v1/products/schemes');
-          const cachedRes = await apiFetch('/products/schemes');
+          console.log('fallback_request=', 'GET /api/v1/products/schemes/page from local DB');
+          const fallbackParams = new URLSearchParams(params);
+          fallbackParams.delete('syncFromCybrilla');
+          const cachedRes = await apiFetch(`/products/schemes/page?${fallbackParams.toString()}`);
           const cachedData = cachedRes.ok ? await cachedRes.json() : [];
-          const cachedActive = (Array.isArray(cachedData) ? cachedData : []).filter((s: any) => s.active !== false);
+          const cachedContent = getPageContent(cachedData);
+          const cachedActive = cachedContent.filter((s: any) => s.active !== false);
+          const isPaged = isPagePayload(cachedData);
+          const meta = getPageMeta(cachedData, cachedContent.length);
+          setBackendPaged(isPaged);
           setSchemes(cachedActive);
+          setTotalPages(isPaged ? meta.totalPages : Math.max(Math.ceil(cachedActive.length / Math.max(size, 1)), 1));
+          setTotalElements(isPaged ? meta.totalElements : cachedActive.length);
           if (cachedActive.length > 0) {
-            setError('Showing locally cached products because live Cybrilla fetch failed.');
+            setError('Showing locally cached products because live Cybrilla sync is temporarily unavailable.');
           } else {
             setError('Failed to refresh products from Cybrilla. Please try again later.');
           }
@@ -143,11 +191,13 @@ export default function Ledger({ userData }: { userData?: any }) {
   };
 
   useEffect(() => {
-    fetchSchemes(shouldSyncLiveOnLoad());
-  }, [canRefreshLiveSchemes]);
+    const syncOnOpen = !catalogSyncedOnMountRef.current;
+    if (syncOnOpen) catalogSyncedOnMountRef.current = true;
+    fetchSchemes({ syncFromCybrilla: syncOnOpen });
+  }, [page, size, debouncedSearch, assetFilter, categoryFilter, typeFilter]);
 
   useEffect(() => {
-    setPage(1);
+    setPage(0);
   }, [assetFilter, categoryFilter, typeFilter, debouncedSearch]);
 
   // Derived filter options
@@ -176,21 +226,21 @@ export default function Ledger({ userData }: { userData?: any }) {
   });
 
   const filtersActive = assetFilter !== 'All' || categoryFilter !== 'All' || typeFilter !== 'All' || debouncedSearch.trim() !== '';
-  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
-  const currentPage = Math.min(page, totalPages);
-  const pageStart = (currentPage - 1) * PAGE_SIZE;
-  const paginated = filtered.slice(pageStart, pageStart + PAGE_SIZE);
-  const pageEnd = Math.min(pageStart + paginated.length, filtered.length);
-  const firstPageButton = Math.min(Math.max(1, currentPage - 2), Math.max(1, totalPages - 4));
-  const pageButtons = Array.from({ length: Math.min(5, totalPages) }, (_, index) => firstPageButton + index)
-    .filter(pageNumber => pageNumber <= totalPages);
+  const hasClientOnlyFilters = assetFilter !== 'All' || categoryFilter !== 'All' || typeFilter !== 'All';
+  const effectiveTotalElements = backendPaged && !hasClientOnlyFilters ? totalElements : filtered.length;
+  const effectiveTotalPages = backendPaged
+    ? (hasClientOnlyFilters ? Math.max(1, Math.ceil(effectiveTotalElements / Math.max(size, 1))) : totalPages)
+    : Math.max(1, Math.ceil(effectiveTotalElements / Math.max(size, 1)));
+  const currentPage = Math.min(page, Math.max(effectiveTotalPages - 1, 0));
+  const pageStart = currentPage * size;
+  const paginated = backendPaged ? filtered : filtered.slice(pageStart, pageStart + size);
 
   const clearFilters = () => {
     setAssetFilter('All');
     setCategoryFilter('All');
     setTypeFilter('All');
     setSearch('');
-    setPage(1);
+    setPage(0);
   };
 
   return (
@@ -203,27 +253,16 @@ export default function Ledger({ userData }: { userData?: any }) {
         </div>
         <div className="flex items-center gap-3">
           <p className="text-xs text-slate-500">
-            <span className="font-semibold text-slate-700">{filtered.length}</span> products available
+            <span className="font-semibold text-slate-700">{effectiveTotalElements}</span> products available
           </p>
-          {canRefreshLiveSchemes ? (
-            <button
-              onClick={() => fetchSchemes(true)}
-              disabled={refreshing}
-              className="flex items-center gap-2 px-3 py-2 text-xs font-semibold bg-white border border-slate-200 text-slate-600 rounded-lg hover:bg-slate-50 transition-colors disabled:opacity-50"
-            >
-              <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? 'animate-spin' : ''}`} />
-              {refreshing ? 'Syncing...' : 'Sync from Cybrilla'}
-            </button>
-          ) : (
-            <button
-              onClick={() => fetchSchemes(false)}
-              disabled={loading}
-              className="flex items-center gap-2 px-3 py-2 text-xs font-semibold bg-white border border-slate-200 text-slate-600 rounded-lg hover:bg-slate-50 transition-colors disabled:opacity-50"
-            >
-              <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
-              {loading ? 'Refreshing...' : 'Refresh'}
-            </button>
-          )}
+          <button
+            onClick={() => fetchSchemes({ syncFromCybrilla: true, forceRefresh: true })}
+            disabled={refreshing}
+            className="flex items-center gap-2 px-3 py-2 text-xs font-semibold bg-white border border-slate-200 text-slate-600 rounded-lg hover:bg-slate-50 transition-colors disabled:opacity-50"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? 'animate-spin' : ''}`} />
+            {refreshing ? 'Syncing...' : 'Sync from Cybrilla'}
+          </button>
         </div>
       </div>
 
@@ -295,11 +334,11 @@ export default function Ledger({ userData }: { userData?: any }) {
           <AlertCircle className="w-12 h-12 text-red-300 mx-auto mb-4" />
           <p className="font-semibold text-slate-700 mb-2">{error}</p>
           <button
-            onClick={() => fetchSchemes()}
+            onClick={() => fetchSchemes({ syncFromCybrilla: true, forceRefresh: true })}
             className="text-sm text-blue-600 hover:underline font-medium"
           >Try again</button>
         </div>
-      ) : filtered.length === 0 ? (
+      ) : paginated.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-24 text-slate-400">
           <div className="w-14 h-14 rounded-2xl bg-slate-100 flex items-center justify-center mb-4">
             <Info className="w-6 h-6 text-slate-300" />
@@ -310,28 +349,22 @@ export default function Ledger({ userData }: { userData?: any }) {
           <p className="text-sm mt-1">
             {filtersActive
               ? 'Try a different MF/SIF, category, type, or search filter.'
-              : canRefreshLiveSchemes
-                ? 'No cached products found. Sync once from Cybrilla to populate the catalog.'
-                : 'No cached products found yet. Please ask an admin to sync products from Cybrilla.'}
+              : 'No products found. Sync from Cybrilla to load the live fund catalogue.'}
           </p>
           <button
             onClick={() => {
               if (filtersActive) clearFilters();
-              else fetchSchemes(canRefreshLiveSchemes);
+              else fetchSchemes({ syncFromCybrilla: true, forceRefresh: true });
             }}
-            disabled={!filtersActive && (canRefreshLiveSchemes ? refreshing : loading)}
+            disabled={!filtersActive && refreshing}
             className="mt-5 flex items-center gap-2 px-4 py-2 text-sm font-semibold bg-[#0B1B3E] text-white rounded-lg hover:bg-[#1A3066] transition-colors disabled:opacity-50"
           >
             {filtersActive ? (
               <X className="w-4 h-4" />
             ) : (
-              <RefreshCw className={`w-4 h-4 ${(canRefreshLiveSchemes ? refreshing : loading) ? 'animate-spin' : ''}`} />
+              <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />
             )}
-            {filtersActive
-              ? 'Clear filters'
-              : canRefreshLiveSchemes
-                ? refreshing ? 'Syncing...' : 'Sync from Cybrilla'
-                : loading ? 'Refreshing...' : 'Refresh'}
+            {filtersActive ? 'Clear filters' : refreshing ? 'Syncing...' : 'Sync from Cybrilla'}
           </button>
         </div>
       ) : (
@@ -398,46 +431,16 @@ export default function Ledger({ userData }: { userData?: any }) {
             );
           })}
         </div>
-        {filtered.length > PAGE_SIZE && (
-          <div className="mt-6 flex flex-col sm:flex-row items-center justify-between gap-3">
-            <p className="text-xs text-slate-500">
-              Showing <span className="font-semibold text-slate-700">{pageStart + 1}</span>
-              {' '}to <span className="font-semibold text-slate-700">{pageEnd}</span>
-              {' '}of <span className="font-semibold text-slate-700">{filtered.length}</span> products
-            </p>
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => setPage(Math.max(1, currentPage - 1))}
-                disabled={currentPage === 1}
-                className="flex items-center gap-1 px-3 py-2 text-xs font-semibold bg-white border border-slate-200 text-slate-600 rounded-lg hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed"
-              >
-                <ChevronLeft className="w-3.5 h-3.5" />
-                Prev
-              </button>
-              <div className="flex items-center gap-1">
-                {pageButtons.map(pageNumber => (
-                  <button
-                    key={pageNumber}
-                    onClick={() => setPage(pageNumber)}
-                    className={`w-8 h-8 text-xs font-semibold rounded-lg transition-colors ${
-                      currentPage === pageNumber
-                        ? 'bg-[#0B1B3E] text-white'
-                        : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
-                    }`}
-                  >
-                    {pageNumber}
-                  </button>
-                ))}
-              </div>
-              <button
-                onClick={() => setPage(Math.min(totalPages, currentPage + 1))}
-                disabled={currentPage === totalPages}
-                className="flex items-center gap-1 px-3 py-2 text-xs font-semibold bg-white border border-slate-200 text-slate-600 rounded-lg hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed"
-              >
-                Next
-                <ChevronRight className="w-3.5 h-3.5" />
-              </button>
-            </div>
+        {effectiveTotalElements > size && (
+          <div className="mt-6 rounded-2xl border border-slate-200 bg-white shadow-sm">
+            <Pagination
+              page={currentPage}
+              size={size}
+              totalPages={effectiveTotalPages}
+              totalElements={effectiveTotalElements}
+              onPageChange={setPage}
+              onSizeChange={nextSize => { setSize(nextSize); setPage(0); }}
+            />
           </div>
         )}
         </>

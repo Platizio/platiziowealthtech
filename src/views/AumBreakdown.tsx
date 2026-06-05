@@ -6,6 +6,7 @@ import {
   Tooltip, ResponsiveContainer, Legend,
 } from 'recharts';
 import { apiFetch } from '../config/api';
+import { getPageContent } from '../utils/pagination';
 
 const typeBadge: Record<string, string> = {
   INSTITUTIONAL: 'bg-blue-100 text-blue-700',
@@ -139,7 +140,7 @@ export default function AumBreakdown({ onBack, userData }: AumBreakdownProps) {
 
         const orders: any[] = ordersRes.ok ? await ordersRes.json() : [];
         const investors: any[] = investorsRes.ok ? await investorsRes.json() : [];
-        const schemes: any[] = schemesRes.ok ? await schemesRes.json() : [];
+        const schemes: any[] = schemesRes.ok ? getPageContent(await schemesRes.json()) : [];
 
         const schemeMap = new Map(schemes.map(s => [s.id, s]));
         const investorMap = new Map(investors.map(i => [i.id, i]));

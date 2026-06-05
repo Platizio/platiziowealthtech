@@ -34,6 +34,8 @@ const SipDashboard        = lazy(() => import('./views/SipDashboard'));
 const ActionCenter        = lazy(() => import('./views/ActionCenter'));
 const InvestorOnboarding  = lazy(() => import('./views/InvestorOnboarding'));
 const InvestorTransaction = lazy(() => import('./views/InvestorTransaction'));
+const InvestorKycModify   = lazy(() => import('./views/InvestorKycModify'));
+const InvestorRedeem      = lazy(() => import('./views/InvestorRedeem'));
 const Portfolio           = lazy(() => import('./views/Portfolio'));
 const Reports             = lazy(() => import('./views/Reports'));
 const BulkOrderUpload     = lazy(() => import('./views/BulkOrderUpload'));
@@ -218,6 +220,17 @@ export default function App() {
           <Route path="/distributor/investor-onboarding" element={<InvestorOnboardingWrapper userData={userData} />} />
           <Route path="/distributor/investor-transaction" element={<InvestorTransactionWrapper />} />
 
+          {/* Cybrilla POA KYC Forms (modify) workflow. The two callback paths are
+              where the investor is redirected back after the Digilocker and eSign
+              journeys (proof_details_callback_url / esign_callback_url). */}
+          <Route path="/distributor/investors/:investorId/kyc-modify" element={<InvestorKycModify />} />
+          <Route path="/distributor/investors/:investorId/kyc-modify/:action" element={<InvestorKycModify />} />
+
+          {/* Redeem (sell) an investor's mutual-fund holdings. Lists completed
+              purchase orders for the investor and submits a redemption against
+              the chosen holding via POST /api/v1/orders/{orderId}/redemption. */}
+          <Route path="/distributor/investors/:investorId/redeem" element={<InvestorRedeem userData={userData} />} />
+
           {/* Admin Routes */}
           {canAccessAdmin ? (
             <>
@@ -250,7 +263,21 @@ function InvestorOnboardingWrapper({ userData }: { userData?: any }) {
   const location = useLocation();
   const navigate = useNavigate();
   const prospect = location.state?.prospect || null;
-  return <InvestorOnboarding prospect={prospect} userData={userData} onComplete={() => navigate('/distributor/investors')} onBack={() => navigate('/distributor/leads')} />;
+  const investor = location.state?.investor || null;
+  const investorId = location.state?.investorId || investor?.id || null;
+  const resumeStep = location.state?.resumeStep || null;
+  const returnTo = location.state?.returnTo || (prospect ? '/distributor/leads' : '/distributor/investors');
+  return (
+    <InvestorOnboarding
+      prospect={prospect}
+      resumeInvestor={investor}
+      resumeInvestorId={investorId}
+      resumeStep={resumeStep}
+      userData={userData}
+      onComplete={() => navigate('/distributor/investors')}
+      onBack={() => navigate(returnTo)}
+    />
+  );
 }
 
 function InvestorTransactionWrapper() {

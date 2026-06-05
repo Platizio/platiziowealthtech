@@ -1,4 +1,5 @@
 import React from 'react';
+import { useNavigate } from 'react-router-dom';
 import { motion } from 'motion/react';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts';
 import {
@@ -7,6 +8,7 @@ import {
   Briefcase, Activity, Target, Gift,
 } from 'lucide-react';
 import { apiFetch } from '../config/api';
+import { getPageContent } from '../utils/pagination';
 
 /* ── Props ──────────────────────────────────────────────────────────────── */
 interface DashboardProps {
@@ -39,6 +41,16 @@ interface DashboardAction {
 }
 
 export default function Dashboard({ onNavigate, userData }: DashboardProps) {
+  const navigate = useNavigate();
+
+  // Opens the investor's detail page in the Investors view. The pipeline card
+  // id is the investor UUID (OnboardingCardDto.id), and Investors.tsx reads
+  // location.state.focusInvestorId to auto-open that investor.
+  const openInvestor = (investorId: string) => {
+    if (!investorId) return;
+    navigate('/distributor/investors', { state: { focusInvestorId: investorId } });
+  };
+
   const [metrics, setMetrics] = React.useState({
     totalAum: 0,
     investorCount: 0,
@@ -79,7 +91,7 @@ export default function Dashboard({ onNavigate, userData }: DashboardProps) {
         let onboarding: OnboardingPipeline = { kycPending: [], bankPending: [], readyToInvest: [] };
         if (ordersRes.ok) orders = await ordersRes.json();
         if (investorsRes.ok) investors = await investorsRes.json();
-        if (schemesRes.ok) schemes = await schemesRes.json();
+        if (schemesRes.ok) schemes = getPageContent(await schemesRes.json());
         if (leadsRes.ok) leads = await leadsRes.json();
         if (onboardingRes.ok) onboarding = await onboardingRes.json();
         if (actionsRes.ok) actions = await actionsRes.json();
@@ -355,7 +367,10 @@ export default function Dashboard({ onNavigate, userData }: DashboardProps) {
         <div className="col-span-1 lg:col-span-2 bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden flex flex-col">
           <div className="p-5 border-b border-slate-100 flex justify-between items-center">
             <h2 className="font-semibold text-slate-800">Onboarding Pipeline</h2>
-            <button className="text-[#0B1B3E] text-xs font-semibold flex items-center gap-1 hover:underline">
+            <button
+              onClick={() => onNavigate('investors')}
+              className="text-[#0B1B3E] text-xs font-semibold flex items-center gap-1 hover:underline"
+            >
               View All <ArrowUpRight className="w-3 h-3" />
             </button>
           </div>
@@ -363,17 +378,17 @@ export default function Dashboard({ onNavigate, userData }: DashboardProps) {
             <div className="flex gap-4 min-w-max">
               <KanbanColumn title="KYC Pending" count={metrics.onboarding.kycPending.length} accent="border-t-amber-400">
                 {metrics.onboarding.kycPending.map((item) => (
-                  <KanbanCard key={item.id} name={item.name} detail={item.detail} days={item.days} status={item.status} />
+                  <KanbanCard key={item.id} name={item.name} detail={item.detail} days={item.days} status={item.status} onClick={() => openInvestor(item.id)} />
                 ))}
               </KanbanColumn>
               <KanbanColumn title="Bank Pending" count={metrics.onboarding.bankPending.length} accent="border-t-blue-400">
                 {metrics.onboarding.bankPending.map((item) => (
-                  <KanbanCard key={item.id} name={item.name} detail={item.detail} days={item.days} status={item.status} />
+                  <KanbanCard key={item.id} name={item.name} detail={item.detail} days={item.days} status={item.status} onClick={() => openInvestor(item.id)} />
                 ))}
               </KanbanColumn>
               <KanbanColumn title="Ready to Invest" count={metrics.onboarding.readyToInvest.length} accent="border-t-green-400">
                 {metrics.onboarding.readyToInvest.map((item) => (
-                  <KanbanCard key={item.id} name={item.name} detail={item.detail} days={item.days} status={item.status} />
+                  <KanbanCard key={item.id} name={item.name} detail={item.detail} days={item.days} status={item.status} onClick={() => openInvestor(item.id)} />
                 ))}
               </KanbanColumn>
             </div>
@@ -570,11 +585,17 @@ const statusColors: Record<string, string> = {
   failed: 'bg-red-100   text-red-700',
 };
 
-function KanbanCard({ name, detail, days, status }: {
-  key?: React.Key; name: string; detail: string; days: string; status: string;
+function KanbanCard({ name, detail, days, status, onClick }: {
+  key?: React.Key; name: string; detail: string; days: string; status: string; onClick?: () => void;
 }) {
   return (
-    <div className="bg-white p-3 rounded-lg shadow-sm border border-slate-200 hover:border-blue-300 transition-colors cursor-pointer group">
+    <div
+      onClick={onClick}
+      role={onClick ? 'button' : undefined}
+      tabIndex={onClick ? 0 : undefined}
+      onKeyDown={onClick ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick(); } } : undefined}
+      className="bg-white p-3 rounded-lg shadow-sm border border-slate-200 hover:border-blue-300 transition-colors cursor-pointer group"
+    >
       <p className="text-sm font-semibold text-slate-800 group-hover:text-blue-600 transition-colors mb-1">{name}</p>
       <p className="text-xs text-slate-500 mb-2">{detail}</p>
       <div className="flex justify-between items-center">
