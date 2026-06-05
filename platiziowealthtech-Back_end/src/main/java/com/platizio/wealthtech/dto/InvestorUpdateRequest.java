@@ -10,6 +10,9 @@ public record InvestorUpdateRequest(
         String fullName,
         String mobileNumber,
         String email,
+        @Size(min = 10, max = 10, message = "PAN must be exactly 10 characters")
+        @Pattern(regexp = "^[A-Z]{5}[0-9]{4}[A-Z]$", message = "Invalid PAN format. Expected format: AAAAA9999A")
+        String pan,
         LocalDate dateOfBirth,
         LocalDate anniversaryDate,
         LocalDate goalMaturityDate,

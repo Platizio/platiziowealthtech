@@ -33,6 +33,7 @@ import java.util.UUID;
 import java.util.regex.Pattern;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.PageRequest;
+import org.springframework.http.HttpStatus;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.security.access.AccessDeniedException;
@@ -42,6 +43,7 @@ import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.util.StringUtils;
+import org.springframework.web.client.RestClientResponseException;
 
 @Service
 public class InvestorKycService {
@@ -106,6 +108,18 @@ public class InvestorKycService {
         return new InvestorPreVerificationResponse(response);
     }
 
+    /**
+     * Clears saved POA/KYC attempt metadata after the investor's identity fields
+     * (PAN, name, DOB, etc.) change so the next check runs against the new data.
+     */
+    @Transactional
+    public void resetKycStateForIdentityChange(Investor investor) {
+        if (investor == null || investor.getKycStatus() == KycStatus.COMPLETED) {
+            return;
+        }
+        resetKycAttemptState(investor);
+    }
+
     @Transactional
     public InvestorExternalKycResponse createKycCheck(UUID investorId, InvestorKycCheckRequest request, UUID actorId) {
         Investor investor = getAuthorizedInvestor(investorId, actorId);
@@ -114,6 +128,35 @@ public class InvestorKycService {
         }
         investor = ensureExternalInvestorProfileBeforeKyc(investor, actorId);
         validateCybrillaSandboxPan(normalizePan(investor.getPan()));
+
+        boolean forceNewCheck = request != null && Boolean.TRUE.equals(request.forceNewCheck());
+        if (forceNewCheck) {
+            resetKycAttemptState(investor);
+        }
+
+        // Make the endpoint idempotent for repeated UI clicks: if we already have
+        // a saved pre-verification id, refresh that status instead of creating a
+        // brand-new POA check every time.
+        if (!forceNewCheck && StringUtils.hasText(investor.getExternalKycCheckId())) {
+            try {
+                JsonNode existingResponse = cybrillaClient.fetchKycCheck(investor.getExternalKycCheckId());
+                applyKycCheckResponse(investor, existingResponse);
+                Investor saved = saveAndStartBankVerificationIfKycComplete(investor, actorId, "kyc_check_reused");
+                auditService.log("INVESTOR", saved.getId(), "KYC_CHECK_REUSED", actorId, auditDetails(saved));
+                return new InvestorExternalKycResponse(saved, existingResponse);
+            } catch (CybrillaApiException ex) {
+                if (!isNotFound(ex)) {
+                    throw ex;
+                }
+                logger.info(
+                        "external_kyc status='stale_kyc_check_reference' investor_id='{}' external_kyc_check_id='{}' action='create_new_check'",
+                        investor.getId(),
+                        investor.getExternalKycCheckId()
+                );
+                clearStaleKycCheckReference(investor);
+            }
+        }
+
         JsonNode response = cybrillaClient.createKycCheck(investor);
         applyKycCheckResponse(investor, response);
         Investor saved = saveAndStartBankVerificationIfKycComplete(investor, actorId, "kyc_check_created");
@@ -423,6 +466,21 @@ public class InvestorKycService {
     private boolean hasSavedExternalKycReference(Investor investor) {
         return StringUtils.hasText(investor.getExternalKycCheckId())
                 || StringUtils.hasText(investor.getExternalKycRequestId());
+    }
+
+    private void clearStaleKycCheckReference(Investor investor) {
+        investor.setExternalKycCheckId(null);
+        investor.setExternalKycStatus(null);
+        investor.setExternalKycPayloadJson(null);
+    }
+
+    private boolean isNotFound(CybrillaApiException ex) {
+        Throwable cause = ex.getCause();
+        if (cause instanceof RestClientResponseException responseEx) {
+            return HttpStatus.NOT_FOUND.equals(responseEx.getStatusCode());
+        }
+        String message = ex.getMessage();
+        return message != null && message.contains("404");
     }
 
     /**

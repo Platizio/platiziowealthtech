@@ -77,8 +77,104 @@ DELETE FROM investor_bank_accounts
 DELETE FROM investors
  WHERE id = 'b75fef2e-7440-42f0-9ef2-5b9db054e526';
 
--- ─────────────────────────────────────────────────────────────────────────
+-- -------------------------------------------------------------------------
 -- 7. Test Distributor seeded by V23 (email a@a.com)
--- ─────────────────────────────────────────────────────────────────────────
+-- -------------------------------------------------------------------------
+-- In older DBs this distributor can accumulate extra runtime data (new
+-- investors, orders, reminders, etc.). If we delete only the distributor row,
+-- FK constraints (for example fk_investors_distributor) fail. Clean every
+-- dependent row first, then remove the distributor.
+--
+-- Keep this section idempotent and scoped only to this distributor id.
+-- -------------------------------------------------------------------------
+
+-- 7a) Child rows linked to any investor under this distributor.
+DELETE FROM investor_documents
+ WHERE investor_id IN (
+    SELECT id FROM investors WHERE distributor_id = '4317cfd2-a41f-4320-a5dc-26835c7210ac'
+ )
+    OR distributor_id = '4317cfd2-a41f-4320-a5dc-26835c7210ac'
+    OR uploaded_by = '4317cfd2-a41f-4320-a5dc-26835c7210ac';
+
+DELETE FROM life_event_reminders
+ WHERE investor_id IN (
+    SELECT id FROM investors WHERE distributor_id = '4317cfd2-a41f-4320-a5dc-26835c7210ac'
+ )
+    OR distributor_id = '4317cfd2-a41f-4320-a5dc-26835c7210ac';
+
+DELETE FROM notifications
+ WHERE investor_id IN (
+    SELECT id FROM investors WHERE distributor_id = '4317cfd2-a41f-4320-a5dc-26835c7210ac'
+ )
+    OR distributor_id = '4317cfd2-a41f-4320-a5dc-26835c7210ac';
+
+DELETE FROM redemption_records
+ WHERE investor_id IN (
+    SELECT id FROM investors WHERE distributor_id = '4317cfd2-a41f-4320-a5dc-26835c7210ac'
+ )
+    OR order_id IN (
+        SELECT id
+          FROM transaction_orders
+         WHERE distributor_id = '4317cfd2-a41f-4320-a5dc-26835c7210ac'
+            OR investor_id IN (
+                SELECT id FROM investors WHERE distributor_id = '4317cfd2-a41f-4320-a5dc-26835c7210ac'
+            )
+    );
+
+DELETE FROM transaction_orders
+ WHERE distributor_id = '4317cfd2-a41f-4320-a5dc-26835c7210ac'
+    OR investor_id IN (
+        SELECT id FROM investors WHERE distributor_id = '4317cfd2-a41f-4320-a5dc-26835c7210ac'
+    );
+
+DELETE FROM investor_bank_accounts
+ WHERE investor_id IN (
+    SELECT id FROM investors WHERE distributor_id = '4317cfd2-a41f-4320-a5dc-26835c7210ac'
+ );
+
+DELETE FROM lead_interactions
+ WHERE distributor_id = '4317cfd2-a41f-4320-a5dc-26835c7210ac'
+    OR lead_id IN (
+        SELECT id
+          FROM investor_leads
+         WHERE assigned_distributor_id = '4317cfd2-a41f-4320-a5dc-26835c7210ac'
+            OR converted_investor_id IN (
+                SELECT id FROM investors WHERE distributor_id = '4317cfd2-a41f-4320-a5dc-26835c7210ac'
+            )
+    );
+
+DELETE FROM investor_leads
+ WHERE assigned_distributor_id = '4317cfd2-a41f-4320-a5dc-26835c7210ac'
+    OR converted_investor_id IN (
+        SELECT id FROM investors WHERE distributor_id = '4317cfd2-a41f-4320-a5dc-26835c7210ac'
+    );
+
+-- 7b) Break cross-entity references to those investors/distributor.
+UPDATE investors
+   SET guardian_investor_id = NULL
+ WHERE guardian_investor_id IN (
+    SELECT id FROM investors WHERE distributor_id = '4317cfd2-a41f-4320-a5dc-26835c7210ac'
+ );
+
+UPDATE distributors
+   SET master_distributor_id = NULL
+ WHERE master_distributor_id = '4317cfd2-a41f-4320-a5dc-26835c7210ac';
+
+DELETE FROM password_reset_tokens
+ WHERE distributor_id = '4317cfd2-a41f-4320-a5dc-26835c7210ac';
+
+DELETE FROM refresh_tokens
+ WHERE distributor_id = '4317cfd2-a41f-4320-a5dc-26835c7210ac';
+
+DELETE FROM audit_events
+ WHERE actor_id = '4317cfd2-a41f-4320-a5dc-26835c7210ac'
+    OR entity_id IN (
+        SELECT id FROM investors WHERE distributor_id = '4317cfd2-a41f-4320-a5dc-26835c7210ac'
+    );
+
+-- 7c) Remove investors, then distributor (parent row) last.
+DELETE FROM investors
+ WHERE distributor_id = '4317cfd2-a41f-4320-a5dc-26835c7210ac';
+
 DELETE FROM distributors
  WHERE id = '4317cfd2-a41f-4320-a5dc-26835c7210ac';

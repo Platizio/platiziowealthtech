@@ -47,6 +47,7 @@ public class InvestorService implements BankVerificationStarter {
     private final CybrillaClient cybrillaClient;
     private final long scheduledBankSyncFailureBackoffMs;
     private volatile long scheduledBankSyncBackoffUntilEpochMillis;
+    private InvestorKycService investorKycService;
 
     public InvestorService(
             InvestorRepository investorRepository,
@@ -73,6 +74,11 @@ public class InvestorService implements BankVerificationStarter {
         this.auditService = auditService;
         this.cybrillaClient = cybrillaClient;
         this.scheduledBankSyncFailureBackoffMs = Math.max(0, scheduledBankSyncFailureBackoffMs);
+    }
+
+    @Autowired(required = false)
+    public void setInvestorKycService(InvestorKycService investorKycService) {
+        this.investorKycService = investorKycService;
     }
 
     public List<Investor> listByDistributor(UUID distributorId) {
@@ -781,10 +787,32 @@ public class InvestorService implements BankVerificationStarter {
         if (actorId != null) {
             assertCanManageInvestor(actorId, investor, "Cannot update another distributor's investor");
         }
-        if (request.fullName() != null) investor.setFullName(request.fullName());
+        boolean identityChanged = false;
+        if (request.pan() != null) {
+            String newPan = normalizePan(request.pan());
+            if (newPan != null && !newPan.equals(investor.getPan())) {
+                if (investor.getKycStatus() == KycStatus.COMPLETED) {
+                    throw new IllegalArgumentException("PAN cannot be changed after KYC is completed");
+                }
+                investorRepository.findByPan(newPan).ifPresent(existing -> {
+                    if (!existing.getId().equals(investorId)) {
+                        throw new DuplicateResourceException("An investor with this PAN already exists");
+                    }
+                });
+                investor.setPan(newPan);
+                identityChanged = true;
+            }
+        }
+        if (request.fullName() != null && !request.fullName().equals(investor.getFullName())) {
+            investor.setFullName(request.fullName());
+            identityChanged = true;
+        }
         if (request.mobileNumber() != null) investor.setMobileNumber(request.mobileNumber());
         if (request.email() != null) investor.setEmail(request.email());
-        if (request.dateOfBirth() != null) investor.setDateOfBirth(request.dateOfBirth());
+        if (request.dateOfBirth() != null && !request.dateOfBirth().equals(investor.getDateOfBirth())) {
+            investor.setDateOfBirth(request.dateOfBirth());
+            identityChanged = true;
+        }
         if (request.anniversaryDate() != null) investor.setAnniversaryDate(request.anniversaryDate());
         if (request.goalMaturityDate() != null) investor.setGoalMaturityDate(request.goalMaturityDate());
         if (request.addressLine1() != null) investor.setAddressLine1(request.addressLine1());
@@ -805,6 +833,9 @@ public class InvestorService implements BankVerificationStarter {
             );
         }
         if (request.onboardingNotes() != null) investor.setOnboardingNotes(request.onboardingNotes());
+        if (identityChanged && investor.getKycStatus() != KycStatus.COMPLETED && investorKycService != null) {
+            investorKycService.resetKycStateForIdentityChange(investor);
+        }
         Investor saved = investorRepository.save(investor);
         try {
             if (saved.getCybrillaInvestorId() == null || saved.getCybrillaInvestorId().isBlank()) {

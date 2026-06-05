@@ -127,6 +127,99 @@ class InvestorKycServiceTest {
     }
 
     @Test
+    void createKycCheckReusesSavedExternalCheckInsteadOfCreatingDuplicate() throws Exception {
+        UUID actorId = UUID.randomUUID();
+        UUID investorId = UUID.randomUUID();
+        Investor investor = investor(investorId, actorId);
+        investor.setExternalKycCheckId("pv_saved");
+        InvestorRepository investorRepository = mock(InvestorRepository.class);
+        CybrillaClient cybrillaClient = mock(CybrillaClient.class);
+        RecordingDistributorService distributorService = new RecordingDistributorService();
+        RecordingAuditService auditService = new RecordingAuditService();
+        distributorService.put(actorId, DistributorRole.SUB_DISTRIBUTOR);
+        when(investorRepository.findById(investorId)).thenReturn(Optional.of(investor));
+        when(investorRepository.save(any(Investor.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(cybrillaClient.fetchKycCheck("pv_saved")).thenReturn(json("""
+                {
+                  "object": "pre_verification",
+                  "id": "pv_saved",
+                  "status": "accepted"
+                }
+                """));
+
+        InvestorKycService service = service(investorRepository, distributorService, auditService, cybrillaClient);
+        InvestorExternalKycResponse response = service.createKycCheck(investorId, null, actorId);
+
+        verify(cybrillaClient).fetchKycCheck("pv_saved");
+        verify(cybrillaClient, never()).createKycCheck(any(Investor.class));
+        assertThat(response.externalResponse().path("id").asText()).isEqualTo("pv_saved");
+        assertThat(auditService.actionType).isEqualTo("KYC_CHECK_REUSED");
+    }
+
+    @Test
+    void createKycCheckCreatesNewWhenSavedCheckReferenceIsStale() throws Exception {
+        UUID actorId = UUID.randomUUID();
+        UUID investorId = UUID.randomUUID();
+        Investor investor = investor(investorId, actorId);
+        investor.setExternalKycCheckId("pv_stale");
+        InvestorRepository investorRepository = mock(InvestorRepository.class);
+        CybrillaClient cybrillaClient = mock(CybrillaClient.class);
+        RecordingDistributorService distributorService = new RecordingDistributorService();
+        RecordingAuditService auditService = new RecordingAuditService();
+        distributorService.put(actorId, DistributorRole.SUB_DISTRIBUTOR);
+        when(investorRepository.findById(investorId)).thenReturn(Optional.of(investor));
+        when(investorRepository.save(any(Investor.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(cybrillaClient.fetchKycCheck("pv_stale"))
+                .thenThrow(new CybrillaApiException("Unable to fetch POA pre verification with Cybrilla POA: 404"));
+        when(cybrillaClient.createKycCheck(any(Investor.class))).thenReturn(json("""
+                {
+                  "object": "pre_verification",
+                  "id": "pv_new",
+                  "status": "accepted"
+                }
+                """));
+
+        InvestorKycService service = service(investorRepository, distributorService, auditService, cybrillaClient);
+        InvestorExternalKycResponse response = service.createKycCheck(investorId, null, actorId);
+
+        verify(cybrillaClient).fetchKycCheck("pv_stale");
+        verify(cybrillaClient).createKycCheck(investor);
+        assertThat(response.investor().getExternalKycCheckId()).isEqualTo("pv_new");
+        assertThat(response.externalResponse().path("id").asText()).isEqualTo("pv_new");
+        assertThat(auditService.actionType).isEqualTo("KYC_CHECK_CREATED");
+    }
+
+    @Test
+    void createKycCheckWithForceFlagStartsNewPoaCheck() throws Exception {
+        UUID actorId = UUID.randomUUID();
+        UUID investorId = UUID.randomUUID();
+        Investor investor = investor(investorId, actorId);
+        investor.setExternalKycCheckId("pv_old");
+        InvestorRepository investorRepository = mock(InvestorRepository.class);
+        CybrillaClient cybrillaClient = mock(CybrillaClient.class);
+        RecordingDistributorService distributorService = new RecordingDistributorService();
+        RecordingAuditService auditService = new RecordingAuditService();
+        distributorService.put(actorId, DistributorRole.SUB_DISTRIBUTOR);
+        when(investorRepository.findById(investorId)).thenReturn(Optional.of(investor));
+        when(investorRepository.save(any(Investor.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(cybrillaClient.createKycCheck(any(Investor.class))).thenReturn(json("""
+                {"object":"pre_verification","id":"pv_new","status":"accepted"}
+                """));
+
+        InvestorKycService service = service(investorRepository, distributorService, auditService, cybrillaClient);
+        InvestorExternalKycResponse response = service.createKycCheck(
+                investorId,
+                new InvestorKycCheckRequest(null, true),
+                actorId
+        );
+
+        verify(cybrillaClient, never()).fetchKycCheck("pv_old");
+        verify(cybrillaClient).createKycCheck(investor);
+        assertThat(response.investor().getExternalKycCheckId()).isEqualTo("pv_new");
+        assertThat(auditService.actionType).isEqualTo("KYC_CHECK_CREATED");
+    }
+
+    @Test
     void createKycCheckStartsBankVerificationWhenKycCompletes() throws Exception {
         UUID actorId = UUID.randomUUID();
         UUID investorId = UUID.randomUUID();
