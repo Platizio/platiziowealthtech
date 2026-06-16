@@ -8,10 +8,14 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
+import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.util.HexFormat;
+import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.stereotype.Service;
@@ -22,9 +26,12 @@ public class RefreshTokenService {
 
     public record RotatedRefreshToken(Distributor distributor, UUID refreshToken) {}
 
+    private static final Duration ROTATION_GRACE_PERIOD = Duration.ofSeconds(60);
+
     private final AuthRefreshTokenRepository refreshTokenRepository;
     private final DistributorRepository distributorRepository;
     private final long refreshTokenExpirationMs;
+    private final ConcurrentHashMap<String, CachedRotation> recentRotations = new ConcurrentHashMap<>();
 
     public RefreshTokenService(
             AuthRefreshTokenRepository refreshTokenRepository,
@@ -50,12 +57,25 @@ public class RefreshTokenService {
 
     @Transactional
     public RotatedRefreshToken rotate(String rawToken) {
+        purgeExpiredRotations();
+        String tokenHash = sha256(parseToken(rawToken).toString());
+        CachedRotation cached = recentRotations.get(tokenHash);
+        if (cached != null && cached.expiresAt().isAfter(Instant.now())) {
+            Distributor distributor = distributorRepository.findById(cached.distributorId())
+                    .orElseThrow(() -> new BadCredentialsException("Refresh token owner no longer exists"));
+            return new RotatedRefreshToken(distributor, cached.newRawToken());
+        }
+
         AuthRefreshToken refreshToken = findUsableToken(rawToken);
         Distributor distributor = distributorRepository.findById(refreshToken.getDistributorId())
                 .orElseThrow(() -> new BadCredentialsException("Refresh token owner no longer exists"));
 
         revoke(refreshToken);
         UUID newRawToken = createToken(refreshToken.getDistributorId());
+        recentRotations.put(
+                tokenHash,
+                new CachedRotation(newRawToken, refreshToken.getDistributorId(), Instant.now().plus(ROTATION_GRACE_PERIOD))
+        );
         return new RotatedRefreshToken(distributor, newRawToken);
     }
 
@@ -114,6 +134,19 @@ public class RefreshTokenService {
             throw new BadCredentialsException("Invalid refresh token");
         }
     }
+
+    private void purgeExpiredRotations() {
+        Instant now = Instant.now();
+        Iterator<Map.Entry<String, CachedRotation>> iterator = recentRotations.entrySet().iterator();
+        while (iterator.hasNext()) {
+            Map.Entry<String, CachedRotation> entry = iterator.next();
+            if (entry.getValue().expiresAt().isBefore(now)) {
+                iterator.remove();
+            }
+        }
+    }
+
+    private record CachedRotation(UUID newRawToken, UUID distributorId, Instant expiresAt) {}
 
     String sha256(String value) {
         try {

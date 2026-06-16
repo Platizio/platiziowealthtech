@@ -8,6 +8,7 @@ import com.platizio.wealthtech.domain.InvestorBankAccount;
 import com.platizio.wealthtech.domain.ProductCategory;
 import com.platizio.wealthtech.domain.ProductScheme;
 import com.platizio.wealthtech.domain.TransactionOrder;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -30,9 +31,17 @@ public class MockCybrillaClient implements CybrillaClient {
 
     @Override
     public String createInvestorProfile(Investor investor) {
-        String mockId = "cyb-inv-" + UUID.randomUUID();
+        String mockId = "invp_" + UUID.randomUUID().toString().replace("-", "");
         logger.warn("cybrilla_client mode='mock' operation='create_investor_profile' local_investor_id='{}' mock_id='{}'", investor.getId(), mockId);
         return mockId;
+    }
+
+    @Override
+    public void ensureInvestorProfileOrderReady(Investor investor) {
+        logger.warn(
+                "cybrilla_client mode='mock' operation='ensure_investor_profile_order_ready' local_investor_id='{}'",
+                investor.getId()
+        );
     }
 
     @Override
@@ -45,18 +54,70 @@ public class MockCybrillaClient implements CybrillaClient {
     }
 
     @Override
+    public JsonNode listInvestorProfiles(String pan, String type) {
+        logger.warn("cybrilla_client mode='mock' operation='list_investor_profiles' pan='{}' type='{}'", pan, type);
+        return OBJECT_MAPPER.createObjectNode()
+                .put("object", "list")
+                .set("data", OBJECT_MAPPER.createArrayNode());
+    }
+
+    @Override
+    public JsonNode fetchInvestorProfile(String profileId) {
+        logger.warn("cybrilla_client mode='mock' operation='fetch_investor_profile' profile_id='{}'", profileId);
+        return OBJECT_MAPPER.createObjectNode()
+                .put("object", "investor_profile")
+                .put("id", profileId);
+    }
+
+    @Override
+    public void syncInvestorContactResources(Investor investor) {
+        logger.warn(
+                "cybrilla_client mode='mock' operation='sync_investor_contact_resources' local_investor_id='{}'",
+                investor.getId()
+        );
+    }
+
+    @Override
+    public JsonNode listMfInvestmentAccounts(String investorProfileId) {
+        ObjectNode response = OBJECT_MAPPER.createObjectNode();
+        response.put("object", "list");
+        ObjectNode account = OBJECT_MAPPER.createObjectNode();
+        account.put("object", "mf_investment_account");
+        account.put("id", "mfia_" + UUID.randomUUID().toString().replace("-", ""));
+        account.put("primary_investor", investorProfileId);
+        response.putArray("data").add(account);
+        return response;
+    }
+
+    @Override
+    public void ensureMfInvestmentAccountOrderReady(Investor investor, InvestorBankAccount bankAccount) {
+        logger.warn(
+                "cybrilla_client mode='mock' operation='ensure_mf_investment_account_order_ready' local_investor_id='{}'",
+                investor.getId()
+        );
+    }
+
+    @Override
     public String createMfInvestmentAccount(Investor investor) {
-        String mockId = "cyb-mfia-" + UUID.randomUUID();
+        String mockId = "mfia_" + UUID.randomUUID().toString().replace("-", "");
         logger.warn("cybrilla_client mode='mock' operation='create_mf_investment_account' local_investor_id='{}' mock_id='{}'", investor.getId(), mockId);
         return mockId;
     }
 
     @Override
     public void captureBankAccount(Investor investor, InvestorBankAccount bankAccount) {
+        ensureFpBankAccountCaptured(investor, bankAccount);
+        startBankAccountVerification(investor, bankAccount);
+    }
+
+    @Override
+    public void ensureFpBankAccountCaptured(Investor investor, InvestorBankAccount bankAccount) {
+        if (StringUtils.hasText(bankAccount.getCybrillaBankId())) {
+            return;
+        }
         String mockId = "cyb-bank-" + UUID.randomUUID();
         logger.warn("cybrilla_client mode='mock' operation='capture_bank_account' local_investor_id='{}' local_bank_id='{}' mock_id='{}'", investor.getId(), bankAccount.getId(), mockId);
         bankAccount.setCybrillaBankId(mockId);
-        startBankAccountVerification(investor, bankAccount);
     }
 
     @Override
@@ -110,11 +171,36 @@ public class MockCybrillaClient implements CybrillaClient {
     @Override
     public JsonNode createKycCheck(Investor investor) {
         return createPreVerification(Map.of(
-                "investor_identifier", investor.getPan(),
                 "pan", Map.of("value", investor.getPan()),
                 "name", Map.of("value", investor.getFullName()),
                 "date_of_birth", Map.of("value", investor.getDateOfBirth() == null ? "" : investor.getDateOfBirth().toString())
         ));
+    }
+
+    @Override
+    public JsonNode createCombinedOrderPreVerification(Investor investor, InvestorBankAccount bankAccount) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("investor_identifier", investor.getPan());
+        payload.put("pan", Map.of("value", investor.getPan()));
+        payload.put("name", Map.of("value", investor.getFullName()));
+        if (investor.getDateOfBirth() != null) {
+            payload.put("date_of_birth", Map.of("value", investor.getDateOfBirth().toString()));
+        }
+        if (bankAccount != null) {
+            payload.put("bank_accounts", List.of(Map.of(
+                    "value", Map.of(
+                            "account_number", bankAccount.getAccountNumber(),
+                            "ifsc_code", bankAccount.getIfscCode(),
+                            "account_type", "savings"
+                    )
+            )));
+        }
+        return createPreVerification(payload);
+    }
+
+    @Override
+    public JsonNode createReadinessCheck(Investor investor) {
+        return createPreVerification(Map.of("investor_identifier", investor.getPan()));
     }
 
     @Override
@@ -269,7 +355,9 @@ public class MockCybrillaClient implements CybrillaClient {
         ObjectNode response = OBJECT_MAPPER.createObjectNode();
         response.put("object", "identity_document");
         response.put("id", identityDocumentId);
-        response.putObject("fetch").put("status", "pending");
+        ObjectNode fetch = response.putObject("fetch");
+        fetch.put("status", "successful");
+        fetch.putNull("reason");
         return response;
     }
 
@@ -278,6 +366,29 @@ public class MockCybrillaClient implements CybrillaClient {
         ObjectNode response = OBJECT_MAPPER.createObjectNode();
         response.put("object", "list");
         response.putArray("data");
+        return response;
+    }
+
+    @Override
+    public JsonNode createEsign(Map<String, Object> payload) {
+        String esignId = "esign_" + UUID.randomUUID().toString().replace("-", "");
+        ObjectNode response = OBJECT_MAPPER.createObjectNode();
+        response.put("object", "esign");
+        response.put("id", esignId);
+        response.put("kyc_request", textValue(payload, "kyc_request"));
+        response.put("postback_url", textValue(payload, "postback_url"));
+        response.put("redirect_url", "https://s.finprim.com/v2/esigns/" + esignId + "/redirect");
+        response.put("status", "pending");
+        return response;
+    }
+
+    @Override
+    public JsonNode fetchEsign(String esignId) {
+        ObjectNode response = OBJECT_MAPPER.createObjectNode();
+        response.put("object", "esign");
+        response.put("id", esignId);
+        response.put("status", "successful");
+        response.put("redirect_url", "https://s.finprim.com/v2/esigns/" + esignId + "/redirect");
         return response;
     }
 
@@ -292,9 +403,11 @@ public class MockCybrillaClient implements CybrillaClient {
         response.put("proof_details_callback_url", textValue(payload, "proof_details_callback_url"));
         response.put("esign_callback_url", textValue(payload, "esign_callback_url"));
         ObjectNode proof = response.putObject("proof_details");
-        proof.put("fetch_url", "https://s.finprim.com/identity_documents/fetch_my_proof?form=" + mockId);
+        proof.put("fetch_url", sandboxProofFetchUrl(payload, mockId));
         proof.put("status", "pending");
-        response.putObject("esign_details").putNull("esign_url").putNull("status");
+        response.putObject("esign_details")
+                .put("esign_url", sandboxEsignUrl(payload, mockId))
+                .putNull("status");
         response.putObject("requirements").putArray("fields_needed")
                 .add("identity_proof").add("address").add("signature");
         return response;
@@ -319,7 +432,7 @@ public class MockCybrillaClient implements CybrillaClient {
                 .put("fetch_url", "https://s.finprim.com/identity_documents/fetch_my_proof?form=" + kycFormId)
                 .put("status", "fetched");
         response.putObject("esign_details")
-                .put("esign_url", "https://s.finprim.com/esign/" + kycFormId)
+                .put("esign_url", "https://s.finprim.com/v2/esigns/" + kycFormId + "/redirect")
                 .put("status", "pending");
         response.put("signature_provided", true);
         response.putObject("requirements").putNull("fields_needed");
@@ -342,6 +455,14 @@ public class MockCybrillaClient implements CybrillaClient {
                 .put("fetch_url", "https://s.finprim.com/identity_documents/fetch_my_proof?form=" + kycFormId + "&retry=1")
                 .put("status", "pending");
         return response;
+    }
+
+    private String sandboxProofFetchUrl(Map<String, Object> payload, String kycFormId) {
+        return "https://s.finprim.com/identity_documents/fetch_my_proof?form=" + kycFormId;
+    }
+
+    private String sandboxEsignUrl(Map<String, Object> payload, String kycFormId) {
+        return "https://s.finprim.com/v2/esigns/" + kycFormId + "/redirect";
     }
 
     private ObjectNode kycFormBase(String id, String status) {
@@ -404,16 +525,230 @@ public class MockCybrillaClient implements CybrillaClient {
     }
 
     @Override
+    public LiveCataloguePage fetchLiveCataloguePage(String endpoint, int page, int size) {
+        SchemeFetchResult catalogue = fetchProductSchemes();
+        List<ProductScheme> schemes = catalogue.schemes();
+        int from = Math.min(page * size, schemes.size());
+        int to = Math.min(from + size, schemes.size());
+        ObjectNode response = OBJECT_MAPPER.createObjectNode();
+        response.put("page", page);
+        response.put("size", size);
+        response.put("totalElements", schemes.size());
+        response.put("source", "mock");
+        response.put("endpoint", endpoint);
+        return new LiveCataloguePage(
+                response,
+                schemes.subList(from, to),
+                schemes.size(),
+                page,
+                size,
+                "mock"
+        );
+    }
+
+    @Override
     public String createOrder(TransactionOrder order, Investor investor, ProductScheme productScheme) {
         return "cyb-order-" + UUID.randomUUID();
     }
 
     @Override
     public String generateInvestorActionUrl(TransactionOrder order) {
+        if (StringUtils.hasText(order.getInvestorActionUrl()) && order.getInvestorActionUrl().startsWith("http")) {
+            return order.getInvestorActionUrl();
+        }
         String token = StringUtils.hasText(order.getInvestorActionToken())
                 ? order.getInvestorActionToken()
                 : String.valueOf(order.getId());
         return "/investor-actions/" + token;
+    }
+
+    @Override
+    public IfscLookupResult fetchIfscDetails(String ifscCode) {
+        String normalized = ifscCode == null ? "" : ifscCode.trim().toUpperCase();
+        return new IfscLookupResult(
+                normalized,
+                "Mock Bank",
+                "Mock Branch",
+                "Mock Branch Address",
+                "Mock City",
+                "Mock District",
+                "Mock State",
+                "000000000"
+        );
+    }
+
+    @Override
+    public PincodeLookupResult fetchPincodeDetails(String pincode) {
+        String normalized = pincode == null ? "" : pincode.trim().replaceAll("\\D", "");
+        if ("400001".equals(normalized) || "400002".equals(normalized)) {
+            return new PincodeLookupResult(
+                    normalized,
+                    "Mumbai",
+                    "Mumbai",
+                    "Maharashtra",
+                    "IN",
+                    java.util.List.of("Mumbai")
+            );
+        }
+        return new PincodeLookupResult(
+                normalized,
+                "Mock City",
+                "Mock District",
+                "Mock State",
+                "IN",
+                java.util.List.of("Mock City")
+        );
+    }
+
+    @Override
+    public JsonNode fetchMfPurchase(String mfPurchaseId) {
+        ObjectNode response = OBJECT_MAPPER.createObjectNode();
+        response.put("object", "mf_purchase");
+        response.put("id", mfPurchaseId);
+        response.put("old_id", 1001);
+        response.put("state", "successful");
+        return response;
+    }
+
+    @Override
+    public JsonNode updateMfPurchaseConsent(String mfPurchaseId, Map<String, Object> consent) {
+        ObjectNode response = OBJECT_MAPPER.createObjectNode();
+        response.put("object", "mf_purchase");
+        response.put("id", mfPurchaseId);
+        response.put("state", "pending");
+        response.set("consent", OBJECT_MAPPER.valueToTree(consent));
+        return response;
+    }
+
+    @Override
+    public JsonNode createNetbankingPayment(List<Integer> amcOrderIds, String paymentPostbackUrl, String paymentMethod) {
+        return createNetbankingPayment(amcOrderIds, paymentPostbackUrl, paymentMethod, null, null);
+    }
+
+    @Override
+    public JsonNode createNetbankingPayment(
+            List<Integer> amcOrderIds,
+            String paymentPostbackUrl,
+            String paymentMethod,
+            Integer bankAccountOldId,
+            String providerName
+    ) {
+        ObjectNode response = OBJECT_MAPPER.createObjectNode();
+        response.put("id", 2001);
+        response.put("token_url", "sandbox://platizio/simulate-payment");
+        return response;
+    }
+
+    @Override
+    public JsonNode fetchPayment(int paymentId) {
+        ObjectNode response = OBJECT_MAPPER.createObjectNode();
+        response.put("id", paymentId);
+        response.put("token_url", "sandbox://platizio/simulate-payment");
+        response.put("status", "PENDING");
+        return response;
+    }
+
+    @Override
+    public JsonNode simulatePayment(int paymentId, String status) {
+        ObjectNode response = OBJECT_MAPPER.createObjectNode();
+        response.put("message", "payment updated to status " + status);
+        return response;
+    }
+
+    @Override
+    public JsonNode confirmMfPurchase(String mfPurchaseId) {
+        ObjectNode response = OBJECT_MAPPER.createObjectNode();
+        response.put("object", "mf_purchase");
+        response.put("id", mfPurchaseId);
+        response.put("state", "submitted");
+        response.put("old_id", 9123);
+        return response;
+    }
+
+    @Override
+    public JsonNode fetchBankAccount(String bankAccountId) {
+        ObjectNode response = OBJECT_MAPPER.createObjectNode();
+        response.put("object", "bank_account");
+        response.put("id", bankAccountId);
+        response.put("old_id", 501);
+        return response;
+    }
+
+    @Override
+    public JsonNode createMandate(int bankAccountOldId, String mandateType, int mandateLimit, String providerName) {
+        ObjectNode response = OBJECT_MAPPER.createObjectNode();
+        response.put("id", 3001);
+        response.put("mandate_status", "CREATED");
+        return response;
+    }
+
+    @Override
+    public JsonNode authorizeMandate(int mandateId, String paymentPostbackUrl) {
+        ObjectNode response = OBJECT_MAPPER.createObjectNode();
+        response.put("id", 4001);
+        response.put("token_url", "https://payments.mock/mandate-auth");
+        return response;
+    }
+
+    @Override
+    public JsonNode fetchMandate(int mandateId) {
+        ObjectNode response = OBJECT_MAPPER.createObjectNode();
+        response.put("id", mandateId);
+        response.put("mandate_status", "APPROVED");
+        return response;
+    }
+
+    @Override
+    public JsonNode simulateMandate(int mandateId, String status) {
+        ObjectNode response = OBJECT_MAPPER.createObjectNode();
+        response.put("message", "mandate updated to status " + status);
+        return response;
+    }
+
+    @Override
+    public JsonNode fetchMfPurchasePlan(String mfPurchasePlanId) {
+        ObjectNode response = OBJECT_MAPPER.createObjectNode();
+        response.put("object", "mf_purchase_plan");
+        response.put("id", mfPurchasePlanId);
+        response.put("state", "review_completed");
+        return response;
+    }
+
+    @Override
+    public JsonNode updateMfPurchasePlan(String mfPurchasePlanId, Map<String, Object> payload) {
+        ObjectNode response = OBJECT_MAPPER.createObjectNode();
+        response.put("object", "mf_purchase_plan");
+        response.put("id", mfPurchasePlanId);
+        response.put("state", "active");
+        return response;
+    }
+
+    @Override
+    public JsonNode listMfPurchasesForPlan(String mfPurchasePlanId) {
+        ObjectNode purchase = OBJECT_MAPPER.createObjectNode();
+        purchase.put("object", "mf_purchase");
+        purchase.put("id", "mfp_mock_installment");
+        purchase.put("old_id", 1001);
+        purchase.put("state", "pending");
+        purchase.put("plan", mfPurchasePlanId);
+        ObjectNode response = OBJECT_MAPPER.createObjectNode();
+        response.put("object", "list");
+        response.putArray("data").add(purchase);
+        return response;
+    }
+
+    @Override
+    public JsonNode createNachPayment(int mandateId, List<Integer> amcOrderIds) {
+        ObjectNode response = OBJECT_MAPPER.createObjectNode();
+        response.put("id", 5001);
+        response.put("mandate_id", mandateId);
+        response.put("status", "SUBMITTED");
+        return response;
+    }
+
+    @Override
+    public String createSipOrderWithMandate(TransactionOrder order, Investor investor, ProductScheme productScheme, int mandateId) {
+        return "mfpp_mock_" + UUID.randomUUID().toString().replace("-", "");
     }
 
     @Override
@@ -424,5 +759,15 @@ public class MockCybrillaClient implements CybrillaClient {
     @Override
     public void cancelOrder(TransactionOrder order) {
         logger.warn("cybrilla_client mode='mock' operation='cancel_order' local_order_id='{}' external_order_id='{}'", order.getId(), order.getExternalOrderId());
+    }
+
+    @Override
+    public JsonNode cancelPurchasePlan(String planId, String cancellationCode, String cancellationReason) {
+        ObjectNode response = OBJECT_MAPPER.createObjectNode();
+        response.put("object", "mf_purchase_plan");
+        response.put("id", planId);
+        response.put("state", "cancelled");
+        response.put("cancellation_code", cancellationCode == null ? "invest_later" : cancellationCode);
+        return response;
     }
 }

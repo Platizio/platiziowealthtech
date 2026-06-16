@@ -58,6 +58,54 @@ class InvestorSoftDeleteTest {
     }
 
     @Test
+    void createInvestorRejectsPanOwnedBySoftDeletedInvestorWithFriendlyConflict() {
+        // BUG-031: the active-row lookups (findByPan/findByEmail) cannot see soft-deleted rows,
+        // but the DB pan unique constraint is not partial. Without the including-deleted guard the
+        // INSERT would raise a raw DataIntegrityViolationException; assert we instead get the
+        // friendly DuplicateResourceException carrying the archived investor's id.
+        UUID archivedInvestorId = UUID.randomUUID();
+        InvestorRepository repository = (InvestorRepository) Proxy.newProxyInstance(
+                InvestorRepository.class.getClassLoader(),
+                new Class<?>[]{InvestorRepository.class},
+                (proxy, method, args) -> switch (method.getName()) {
+                    // Active-row checks pass (soft-deleted row is invisible to @SQLRestriction).
+                    case "findByPan", "findByEmail" -> Optional.empty();
+                    // Including-deleted lookup surfaces the archived row's id.
+                    case "findAnyIdByPanIncludingDeleted" -> Optional.of(archivedInvestorId);
+                    case "findAnyIdByEmailIncludingDeleted" -> Optional.empty();
+                    case "save" -> throw new AssertionError("createInvestor must not persist on a soft-deleted PAN collision");
+                    default -> defaultValue(method.getReturnType());
+                }
+        );
+
+        InvestorService investorService = new InvestorService(
+                repository,
+                null,
+                new RecordingDistributorService(),
+                new CapturingAuditService(new AtomicReference<>()),
+                null
+        );
+
+        com.platizio.wealthtech.dto.InvestorCreateRequest request = new com.platizio.wealthtech.dto.InvestorCreateRequest(
+                UUID.randomUUID(),
+                "Re Registered",
+                "9000000000",
+                "re.registered@example.com",
+                "ABCDE1234F",
+                null, null, null,
+                null, null, null, null, null,
+                null, null, null, null, null,
+                null
+        );
+
+        assertThatThrownBy(() -> investorService.createInvestor(request, null))
+                .isInstanceOf(com.platizio.wealthtech.common.DuplicateResourceException.class)
+                .hasMessage("An investor with this PAN already exists")
+                .extracting(ex -> ((com.platizio.wealthtech.common.DuplicateResourceException) ex).getResourceId())
+                .isEqualTo(archivedInvestorId);
+    }
+
+    @Test
     void deleteInvestorRejectsAnotherDistributorInvestor() {
         UUID investorId = UUID.randomUUID();
         UUID actorId = UUID.randomUUID();

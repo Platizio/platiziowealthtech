@@ -149,6 +149,13 @@ public class ExternalBearerTokenService {
             }
 
             CachedBearerToken storedToken = loadStoredToken(audience);
+            if (cachedToken == null && storedToken == null) {
+                logger.debug(
+                        "external_auth_cache status='skip_refresh' provider='{}' reason='no_cached_token_yet'",
+                        audience.label()
+                );
+                return false;
+            }
             if (storedToken != null && storedToken.isUsable(clock)) {
                 tokenCache.put(audience, storedToken);
                 logTokenState(audience, storedToken, "cached_after_restart");
@@ -255,7 +262,7 @@ public class ExternalBearerTokenService {
     private void logTokenState(TokenAudience audience, CachedBearerToken token, String source) {
         Instant now = Instant.now(clock);
         String visibleToken = logRawTokens ? token.value() : token.fingerprint();
-        String message = "external_auth provider='{}' status='{}' token='{}' new_token_in='{} mins' expires_in='{} mins'";
+        String message = "external_auth provider='{}' status='{}' token='{}' refresh_in='{} mins' expires_in='{} mins'";
         Object[] args = {
                 audience.label(),
                 source,

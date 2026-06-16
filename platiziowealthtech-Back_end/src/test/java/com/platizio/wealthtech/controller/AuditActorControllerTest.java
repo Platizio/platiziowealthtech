@@ -40,7 +40,7 @@ class AuditActorControllerTest {
         Authentication auth = auth(actorId);
 
         controller.updateKycStatus(UUID.randomUUID(), KycStatus.COMPLETED, auth);
-        controller.addBank(UUID.randomUUID(), new InvestorBankRequest("Name", "123", "IFSC0001", null, null), auth);
+        controller.addBank(UUID.randomUUID(), new InvestorBankRequest("Name", "123", "IFSC0001", null, null, null), auth);
         controller.verifyBank(UUID.randomUUID(), auth);
         controller.deleteInvestor(UUID.randomUUID(), auth);
 
@@ -136,8 +136,9 @@ class AuditActorControllerTest {
         }
 
         @Override
-        public void deleteInvestor(UUID investorId, UUID actorId) {
+        public java.util.Map<String, Object> deleteInvestor(UUID investorId, UUID actorId) {
             actorIds.add(actorId);
+            return java.util.Map.of("archived", true);
         }
     }
 
@@ -176,9 +177,17 @@ class AuditActorControllerTest {
         }
 
         @Override
-        public RedemptionRecord createRedemption(UUID orderId, UUID actorId) {
-            actorIds.add(actorId);
+        public RedemptionRecord createRedemption(
+                UUID orderId, com.platizio.wealthtech.security.JwtAuthPrincipal principal) {
+            actorIds.add(principal.getDistributorId());
             return null;
+        }
+
+        @Override
+        public TransactionOrder getOrder(UUID orderId) {
+            TransactionOrder order = new TransactionOrder();
+            order.setTransactionType(com.platizio.wealthtech.domain.TransactionType.LUMPSUM_PURCHASE);
+            return order;
         }
 
         @Override

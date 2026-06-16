@@ -14,9 +14,48 @@ import org.springframework.data.repository.query.Param;
 
 public interface InvestorRepository extends JpaRepository<Investor, UUID> {
     Optional<Investor> findByPan(String pan);
+
+    @Query(value = "select * from investors where pan = :pan order by updated_at desc limit 1", nativeQuery = true)
+    Optional<Investor> findIncludingDeletedByPan(@Param("pan") String pan);
+
+    @Query(value = """
+            select *
+            from investors
+            where pan = :pan
+              and distributor_id = :distributorId
+            order by updated_at desc
+            limit 1
+            """, nativeQuery = true)
+    Optional<Investor> findIncludingDeletedByPanAndDistributor(
+            @Param("pan") String pan,
+            @Param("distributorId") UUID distributorId
+    );
+
+    @Query(value = "select * from investors where cybrilla_investor_id = :profileId order by updated_at desc limit 1", nativeQuery = true)
+    Optional<Investor> findIncludingDeletedByCybrillaInvestorId(@Param("profileId") String profileId);
+
+    // BUG-031: @SQLRestriction hides soft-deleted rows from findByPan/findByEmail, but the
+    // pan/email unique constraints are NOT partial, so an INSERT still collides with a
+    // soft-deleted row. These native lookups bypass the restriction to detect that collision
+    // and surface a friendly DuplicateResourceException instead of a raw DB integrity error.
+    @Query(value = "SELECT id FROM investors WHERE pan = :pan LIMIT 1", nativeQuery = true)
+    Optional<UUID> findAnyIdByPanIncludingDeleted(@Param("pan") String pan);
+
+    @Query(value = "SELECT id FROM investors WHERE email = :email LIMIT 1", nativeQuery = true)
+    Optional<UUID> findAnyIdByEmailIncludingDeleted(@Param("email") String email);
+
+    @Query(value = """
+            select count(*)
+            from investors
+            where distributor_id = :distributorId
+              and is_deleted = true
+            """, nativeQuery = true)
+    long countSoftDeletedByDistributorId(@Param("distributorId") UUID distributorId);
     Optional<Investor> findByEmail(String email);
     Optional<Investor> findByExternalKycCheckId(String externalKycCheckId);
     Optional<Investor> findByExternalKycRequestId(String externalKycRequestId);
+    Optional<Investor> findByExternalIdentityDocumentId(String externalIdentityDocumentId);
+    Optional<Investor> findByExternalEsignId(String externalEsignId);
     List<Investor> findByDistributorId(UUID distributorId);
     List<Investor> findByDistributorIdIn(List<UUID> distributorIds);
     List<Investor> findByHouseholdIdAndDistributorId(UUID householdId, UUID distributorId);
@@ -46,7 +85,14 @@ public interface InvestorRepository extends JpaRepository<Investor, UUID> {
             select i
             from Investor i
             where i.kycStatus in :statuses
-              and (i.externalKycCheckId is not null or i.externalKycRequestId is not null)
+              and (
+                    i.externalKycCheckId is not null
+                 or i.externalKycRequestId is not null
+                 or i.externalIdentityDocumentId is not null
+                 or i.externalEsignId is not null
+              )
+              and (i.externalKycCheckId is null or i.externalKycCheckId not like 'pv_demo_%')
+              and (i.externalKycRequestId is null or i.externalKycRequestId not like 'kycr_demo_%')
             order by i.updatedAt asc
             """)
     List<Investor> findKycSyncCandidates(@Param("statuses") List<KycStatus> statuses, Pageable pageable);

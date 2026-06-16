@@ -8,6 +8,7 @@ import com.platizio.wealthtech.integration.CybrillaApiException;
 import com.platizio.wealthtech.integration.CybrillaUnavailableException;
 import com.platizio.wealthtech.integration.auth.ExternalApiAuthenticationException;
 import jakarta.persistence.EntityNotFoundException;
+import jakarta.persistence.PersistenceException;
 import jakarta.servlet.http.HttpServletRequest;
 import java.time.OffsetDateTime;
 import java.util.Collections;
@@ -18,10 +19,14 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
+import org.springframework.transaction.TransactionSystemException;
+import org.springframework.transaction.UnexpectedRollbackException;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.server.ResponseStatusException;
 
 @RestControllerAdvice
 public class GlobalExceptionHandler {
@@ -77,8 +82,14 @@ public class GlobalExceptionHandler {
         if (ex.getCause() instanceof com.fasterxml.jackson.databind.exc.InvalidFormatException) {
             msg = "Invalid data format provided: " + ex.getCause().getMessage();
         }
+        String code = "BAD_REQUEST";
+        if (msg != null && (msg.contains("Sandbox mode is active") || msg.contains("Sandbox KYC readiness checks require"))) {
+            code = "SANDBOX_SIMULATOR_PAN_REQUIRED";
+        } else if (msg != null && msg.contains("Invalid PAN format")) {
+            code = "INVALID_PAN_FORMAT";
+        }
         logger.warn("Bad request at {}: {}", request.getRequestURI(), msg);
-        return new ApiErrorResponse(OffsetDateTime.now(), 400, "BAD_REQUEST", msg, request.getRequestURI());
+        return new ApiErrorResponse(OffsetDateTime.now(), 400, code, msg, request.getRequestURI());
     }
 
     @ExceptionHandler(org.springframework.web.servlet.resource.NoResourceFoundException.class)
@@ -116,6 +127,35 @@ public class GlobalExceptionHandler {
         return new ApiErrorResponse(OffsetDateTime.now(), 409, "CONFLICT", ex.getMessage(), request.getRequestURI());
     }
 
+    @ExceptionHandler(ResponseStatusException.class)
+    public ResponseEntity<ApiErrorResponse> handleResponseStatus(ResponseStatusException ex, HttpServletRequest request) {
+        HttpStatus status = HttpStatus.resolve(ex.getStatusCode().value());
+        if (status == null) {
+            status = HttpStatus.INTERNAL_SERVER_ERROR;
+        }
+        String reason = ex.getReason() != null ? ex.getReason() : status.getReasonPhrase();
+        if (status.is5xxServerError()) {
+            logger.error("Response status {} at {}: {}", status.value(), request.getRequestURI(), reason, ex);
+        } else {
+            logger.warn("Response status {} at {}: {}", status.value(), request.getRequestURI(), reason);
+        }
+        String errorCode = switch (status) {
+            case BAD_REQUEST -> "BAD_REQUEST";
+            case NOT_FOUND -> "NOT_FOUND";
+            case CONFLICT -> "CONFLICT";
+            case FORBIDDEN -> "FORBIDDEN";
+            default -> status.is4xxClientError() ? "CLIENT_ERROR" : "INTERNAL_SERVER_ERROR";
+        };
+        ApiErrorResponse body = new ApiErrorResponse(
+                OffsetDateTime.now(),
+                status.value(),
+                errorCode,
+                reason,
+                request.getRequestURI()
+        );
+        return ResponseEntity.status(status).body(body);
+    }
+
     @ExceptionHandler(AccessDeniedException.class)
     @ResponseStatus(HttpStatus.FORBIDDEN)
     public ApiErrorResponse handleForbidden(AccessDeniedException ex, HttpServletRequest request) {
@@ -126,13 +166,47 @@ public class GlobalExceptionHandler {
     /**
      * Thrown by service-layer duplicate checks (application-level guard).
      * Returns 409 with the human-readable message set by the caller.
+     *
+     * <p>BUG-001: when the exception carries the existing resource id (e.g. a
+     * resume-blocked duplicate PAN), the 409 body additionally exposes
+     * {@code resourceId}/{@code conflictField} so the client can resume the
+     * existing record. When no id is present the body is the standard
+     * {@link ApiErrorResponse} (unchanged).
      */
     @ExceptionHandler(DuplicateResourceException.class)
-    @ResponseStatus(HttpStatus.CONFLICT)
-    public ApiErrorResponse handleDuplicateResource(DuplicateResourceException ex, HttpServletRequest request) {
+    public ResponseEntity<Object> handleDuplicateResource(DuplicateResourceException ex, HttpServletRequest request) {
         logger.warn("Duplicate resource at {}: {}", request.getRequestURI(), ex.getMessage());
-        return new ApiErrorResponse(OffsetDateTime.now(), 409, "CONFLICT", ex.getMessage(), request.getRequestURI());
+        if (ex.getResourceId() != null) {
+            ConflictErrorResponse body = new ConflictErrorResponse(
+                    OffsetDateTime.now(),
+                    409,
+                    "CONFLICT",
+                    ex.getMessage(),
+                    request.getRequestURI(),
+                    ex.getResourceId(),
+                    ex.getConflictField()
+            );
+            return ResponseEntity.status(HttpStatus.CONFLICT).body(body);
+        }
+        ApiErrorResponse body = new ApiErrorResponse(
+                OffsetDateTime.now(), 409, "CONFLICT", ex.getMessage(), request.getRequestURI());
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(body);
     }
+
+    /**
+     * 409 body variant that mirrors {@link ApiErrorResponse} but adds the existing
+     * resource id (and the conflicting field) so a client can resume the record
+     * that caused the conflict. Used only when those details are available.
+     */
+    public record ConflictErrorResponse(
+            OffsetDateTime timestamp,
+            int status,
+            String error,
+            String message,
+            String path,
+            java.util.UUID resourceId,
+            String conflictField
+    ) {}
 
     /**
      * Handles unique-constraint and not-null violations from the DB layer.
@@ -150,6 +224,83 @@ public class GlobalExceptionHandler {
                 .orElse("A duplicate or invalid record was detected");
         logger.warn("Data integrity violation at {}: {}", request.getRequestURI(), causeChain);
         return new ApiErrorResponse(OffsetDateTime.now(), 409, "CONFLICT", friendly, request.getRequestURI());
+    }
+
+    @ExceptionHandler({UnexpectedRollbackException.class, TransactionSystemException.class})
+    public ResponseEntity<ApiErrorResponse> handleTransactionFailure(RuntimeException ex, HttpServletRequest request) {
+        String causeChain = buildCauseChainMessage(ex);
+        logger.warn("Transaction failure at {}: {}", request.getRequestURI(), causeChain);
+        // Only emit the investor-sync 409 when the rollback was actually caused by the
+        // investor/Finprim sync constraint it describes. A recognized DB constraint is a
+        // genuine 409 conflict. Anything else is an opaque rollback -> neutral 500.
+        if (isInvestorSyncFailure(causeChain)) {
+            return ResponseEntity.status(HttpStatus.CONFLICT).body(new ApiErrorResponse(
+                    OffsetDateTime.now(),
+                    409,
+                    "CONFLICT",
+                    "Investor sync could not complete because one or more Finprim profiles failed to save. "
+                            + "Retry Restore from Cybrilla after restarting the backend.",
+                    request.getRequestURI()));
+        }
+        String constraintMessage = matchConstraintMessage(causeChain);
+        if (constraintMessage != null) {
+            return ResponseEntity.status(HttpStatus.CONFLICT).body(new ApiErrorResponse(
+                    OffsetDateTime.now(), 409, "CONFLICT", constraintMessage, request.getRequestURI()));
+        }
+        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(new ApiErrorResponse(
+                OffsetDateTime.now(),
+                500,
+                "INTERNAL_SERVER_ERROR",
+                "The operation could not be completed because the transaction was rolled back. Please retry.",
+                request.getRequestURI()));
+    }
+
+    @ExceptionHandler(PersistenceException.class)
+    public ResponseEntity<ApiErrorResponse> handlePersistence(PersistenceException ex, HttpServletRequest request) {
+        String causeChain = buildCauseChainMessage(ex);
+        logger.warn("Persistence failure at {}: {}", request.getRequestURI(), causeChain);
+        String constraintMessage = matchConstraintMessage(causeChain);
+        if (constraintMessage != null) {
+            return ResponseEntity.status(HttpStatus.CONFLICT).body(new ApiErrorResponse(
+                    OffsetDateTime.now(), 409, "CONFLICT", constraintMessage, request.getRequestURI()));
+        }
+        if (isInvestorSyncFailure(causeChain)) {
+            return ResponseEntity.status(HttpStatus.CONFLICT).body(new ApiErrorResponse(
+                    OffsetDateTime.now(),
+                    409,
+                    "CONFLICT",
+                    "Investor data could not be saved while reconciling from Finprim. "
+                            + "The local row may be incomplete — retry Restore from Cybrilla after restarting the backend.",
+                    request.getRequestURI()));
+        }
+        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(new ApiErrorResponse(
+                OffsetDateTime.now(),
+                500,
+                "INTERNAL_SERVER_ERROR",
+                "The record could not be saved due to a persistence error. Please retry.",
+                request.getRequestURI()));
+    }
+
+    /** Returns the friendly message for a recognized unique/not-null constraint, or {@code null}. */
+    private String matchConstraintMessage(String causeChain) {
+        return CONSTRAINT_MESSAGES.entrySet().stream()
+                .filter(entry -> causeChain.contains(entry.getKey()))
+                .map(Map.Entry::getValue)
+                .findFirst()
+                .orElse(null);
+    }
+
+    /**
+     * True only when the cause chain shows the rollback originated from the
+     * investor/Finprim sync (Restore from Cybrilla) path — not an unrelated
+     * order save, lead update, or generic constraint failure.
+     */
+    private boolean isInvestorSyncFailure(String causeChain) {
+        if (causeChain == null) {
+            return false;
+        }
+        String lower = causeChain.toLowerCase(Locale.ROOT);
+        return lower.contains("finprim") || lower.contains("restore from cybrilla");
     }
 
     /**
@@ -178,8 +329,7 @@ public class GlobalExceptionHandler {
     }
 
     @ExceptionHandler({CybrillaApiException.class, ExternalApiAuthenticationException.class})
-    @ResponseStatus(HttpStatus.BAD_GATEWAY)
-    public ApiErrorResponse handleCybrillaApiException(RuntimeException ex, HttpServletRequest request) {
+    public ResponseEntity<ApiErrorResponse> handleCybrillaApiException(RuntimeException ex, HttpServletRequest request) {
         logger.error("External investment platform call failed at {}: {}", request.getRequestURI(), ex.getMessage(), ex);
         String rawChain = buildCauseChainMessage(ex);
         String causeChain = rawChain.toLowerCase(Locale.ROOT);
@@ -204,18 +354,71 @@ public class GlobalExceptionHandler {
                     + "(CYBRILLA_PRE_VERIFICATION_*), then retry.";
         } else if (causeChain.contains("too many requests") || causeChain.contains("429")) {
             message = "Cybrilla/Fintech Primitives is rate-limiting live requests right now. Please wait a few minutes; cached local data is still available where supported.";
+        } else if (causeChain.contains("422") || causeChain.contains("unprocessable")) {
+            message = "Cybrilla rejected the verification payload (validation failed). "
+                    + "In sandbox, use simulator PANs (e.g. GYAPS3751D, pattern XXXPXNNNNX), "
+                    + "match name/DOB to PAN records, and ensure POA credentials "
+                    + "(CYBRILLA_PRE_VERIFICATION_*) are configured. "
+                    + "Real PAN verification requires production credentials from Cybrilla. Detail: "
+                    + safeExternalReason(rawChain);
+        } else if (causeChain.contains("400 bad request")
+                && (causeChain.contains("not a valid pan") || causeChain.contains("invalid investor identifier"))) {
+            message = "Cybrilla sandbox rejected this PAN. Use a simulator PAN with P as the 4th character "
+                    + "(pattern XXXPXNNNNX), e.g. BBBPB3753B (fresh KYC) or AAAPA3751A (KYC ready). "
+                    + "Real PANs are not accepted in sandbox. Detail: "
+                    + safeExternalReason(rawChain);
+        } else if (causeChain.contains("pre verification") || causeChain.contains("pre_verification")) {
+            message = "Cybrilla POA pre-verification call failed ("
+                    + safeExternalReason(rawChain)
+                    + "). Verify CYBRILLA_PRE_VERIFICATION_CLIENT_ID/SECRET, sandbox PAN pattern "
+                    + "(XXXPXNNNNX), and retry. Finprim tenant credentials are not required for this step.";
+        } else if (causeChain.contains("identity document already exist")) {
+            message = "An Aadhaar identity document is already in progress or completed for this KYC request. "
+                    + "Use Refresh Aadhaar status or open the existing Digilocker link instead of starting again. "
+                    + "Detail: " + safeExternalReason(rawChain);
+        } else if ((causeChain.contains("403") || causeChain.contains("forbidden"))
+                && causeChain.contains("kyc_form")) {
+            message = "Cybrilla has not enabled the POA kyc_forms API for this partner account. "
+                    + "Ask Cybrilla support to enable kyc_forms on your sandbox tenant, or set "
+                    + "CYBRILLA_KYC_FORM_MOCK_FALLBACK=true (enabled by default on the local profile) "
+                    + "to continue with a mock KYC modify form locally. Detail: "
+                    + safeExternalReason(rawChain);
         } else {
             message = "Unable to post data to Cybrilla/Fintech Primitives right now ("
                     + safeExternalReason(rawChain)
                     + "). Please check external platform connectivity and retry.";
         }
-        return new ApiErrorResponse(
+        HttpStatus httpStatus = resolveCybrillaClientErrorStatus(causeChain);
+        ApiErrorResponse body = new ApiErrorResponse(
                 OffsetDateTime.now(),
-                502,
-                "EXTERNAL_PLATFORM_ERROR",
+                httpStatus.value(),
+                httpStatus == HttpStatus.BAD_REQUEST
+                        ? "BAD_REQUEST"
+                        : httpStatus == HttpStatus.FORBIDDEN ? "FORBIDDEN" : "EXTERNAL_PLATFORM_ERROR",
                 message,
                 request.getRequestURI()
         );
+        return ResponseEntity.status(httpStatus).body(body);
+    }
+
+    private static HttpStatus resolveCybrillaClientErrorStatus(String causeChain) {
+        if (causeChain == null || causeChain.isBlank()) {
+            return HttpStatus.BAD_GATEWAY;
+        }
+        if (causeChain.contains("400 bad request")
+                && (causeChain.contains("not a valid pan")
+                || causeChain.contains("validation failed")
+                || causeChain.contains("invalid investor identifier"))) {
+            return HttpStatus.BAD_REQUEST;
+        }
+        if (causeChain.contains("422") || causeChain.contains("unprocessable")) {
+            return HttpStatus.BAD_REQUEST;
+        }
+        if ((causeChain.contains("403") || causeChain.contains("forbidden"))
+                && causeChain.contains("kyc_form")) {
+            return HttpStatus.FORBIDDEN;
+        }
+        return HttpStatus.BAD_GATEWAY;
     }
 
     /**

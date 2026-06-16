@@ -40,6 +40,11 @@ public class DemoDataSeeder implements CommandLineRunner {
         this.jdbc = jdbc;
     }
 
+    private static final String TEST_DISTRIBUTOR_ID = "4317cfd2-a41f-4320-a5dc-26835c7210ac";
+    private static final String SCHEME_MF_GROWTH = "a123fef2-7440-42f0-9ef2-5b9db054a123";
+    private static final String SCHEME_MF_BALANCED = "a222fef2-7440-42f0-9ef2-5b9db054a222";
+    private static final String SCHEME_SIF = "a333fef2-7440-42f0-9ef2-5b9db054a333";
+
     @Override
     public void run(String... args) {
         seedBobInvestor();
@@ -52,6 +57,7 @@ public class DemoDataSeeder implements CommandLineRunner {
         seedCharlieInteraction();
         seedAliceSignupAudit();
         upsertTestDistributor();
+        seedShowcaseInvestors();
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -73,9 +79,9 @@ public class DemoDataSeeder implements CommandLineRunner {
             ") VALUES (" +
             "  'b75fef2e-7440-42f0-9ef2-5b9db054e526', now(), now(), " +
             "  'd9b2d63d-a233-4123-8478-3b169d988b48', 'Bob Investor', " +
-            "  '9988776655', 'bob@example.com', 'ABCDE1234F', '1990-01-01', " +
+            "  '9988776655', 'bob@example.com', 'GYAPS3751D', '1990-05-15', " +
             "  '123 Main St', 'Mumbai', 'Maharashtra', '400001', 'ACTIVE', " +
-            "  'COMPLETED', 'VERIFIED', 'MODERATE', 'CYB-INV-1', " +
+            "  'COMPLETED', 'VERIFIED', 'MODERATE', NULL, " +
             "  false, 'SELF', 'b75fef2e-7440-42f0-9ef2-5b9db054e526'" +
             ") ON CONFLICT (id) DO NOTHING"
         );
@@ -288,6 +294,322 @@ public class DemoDataSeeder implements CommandLineRunner {
             "  kyc_status = 'COMPLETED', " +
             "  role = 'MASTER_DISTRIBUTOR', " +
             "  password_hash = EXCLUDED.password_hash"
+        );
+    }
+
+    /**
+     * Presentation personas for {@code a@a.com} (Test Distributor) and extra variety
+     * on Alice's book. Idempotent — safe on every local boot.
+     *
+     * <ul>
+     *   <li>Priya Sharma — KYC done, bank not added yet</li>
+     *   <li>Rahul Mehta — KYC done, bank verification in progress</li>
+     *   <li>Anita Verma — fully verified, orders + notifications</li>
+     *   <li>Vikram Singh — KYC retry required</li>
+     *   <li>Neha Joshi — KYC still in progress</li>
+     * </ul>
+     */
+    private void seedShowcaseInvestors() {
+        jdbc.update(
+            "UPDATE investors SET external_kyc_check_id = NULL, external_kyc_status = NULL, external_kyc_payload_json = NULL "
+                    + "WHERE external_kyc_check_id LIKE 'pv_demo_%'"
+        );
+        jdbc.update(
+            "UPDATE investor_bank_accounts SET cybrilla_bank_verification_id = NULL, cybrilla_bank_verification_status = NULL "
+                    + "WHERE cybrilla_bank_verification_id LIKE 'pv_demo_%'"
+        );
+        jdbc.update(
+            "UPDATE investors SET cybrilla_investor_id = NULL "
+                    + "WHERE cybrilla_investor_id LIKE 'invp_demo_%' OR cybrilla_investor_id LIKE 'CYB-INV%'"
+        );
+        jdbc.update(
+            "UPDATE investors SET external_mf_investment_account_id = NULL "
+                    + "WHERE external_mf_investment_account_id LIKE 'mfia_demo_%'"
+        );
+        jdbc.update(
+            "UPDATE investor_bank_accounts SET cybrilla_bank_id = NULL "
+                    + "WHERE cybrilla_bank_id LIKE 'ba_demo_%'"
+        );
+        seedPriyaKycDoneBankPending();
+        seedRahulBankVerifying();
+        seedAnitaFullyVerifiedWithActivity();
+        repairAnitaStaleFpProfileIfNeeded();
+        seedVikramKycRetry();       
+        seedNehaKycInProgress();
+    }
+
+    private void seedPriyaKycDoneBankPending() {
+        String id = "7f3a2b1c-9e8d-4a7b-8c6d-5e4f3a2b1c01";
+        jdbc.update(
+            "INSERT INTO investors (" +
+            "  id, created_at, updated_at, distributor_id, full_name, mobile_number, email, pan, " +
+            "  date_of_birth, address_line1, city, state, postal_code, investor_status, kyc_status, " +
+            "  bank_verification_status, risk_profile, cybrilla_investor_id, " +
+            "  external_kyc_status, kyc_readiness_status, kyc_compliance_status, kyc_compliance_reason, " +
+            "  kyc_compliance_action, is_deleted, relationship_type, household_id" +
+            ") VALUES (" +
+            "  ?::uuid, now(), now(), ?::uuid, 'Priya Sharma', '9811100001', 'priya.demo@platizio.local', 'AAAPA3751A', " +
+            "  '1992-03-15', '14 Park Street', 'Kolkata', 'West Bengal', '700016', 'ONBOARDING', 'COMPLETED', " +
+            "  'NOT_CAPTURED', 'MODERATE', NULL, 'completed', 'verified', " +
+            "  true, 'verified', 'allow', false, 'SELF', ?::uuid" +
+            ") ON CONFLICT (id) DO NOTHING",
+            id, TEST_DISTRIBUTOR_ID, id
+        );
+        jdbc.update(
+            "INSERT INTO notifications (id, created_at, updated_at, distributor_id, investor_id, type, title, message, read_flag) " +
+            "VALUES ('a1010001-0001-4001-8001-000000000101', now(), now(), ?::uuid, ?::uuid, 'KYC_COMPLETED', " +
+            "'KYC Verified', 'Priya Sharma KYC is complete. Add bank details to continue onboarding.', false) " +
+            "ON CONFLICT (id) DO NOTHING",
+            TEST_DISTRIBUTOR_ID, id
+        );
+    }
+
+    private void seedRahulBankVerifying() {
+        String id = "8a4b3c2d-1e0f-4b9a-8c7d-6e5f4a3b2c02";
+        jdbc.update(
+            "INSERT INTO investors (" +
+            "  id, created_at, updated_at, distributor_id, full_name, mobile_number, email, pan, " +
+            "  date_of_birth, address_line1, city, state, postal_code, investor_status, kyc_status, " +
+            "  bank_verification_status, risk_profile, cybrilla_investor_id, " +
+            "  external_kyc_status, kyc_readiness_status, kyc_compliance_status, is_deleted, " +
+            "  relationship_type, household_id" +
+            ") VALUES (" +
+            "  ?::uuid, now(), now(), ?::uuid, 'Rahul Mehta', '9811100002', 'rahul.demo@platizio.local', 'FFFPF3751F', " +
+            "  '1988-07-22', '88 MG Road', 'Bengaluru', 'Karnataka', '560001', 'ONBOARDING', 'COMPLETED', " +
+            "  'VERIFICATION_PENDING', 'MODERATE', NULL, 'completed', 'verified', " +
+            "  true, false, 'SELF', ?::uuid" +
+            ") ON CONFLICT (id) DO UPDATE SET pan = EXCLUDED.pan, updated_at = now()",
+            id, TEST_DISTRIBUTOR_ID, id
+        );
+        jdbc.update(
+            "INSERT INTO investor_bank_accounts (" +
+            "  id, created_at, updated_at, investor_id, account_holder_name, account_number, ifsc_code, " +
+            "  bank_name, branch_name, verification_status" +
+            ") VALUES (" +
+            "  'b2020002-0002-4002-8002-000000000202', now(), now(), ?::uuid, 'Rahul Mehta', " +
+            "  '98123459193', 'HDFC0001330', 'HDFC Bank', 'MG Road', 'VERIFICATION_PENDING'" +
+            ") ON CONFLICT (id) DO NOTHING",
+            id
+        );
+        jdbc.update(
+            "INSERT INTO notifications (id, created_at, updated_at, distributor_id, investor_id, type, title, message, read_flag) " +
+            "VALUES ('a1010002-0002-4002-8002-000000000102', now(), now(), ?::uuid, ?::uuid, 'GENERAL', " +
+            "'Bank Verification Pending', 'Rahul Mehta bank account is under penny-drop verification.', false) " +
+            "ON CONFLICT (id) DO NOTHING",
+            TEST_DISTRIBUTOR_ID, id
+        );
+    }
+
+    private void seedAnitaFullyVerifiedWithActivity() {
+        String id = "9b5c4d3e-2f1a-4c0b-9d8e-7f6a5b4c3d03";
+        jdbc.update(
+            "INSERT INTO investors (" +
+            "  id, created_at, updated_at, distributor_id, full_name, mobile_number, email, pan, " +
+            "  date_of_birth, address_line1, city, state, postal_code, investor_status, kyc_status, " +
+            "  bank_verification_status, risk_profile, cybrilla_investor_id, onboarding_notes, " +
+            "  external_mf_investment_account_id, external_kyc_status, kyc_readiness_status, " +
+            "  kyc_compliance_status, kyc_compliance_reason, is_deleted, relationship_type, household_id" +
+            ") VALUES (" +
+            "  ?::uuid, now(), now(), ?::uuid, 'Anita Verma', '9811100003', 'anita.demo@platizio.in', 'KRTPX3751K', " +
+            "  '1985-11-08', '22 Lake View', 'Pune', 'Maharashtra', '411001', 'READY_FOR_TRANSACTIONS', 'COMPLETED', " +
+            "  'VERIFIED', 'AGGRESSIVE', NULL, 'gender=female;occupation=service;income=upto_1lakh', NULL, 'completed', " +
+            "  'verified', true, 'verified', false, 'SELF', ?::uuid" +
+            ") ON CONFLICT (id) DO UPDATE SET " +
+            "  updated_at = now(), email = EXCLUDED.email, pan = EXCLUDED.pan, " +
+            "  onboarding_notes = EXCLUDED.onboarding_notes, kyc_status = EXCLUDED.kyc_status, " +
+            "  bank_verification_status = EXCLUDED.bank_verification_status, investor_status = EXCLUDED.investor_status",
+            id, TEST_DISTRIBUTOR_ID, id
+        );
+        jdbc.update(
+            "INSERT INTO investor_bank_accounts (" +
+            "  id, created_at, updated_at, investor_id, account_holder_name, account_number, ifsc_code, " +
+            "  bank_name, branch_name, verification_status, cybrilla_bank_id" +
+            ") VALUES (" +
+            "  'b2020003-0003-4003-8003-000000000203', now(), now(), ?::uuid, 'Anita Verma', " +
+            "  '98123451193', 'HDFC0001330', 'HDFC Bank', 'FC Road', 'VERIFIED', NULL" +
+            ") ON CONFLICT (id) DO NOTHING",
+            id
+        );
+
+        String lumpsumId = "c3030003-0003-4003-8003-000000000301";
+        String sipActiveId = "c3030003-0003-4003-8003-000000000302";
+        String sipPaymentPendingId = "c3030003-0003-4003-8003-000000000303";
+        String redemptionOrderId = "c3030003-0003-4003-8003-000000000304";
+
+        jdbc.update(
+            "INSERT INTO transaction_orders (" +
+            "  id, created_at, updated_at, investor_id, distributor_id, product_scheme_id, transaction_type, " +
+            "  order_status, amount, units, payment_mode, product_category, external_order_id, is_deleted" +
+            ") VALUES (" +
+            "  ?::uuid, now() - interval '12 days', now() - interval '10 days', ?::uuid, ?::uuid, ?::uuid, 'LUMPSUM_PURCHASE', " +
+            "  'COMPLETED', 50000.00, 412.5000, 'NET_BANKING', 'MF', 'fp_purchase_demo_001', false" +
+            ") ON CONFLICT (id) DO NOTHING",
+            lumpsumId, id, TEST_DISTRIBUTOR_ID, SCHEME_MF_GROWTH
+        );
+        jdbc.update(
+            "INSERT INTO transaction_orders (" +
+            "  id, created_at, updated_at, investor_id, distributor_id, product_scheme_id, transaction_type, " +
+            "  order_status, amount, units, payment_mode, mandate_mode, product_category, sip_frequency, " +
+            "  sip_start_date, sip_instalments, external_order_id, is_deleted" +
+            ") VALUES (" +
+            "  ?::uuid, now() - interval '90 days', now() - interval '1 day', ?::uuid, ?::uuid, ?::uuid, 'SIP', 'SUCCESSFUL', " +
+            "  5000.00, 48.2500, 'NET_BANKING', 'E-Mandate', 'MF', 'MONTHLY', '2025-09-01', 12, " +
+            "  'fp_sip_demo_001', false" +
+            ") ON CONFLICT (id) DO UPDATE SET " +
+            "  is_deleted = false, deleted_at = NULL, order_status = 'SUCCESSFUL', updated_at = now()",
+            sipActiveId, id, TEST_DISTRIBUTOR_ID, SCHEME_MF_BALANCED
+        );
+        jdbc.update(
+            "INSERT INTO transaction_orders (" +
+            "  id, created_at, updated_at, investor_id, distributor_id, product_scheme_id, transaction_type, " +
+            "  order_status, amount, payment_mode, mandate_mode, product_category, investor_action_url, is_deleted" +
+            ") VALUES (" +
+            "  ?::uuid, now() - interval '2 hours', now() - interval '1 hour', ?::uuid, ?::uuid, ?::uuid, 'SIP', 'PAYMENT_PENDING', " +
+            "  3000.00, 'NET_BANKING', 'E-Mandate', 'SIF', 'http://localhost:3000/investor-actions/demo-anita-sip', false" +
+            ") ON CONFLICT (id) DO NOTHING",
+            sipPaymentPendingId, id, TEST_DISTRIBUTOR_ID, SCHEME_SIF
+        );
+        jdbc.update(
+            "INSERT INTO transaction_orders (" +
+            "  id, created_at, updated_at, investor_id, distributor_id, product_scheme_id, transaction_type, " +
+            "  order_status, amount, units, payment_mode, product_category, is_deleted" +
+            ") VALUES (" +
+            "  ?::uuid, now() - interval '3 days', now() - interval '2 days', ?::uuid, ?::uuid, ?::uuid, 'REDEMPTION', 'PROCESSING', " +
+            "  12000.00, 95.0000, 'NET_BANKING', 'MF', false" +
+            ") ON CONFLICT (id) DO NOTHING",
+            redemptionOrderId, id, TEST_DISTRIBUTOR_ID, SCHEME_MF_GROWTH
+        );
+        jdbc.update(
+            "INSERT INTO redemption_records (" +
+            "  id, created_at, updated_at, order_id, investor_id, redemption_status, units, amount, " +
+            "  external_redemption_id" +
+            ") VALUES (" +
+            "  'd4040003-0003-4003-8003-000000000403', now() - interval '3 days', now() - interval '1 day', " +
+            "  ?::uuid, ?::uuid, 'PROCESSING', 95.0000, 12000.00, 'fp_redemption_demo_001'" +
+            ") ON CONFLICT (id) DO NOTHING",
+            redemptionOrderId, id
+        );
+
+        insertNotification("a1010003-0003-4003-8003-000000000103", TEST_DISTRIBUTOR_ID, id,
+                "KYC_COMPLETED", "KYC Verified", "Anita Verma is KYC compliant and ready to invest.", true);
+        insertNotification("a1010004-0004-4004-8004-000000000104", TEST_DISTRIBUTOR_ID, id,
+                "TRANSACTION_SUCCESSFUL", "Lumpsum Successful",
+                "₹50,000 invested in Super Growth Fund.", false);
+        insertNotification("a1010005-0005-4005-8005-000000000105", TEST_DISTRIBUTOR_ID, id,
+                "PAYMENT_PENDING", "SIP Payment Awaiting",
+                "₹3,000 monthly SIP in Social Venture Fund needs investor payment confirmation.", false);
+        insertNotification("a1010006-0006-4006-8006-000000000106", TEST_DISTRIBUTOR_ID, id,
+                "REDEMPTION_SUBMITTED", "Redemption Submitted",
+                "Redemption of 95 units (₹12,000) is being processed.", false);
+        insertNotification("a1010007-0007-4007-8007-000000000107", TEST_DISTRIBUTOR_ID, id,
+                "RECURRING_PLAN_EVENT", "SIP Instalment Debited",
+                "₹5,000 SIP instalment for Balanced Advantage Fund was successful.", true);
+    }
+
+    /**
+     * One-time local repair: Anita's sandbox FP profiles were linked before occupation could
+     * be set on POST and/or used a {@code .local} email rejected by ONDC review. Reset stale
+     * Finprim linkage only when the demo investor still carries a retired PAN or known-bad FP id.
+     */
+    private void repairAnitaStaleFpProfileIfNeeded() {
+        String id = "9b5c4d3e-2f1a-4c0b-9d8e-7f6a5b4c3d03";
+        jdbc.update(
+            "UPDATE investors SET "
+                    + "  email = 'anita.demo@platizio.in', "
+                    + "  pan = 'KRTPX3751K', "
+                    + "  onboarding_notes = 'gender=female;occupation=service;income=upto_1lakh', "
+                    + "  cybrilla_investor_id = NULL, "
+                    + "  external_mf_investment_account_id = NULL, "
+                    + "  external_kyc_check_id = NULL, "
+                    + "  external_sync_pending = false, "
+                    + "  external_sync_message = NULL, "
+                    + "  updated_at = now() "
+                    + "WHERE id = ?::uuid "
+                    + "  AND (pan <> 'KRTPX3751K' OR email LIKE '%@platizio.local' "
+                    + "       OR pan IN ('CCCPC3751C', 'ANVPA3751A', 'EEEPX3751E', 'AVRMPX3751V', 'AVRPX3751A', 'BBBPB3751B') "
+                    + "       OR cybrilla_investor_id IN ('invp_3605d8a4b9b049ccb3c623f5e23ddb59', "
+                    + "           'invp_7ffe137cad8e4a8887844fe058149878', "
+                    + "           'invp_fca5fd4512c847bb8422f23dee938c0a', "
+                    + "           'invp_b184067cf9e34905a9748c857674a449'))",
+            id
+        );
+        jdbc.update(
+            "UPDATE investor_bank_accounts SET "
+                    + "  verification_status = 'VERIFIED', "
+                    + "  cybrilla_bank_id = NULL, "
+                    + "  fp_bank_account_old_id = NULL, "
+                    + "  cybrilla_bank_verification_id = NULL, "
+                    + "  cybrilla_bank_verification_status = NULL, "
+                    + "  cybrilla_bank_verification_confidence = NULL, "
+                    + "  external_sync_pending = false, "
+                    + "  external_sync_message = NULL, "
+                    + "  updated_at = now() "
+                    + "WHERE investor_id = ?::uuid "
+                    + "  AND (cybrilla_bank_id IS NOT NULL OR cybrilla_bank_verification_id IS NOT NULL) "
+                    + "  AND EXISTS (SELECT 1 FROM investors i WHERE i.id = ?::uuid AND i.cybrilla_investor_id IS NULL)",
+            id, id
+        );
+        jdbc.update(
+            "UPDATE investor_bank_accounts SET account_number = '98123451193', verification_status = 'VERIFIED', updated_at = now() "
+                    + "WHERE investor_id = ?::uuid AND account_number = '98123459193'",
+            id
+        );
+    }
+
+    private void seedVikramKycRetry() {
+        String id = "1c6d5e4f-3a2b-4d1c-0e9f-8a7b6c5d4e04";
+        jdbc.update(
+            "INSERT INTO investors (" +
+            "  id, created_at, updated_at, distributor_id, full_name, mobile_number, email, pan, " +
+            "  date_of_birth, address_line1, city, state, postal_code, investor_status, kyc_status, " +
+            "  bank_verification_status, risk_profile, " +
+            "  kyc_readiness_status, kyc_readiness_reason, is_deleted, relationship_type, household_id" +
+            ") VALUES (" +
+            "  ?::uuid, now(), now(), ?::uuid, 'Vikram Singh', '9811100004', 'vikram.demo@platizio.local', 'GYAPS3753D', " +
+            "  '1994-01-30', '9 Civil Lines', 'Jaipur', 'Rajasthan', '302006', 'ONBOARDING', 'NOT_STARTED', " +
+            "  'NOT_CAPTURED', 'UNASSESSED', 'failed', " +
+            "  'Fresh KYC required — no reusable KYC record in sandbox.', false, 'SELF', ?::uuid" +
+            ") ON CONFLICT (id) DO NOTHING",
+            id, TEST_DISTRIBUTOR_ID, id
+        );
+        insertNotification("a1010008-0008-4008-8008-000000000108", TEST_DISTRIBUTOR_ID, id,
+                "KYC_FAILED", "KYC Retry Required",
+                "Vikram Singh KYC failed: name does not match PAN records.", false);
+    }
+
+    private void seedNehaKycInProgress() {
+        String id = "2d7e6f5a-4b3c-4e2d-1f0a-9b8c7d6e5f05";
+        jdbc.update(
+            "INSERT INTO investors (" +
+            "  id, created_at, updated_at, distributor_id, full_name, mobile_number, email, pan, " +
+            "  date_of_birth, address_line1, city, state, postal_code, investor_status, kyc_status, " +
+            "  bank_verification_status, risk_profile, external_kyc_status, " +
+            "  kyc_readiness_status, is_deleted, relationship_type, household_id" +
+            ") VALUES (" +
+            "  ?::uuid, now(), now(), ?::uuid, 'Neha Joshi', '9811100005', 'neha.demo@platizio.local', 'CCCPC3753C', " +
+            "  '1996-09-12', '31 Ring Road', 'Ahmedabad', 'Gujarat', '380015', 'ONBOARDING', 'IN_PROGRESS', " +
+            "  'NOT_CAPTURED', 'CONSERVATIVE', 'pending', 'pending', false, 'SELF', ?::uuid" +
+            ") ON CONFLICT (id) DO UPDATE SET pan = EXCLUDED.pan, updated_at = now()",
+            id, TEST_DISTRIBUTOR_ID, id
+        );
+        insertNotification("a1010009-0009-4009-8009-000000000109", TEST_DISTRIBUTOR_ID, id,
+                "GENERAL", "KYC In Progress",
+                "Neha Joshi KYC pre-verification is running with Cybrilla.", false);
+    }
+
+    private void insertNotification(
+            String notificationId,
+            String distributorId,
+            String investorId,
+            String type,
+            String title,
+            String message,
+            boolean read
+    ) {
+        jdbc.update(
+            "INSERT INTO notifications (id, created_at, updated_at, distributor_id, investor_id, type, title, message, read_flag) " +
+            "VALUES (?::uuid, now(), now(), ?::uuid, ?::uuid, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING",
+            notificationId, distributorId, investorId, type, title, message, read
         );
     }
 }

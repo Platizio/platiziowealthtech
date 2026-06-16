@@ -17,5 +17,7 @@ public record OrderCreateRequest(
         String mandateMode,
         String sipFrequency,
         LocalDate sipStartDate,
-        Integer sipInstalments
+        Integer sipInstalments,
+        String externalSchemeCode,
+        String externalIsin
 ) {}

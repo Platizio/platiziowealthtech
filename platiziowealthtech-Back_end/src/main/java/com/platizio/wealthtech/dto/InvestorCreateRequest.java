@@ -1,6 +1,7 @@
 package com.platizio.wealthtech.dto;
 
 import com.platizio.wealthtech.domain.InvestorRelationshipType;
+import com.platizio.wealthtech.validation.PanFormat;
 import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
@@ -16,7 +17,7 @@ public record InvestorCreateRequest(
         @NotBlank @Email String email,
         @NotBlank
         @Size(min = 10, max = 10, message = "PAN must be exactly 10 characters")
-        @Pattern(regexp = "^[A-Z]{5}[0-9]{4}[A-Z]$", message = "Invalid PAN format. Expected format: AAAAA9999A")
+        @Pattern(regexp = PanFormat.INDIAN_PAN_REGEX, message = PanFormat.INDIAN_PAN_MESSAGE)
         String pan,
         LocalDate dateOfBirth,
         LocalDate anniversaryDate,
@@ -31,7 +32,7 @@ public record InvestorCreateRequest(
         InvestorRelationshipType relationshipType,
         UUID guardianInvestorId,
         @Size(min = 10, max = 10, message = "Guardian PAN must be exactly 10 characters")
-        @Pattern(regexp = "^[A-Z]{5}[0-9]{4}[A-Z]$", message = "Invalid guardian PAN format. Expected format: AAAAA9999A")
+        @Pattern(regexp = PanFormat.INDIAN_PAN_REGEX, message = PanFormat.INDIAN_PAN_MESSAGE)
         String guardianPan,
         String onboardingNotes
 ) {}

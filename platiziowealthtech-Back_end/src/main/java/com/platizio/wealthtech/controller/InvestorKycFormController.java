@@ -1,6 +1,7 @@
 package com.platizio.wealthtech.controller;
 
 import com.platizio.wealthtech.dto.InvestorKycFormResponse;
+import com.platizio.wealthtech.dto.KycFormCreateRequest;
 import com.platizio.wealthtech.dto.KycFormUpdateRequest;
 import com.platizio.wealthtech.security.JwtAuthPrincipal;
 import com.platizio.wealthtech.service.InvestorKycFormService;
@@ -39,8 +40,13 @@ public class InvestorKycFormController {
 
     @Operation(summary = "Start a KYC modify form (type=modify) for an already-verified investor")
     @PostMapping
-    public InvestorKycFormResponse create(@PathVariable UUID investorId, Authentication auth) {
-        return kycFormService.createModifyForm(investorId, actorId(auth));
+    public InvestorKycFormResponse create(
+            @PathVariable UUID investorId,
+            @RequestBody(required = false) KycFormCreateRequest request,
+            Authentication auth
+    ) {
+        String callbackBaseUrl = request == null ? null : request.callbackBaseUrl();
+        return kycFormService.createModifyForm(investorId, actorId(auth), callbackBaseUrl);
     }
 
     @Operation(summary = "Refresh a KYC modify form from Cybrilla")
@@ -83,6 +89,26 @@ public class InvestorKycFormController {
             Authentication auth
     ) {
         return kycFormService.retryProofDetailsFetch(investorId, kycFormId, actorId(auth));
+    }
+
+    @Operation(summary = "Simulate Digilocker proof fetch (local sandbox when kyc_forms API is unavailable)")
+    @PostMapping("/{kycFormId}/sandbox/simulate-proof-fetch")
+    public InvestorKycFormResponse simulateProofFetch(
+            @PathVariable UUID investorId,
+            @PathVariable String kycFormId,
+            Authentication auth
+    ) {
+        return kycFormService.simulateProofFetch(investorId, kycFormId, actorId(auth));
+    }
+
+    @Operation(summary = "Simulate eSign completion (local sandbox when kyc_forms API is unavailable)")
+    @PostMapping("/{kycFormId}/sandbox/simulate-esign")
+    public InvestorKycFormResponse simulateEsign(
+            @PathVariable UUID investorId,
+            @PathVariable String kycFormId,
+            Authentication auth
+    ) {
+        return kycFormService.simulateEsign(investorId, kycFormId, actorId(auth));
     }
 
     private UUID actorId(Authentication auth) {

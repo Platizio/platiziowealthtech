@@ -23,11 +23,15 @@ public class InvestorBankAccount extends BaseEntity {
     private String bankName;
     private String branchName;
 
+    @Column(nullable = false)
+    private String accountType = "savings";
+
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
     private BankVerificationStatus verificationStatus = BankVerificationStatus.NOT_CAPTURED;
 
     private String cybrillaBankId;
+    private Integer fpBankAccountOldId;
     private String cybrillaBankVerificationId;
     private String cybrillaBankVerificationStatus;
     private String cybrillaBankVerificationConfidence;
@@ -54,10 +58,14 @@ public class InvestorBankAccount extends BaseEntity {
     public void setBankName(String bankName) { this.bankName = bankName; }
     public String getBranchName() { return branchName; }
     public void setBranchName(String branchName) { this.branchName = branchName; }
+    public String getAccountType() { return accountType; }
+    public void setAccountType(String accountType) { this.accountType = accountType; }
     public BankVerificationStatus getVerificationStatus() { return verificationStatus; }
     public void setVerificationStatus(BankVerificationStatus verificationStatus) { this.verificationStatus = verificationStatus; }
     public String getCybrillaBankId() { return cybrillaBankId; }
     public void setCybrillaBankId(String cybrillaBankId) { this.cybrillaBankId = cybrillaBankId; }
+    public Integer getFpBankAccountOldId() { return fpBankAccountOldId; }
+    public void setFpBankAccountOldId(Integer fpBankAccountOldId) { this.fpBankAccountOldId = fpBankAccountOldId; }
     public String getCybrillaBankVerificationId() { return cybrillaBankVerificationId; }
     public void setCybrillaBankVerificationId(String cybrillaBankVerificationId) { this.cybrillaBankVerificationId = cybrillaBankVerificationId; }
     public String getCybrillaBankVerificationStatus() { return cybrillaBankVerificationStatus; }

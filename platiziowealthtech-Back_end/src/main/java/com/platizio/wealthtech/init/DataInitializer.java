@@ -2,9 +2,15 @@ package com.platizio.wealthtech.init;
 
 import com.platizio.wealthtech.service.ProductService;
 import org.springframework.boot.CommandLineRunner;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
 @Component
+@ConditionalOnProperty(
+        prefix = "cybrilla.integration",
+        name = "bootstrap-catalogue-on-startup",
+        havingValue = "true"
+)
 public class DataInitializer implements CommandLineRunner {
 
     private final ProductService productService;

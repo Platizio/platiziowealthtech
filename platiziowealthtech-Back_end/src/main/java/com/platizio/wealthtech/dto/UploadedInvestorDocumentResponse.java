@@ -15,13 +15,14 @@ public record UploadedInvestorDocumentResponse(
 ) {
 
     public static UploadedInvestorDocumentResponse from(InvestorDocument document) {
+        Long sizeBytes = document.getSizeBytes();
         return new UploadedInvestorDocumentResponse(
                 document.getId(),
                 document.getInvestorId(),
                 document.getDocumentType(),
                 document.getFileName(),
                 document.getContentType(),
-                document.getSizeBytes(),
+                sizeBytes == null ? 0L : sizeBytes,
                 document.getUpdatedAt()
         );
     }

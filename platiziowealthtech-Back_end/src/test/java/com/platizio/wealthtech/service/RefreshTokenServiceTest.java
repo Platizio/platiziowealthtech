@@ -77,4 +77,33 @@ class RefreshTokenServiceTest {
         assertThat(savedTokens.get(1).getTokenHash()).isEqualTo(service.sha256(rotated.refreshToken().toString()));
         assertThat(savedTokens.get(1).getTokenHash()).isNotEqualTo(rotated.refreshToken().toString());
     }
+
+    @Test
+    void rotateWithinGracePeriodReusesNewTokenWithoutRevokingAgain() {
+        UUID distributorId = UUID.randomUUID();
+        UUID rawToken = UUID.randomUUID();
+        AuthRefreshTokenRepository refreshTokenRepository = mock(AuthRefreshTokenRepository.class);
+        DistributorRepository distributorRepository = mock(DistributorRepository.class);
+        RefreshTokenService service = new RefreshTokenService(
+                refreshTokenRepository,
+                distributorRepository,
+                604_800_000
+        );
+        AuthRefreshToken existingToken = new AuthRefreshToken();
+        existingToken.setDistributorId(distributorId);
+        existingToken.setTokenHash(service.sha256(rawToken.toString()));
+        existingToken.setExpiresAt(OffsetDateTime.now().plusDays(1));
+        existingToken.setRevoked(false);
+        when(refreshTokenRepository.findByTokenHash(service.sha256(rawToken.toString())))
+                .thenReturn(Optional.of(existingToken));
+        when(distributorRepository.findById(distributorId)).thenReturn(Optional.of(new Distributor()));
+        when(refreshTokenRepository.save(any(AuthRefreshToken.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        RefreshTokenService.RotatedRefreshToken first = service.rotate(rawToken.toString());
+        RefreshTokenService.RotatedRefreshToken second = service.rotate(rawToken.toString());
+
+        assertThat(second.refreshToken()).isEqualTo(first.refreshToken());
+        verify(refreshTokenRepository, org.mockito.Mockito.times(2)).save(any(AuthRefreshToken.class));
+    }
 }

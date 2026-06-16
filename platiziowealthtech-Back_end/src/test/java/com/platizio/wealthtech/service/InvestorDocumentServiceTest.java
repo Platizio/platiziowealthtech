@@ -16,6 +16,7 @@ import com.platizio.wealthtech.dto.InvestorDocumentUploadResponse;
 import com.platizio.wealthtech.repository.InvestorDocumentRepository;
 import com.platizio.wealthtech.repository.InvestorRepository;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -104,6 +105,44 @@ class InvestorDocumentServiceTest {
                 .isInstanceOf(AccessDeniedException.class)
                 .hasMessage("Cannot upload documents for another distributor's investor");
         verify(documentRepository, never()).save(any());
+    }
+
+    @Test
+    void listDocumentsReturnsMetadataWithoutBinaryContent() {
+        UUID investorId = UUID.randomUUID();
+        UUID distributorId = UUID.randomUUID();
+        Investor investor = investor(investorId, distributorId);
+        InvestorRepository investorRepository = mock(InvestorRepository.class);
+        InvestorDocumentRepository documentRepository = mock(InvestorDocumentRepository.class);
+        RecordingDistributorService distributorService = new RecordingDistributorService();
+        RecordingAuditService auditService = new RecordingAuditService();
+        distributorService.put(distributorId, DistributorRole.SUB_DISTRIBUTOR);
+        when(investorRepository.findById(investorId)).thenReturn(Optional.of(investor));
+
+        InvestorDocument pan = new InvestorDocument();
+        ReflectionTestUtils.setField(pan, "id", UUID.randomUUID());
+        pan.setInvestorId(investorId);
+        pan.setDistributorId(distributorId);
+        pan.setUploadedBy(distributorId);
+        pan.setDocumentType("PAN");
+        pan.setFileName("pan-card.pdf");
+        pan.setContentType("application/pdf");
+        pan.setSizeBytes(1200L);
+        pan.setContent("pdf-bytes".getBytes());
+        when(documentRepository.findAllByInvestorIdOrderByDocumentTypeAsc(investorId)).thenReturn(List.of(pan));
+
+        InvestorDocumentService service = new InvestorDocumentService(
+                investorRepository,
+                documentRepository,
+                distributorService,
+                auditService
+        );
+
+        var documents = service.listDocuments(investorId, distributorId);
+
+        assertThat(documents).hasSize(1);
+        assertThat(documents.getFirst().documentType()).isEqualTo("PAN");
+        assertThat(documents.getFirst().fileName()).isEqualTo("pan-card.pdf");
     }
 
     @Test

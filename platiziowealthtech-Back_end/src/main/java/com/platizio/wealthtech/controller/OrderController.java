@@ -3,10 +3,12 @@ package com.platizio.wealthtech.controller;
 import com.platizio.wealthtech.domain.OrderStatus;
 import com.platizio.wealthtech.domain.RedemptionRecord;
 import com.platizio.wealthtech.domain.TransactionOrder;
+import com.platizio.wealthtech.domain.TransactionType;
 import com.platizio.wealthtech.dto.BulkOrderExecutionPlatform;
 import com.platizio.wealthtech.dto.BulkOrderCreateRequest;
 import com.platizio.wealthtech.dto.BulkOrderUploadResponse;
 import com.platizio.wealthtech.dto.OrderCreateRequest;
+import com.platizio.wealthtech.dto.SipCancelRequest;
 import com.platizio.wealthtech.security.AuthenticatedDistributorPrincipal;
 import com.platizio.wealthtech.security.JwtAuthPrincipal;
 import com.platizio.wealthtech.service.BulkOrderUploadService;
@@ -20,6 +22,7 @@ import java.util.UUID;
 import org.springframework.data.domain.Page;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -93,23 +96,28 @@ public class OrderController {
     }
 
     @GetMapping("/{orderId}")
-    public TransactionOrder getOrder(@PathVariable UUID orderId) {
-        return orderService.getOrder(orderId);
+    public TransactionOrder getOrder(@PathVariable UUID orderId, Authentication auth) {
+        return orderService.getOrder(orderId, actorPrincipal(auth));
+    }
+
+    @PostMapping("/{orderId}/sync-provider-status")
+    public TransactionOrder syncProviderStatus(@PathVariable UUID orderId, Authentication auth) {
+        return orderService.syncLumpsumOrderFromProvider(orderId, actorPrincipal(auth));
     }
 
     @GetMapping("/by-investor/{investorId}")
-    public List<TransactionOrder> listByInvestor(@PathVariable UUID investorId) {
-        return orderService.listOrdersByInvestor(investorId);
+    public List<TransactionOrder> listByInvestor(@PathVariable UUID investorId, Authentication auth) {
+        return orderService.listOrdersByInvestor(investorId, actorPrincipal(auth));
     }
 
     @GetMapping("/by-distributor/{distributorId}")
-    public List<TransactionOrder> listByDistributor(@PathVariable UUID distributorId) {
-        return orderService.listOrdersByDistributor(distributorId);
+    public List<TransactionOrder> listByDistributor(@PathVariable UUID distributorId, Authentication auth) {
+        return orderService.listOrdersByDistributor(distributorId, actorPrincipal(auth));
     }
 
     @GetMapping("/{orderId}/redemptions")
-    public List<RedemptionRecord> listRedemptions(@PathVariable UUID orderId) {
-        return orderService.listRedemptionsByOrder(orderId);
+    public List<RedemptionRecord> listRedemptions(@PathVariable UUID orderId, Authentication auth) {
+        return orderService.listRedemptionsByOrder(orderId, actorPrincipal(auth));
     }
 
     @PreAuthorize("hasRole('ADMIN')")
@@ -125,12 +133,32 @@ public class OrderController {
 
     @PostMapping("/{orderId}/redemption")
     public RedemptionRecord createRedemption(@PathVariable UUID orderId, Authentication auth) {
-        return orderService.createRedemption(orderId, actorId(auth));
+        return orderService.createRedemption(orderId, actorPrincipal(auth));
     }
 
+    @PostMapping("/{orderId}/cancel")
+    public TransactionOrder cancelSipOrder(
+            @PathVariable UUID orderId,
+            @Valid @RequestBody(required = false) SipCancelRequest request,
+            Authentication auth
+    ) {
+        return orderService.cancelSipOrder(orderId, actorId(auth), request);
+    }
+
+    /**
+     * Lumpsum orders are soft-deleted. SIP DELETE is treated as cancel for backward-compatible clients
+     * that still call DELETE instead of {@code POST /{orderId}/cancel}.
+     */
     @DeleteMapping("/{orderId}")
-    public void deleteOrder(@PathVariable UUID orderId, Authentication auth) {
-        orderService.deleteOrder(orderId, actorId(auth));
+    public ResponseEntity<?> deleteOrder(@PathVariable UUID orderId, Authentication auth) {
+        UUID actor = actorId(auth);
+        TransactionOrder order = orderService.getOrder(orderId);
+        if (order.getTransactionType() == TransactionType.SIP) {
+            TransactionOrder cancelled = orderService.cancelSipOrder(orderId, actor, null);
+            return ResponseEntity.ok(cancelled);
+        }
+        orderService.deleteOrder(orderId, actor);
+        return ResponseEntity.noContent().build();
     }
 
     private UUID authenticatedDistributorId(AuthenticatedDistributorPrincipal principal) {

@@ -42,7 +42,8 @@ public class DashboardService {
             OrderStatus.PROCESSING, "Active SIPs",
             OrderStatus.PAUSED, "Paused SIPs",
             OrderStatus.COMPLETED, "Completed SIPs",
-            OrderStatus.FAILED, "Failed SIPs"
+            OrderStatus.FAILED, "Failed SIPs",
+            OrderStatus.CANCELLED, "Cancelled SIPs"
     );
     private static final Map<OrderStatus, OrderStatus> SIP_STATUS_GROUP = Map.ofEntries(
             Map.entry(OrderStatus.ACTIVE, OrderStatus.ACTIVE),
@@ -56,13 +57,50 @@ public class DashboardService {
             Map.entry(OrderStatus.PAYMENT_PENDING, OrderStatus.PROCESSING),
             Map.entry(OrderStatus.SUBMITTED, OrderStatus.PROCESSING),
             Map.entry(OrderStatus.RETRY_AVAILABLE, OrderStatus.PROCESSING),
-            Map.entry(OrderStatus.DRAFT, OrderStatus.PAUSED)
+            Map.entry(OrderStatus.DRAFT, OrderStatus.PAUSED),
+            Map.entry(OrderStatus.CANCELLED, OrderStatus.CANCELLED)
+    );
+    /** Established SIPs — mf_purchase_plan exists (Cybrilla: only after mandate + plan confirm). */
+    private static final Set<OrderStatus> ESTABLISHED_SIP_STATUSES = Set.of(
+            OrderStatus.ACTIVE,
+            OrderStatus.SUCCESSFUL,
+            OrderStatus.COMPLETED,
+            OrderStatus.PAUSED,
+            OrderStatus.FAILED,
+            OrderStatus.CANCELLED
+    );
+    /** In-flight mandate / payment setup — not yet a live SIP. */
+    private static final Set<OrderStatus> PENDING_SETUP_STATUSES = Set.of(
+            OrderStatus.PENDING_INVESTOR_ACTION,
+            OrderStatus.PAYMENT_PENDING,
+            OrderStatus.CREATED,
+            OrderStatus.SUBMITTED,
+            OrderStatus.PROCESSING,
+            OrderStatus.RETRY_AVAILABLE,
+            OrderStatus.DRAFT
+    );
+    /** Row-level labels for the SIP dashboard table (must match React `SipDashboard` filters). */
+    private static final Map<OrderStatus, String> SIP_ITEM_STATUS = Map.ofEntries(
+            Map.entry(OrderStatus.ACTIVE, "Active"),
+            Map.entry(OrderStatus.SUCCESSFUL, "Active"),
+            Map.entry(OrderStatus.PROCESSING, "Pending"),
+            Map.entry(OrderStatus.CREATED, "Pending"),
+            Map.entry(OrderStatus.PENDING_INVESTOR_ACTION, "Pending"),
+            Map.entry(OrderStatus.PAYMENT_PENDING, "Pending"),
+            Map.entry(OrderStatus.SUBMITTED, "Pending"),
+            Map.entry(OrderStatus.RETRY_AVAILABLE, "Pending"),
+            Map.entry(OrderStatus.PAUSED, "Paused"),
+            Map.entry(OrderStatus.DRAFT, "Pending"),
+            Map.entry(OrderStatus.COMPLETED, "Paused"),
+            Map.entry(OrderStatus.FAILED, "Failed"),
+            Map.entry(OrderStatus.CANCELLED, "Cancelled")
     );
     private static final List<String> SIP_STATUS_LABEL_ORDER = List.of(
             "Active SIPs",
             "Paused SIPs",
             "Completed SIPs",
-            "Failed SIPs"
+            "Failed SIPs",
+            "Cancelled SIPs"
     );
 
     private final InvestorRepository investorRepository;
@@ -120,32 +158,14 @@ public class DashboardService {
         Map<UUID, ProductScheme> schemeMap = schemeRepository.findAllById(neededSchemeIds).stream()
                 .collect(Collectors.toMap(ProductScheme::getId, s -> s));
 
-        List<SipItemDto> sips = sipOrders.stream().map(o -> {
-            Investor inv = investorMap.get(o.getInvestorId());
-            ProductScheme scheme = schemeMap.get(o.getProductSchemeId());
-            String status = sipStatusLabel(o.getOrderStatus());
-            
-            // Apply robust bucketing logic
-            String rawCat = "OTHER";
-            if (o.getProductCategory() != null) {
-                rawCat = o.getProductCategory().toString();
-            } else if (scheme != null && scheme.getCategory() != null) {
-                rawCat = scheme.getCategory().toString();
-            }
-            rawCat = rawCat.toUpperCase();
-            String category = (rawCat.contains("MF") || rawCat.contains("MUTUAL")) ? "MF" : "SIF";
-
-            return new SipItemDto(
-                    o.getId().toString(),
-                    inv != null ? inv.getFullName() : "Unknown",
-                    scheme != null ? scheme.getSchemeName() : "Unknown",
-                    "₹" + (o.getAmount() != null ? o.getAmount().toString() : "0"),
-                    status,
-                    "N/A",
-                    o.getMandateMode() != null ? o.getMandateMode() : "Unknown",
-                    category
-            );
-        }).collect(Collectors.toList());
+        List<SipItemDto> sips = sipOrders.stream()
+                .filter(o -> ESTABLISHED_SIP_STATUSES.contains(o.getOrderStatus()))
+                .map(o -> toSipItem(o, investorMap, schemeMap))
+                .collect(Collectors.toList());
+        List<SipItemDto> pendingSetup = sipOrders.stream()
+                .filter(o -> PENDING_SETUP_STATUSES.contains(o.getOrderStatus()))
+                .map(o -> toSipItem(o, investorMap, schemeMap))
+                .collect(Collectors.toList());
         Map<String, Long> statusCounts = sipStatusCounts(distributorId);
 
         // ── Real SIP trend: aggregate transaction_orders by createdAt month ──────
@@ -167,6 +187,7 @@ public class DashboardService {
 
         // Group by YearMonth → sum amounts (null-safe)
         Map<YearMonth, BigDecimal> amountByMonth = recentSipOrders.stream()
+                .filter(o -> o.getOrderStatus() == OrderStatus.ACTIVE)
                 .filter(o -> o.getAmount() != null)
                 .collect(Collectors.groupingBy(
                         o -> YearMonth.from(o.getCreatedAt().toLocalDate()),
@@ -174,8 +195,9 @@ public class DashboardService {
                                 TransactionOrder::getAmount,
                                 BigDecimal::add)));
 
-        // Group by YearMonth → count orders
+        // Group by YearMonth → count active SIPs only
         Map<YearMonth, Long> countByMonth = recentSipOrders.stream()
+                .filter(o -> o.getOrderStatus() == OrderStatus.ACTIVE)
                 .collect(Collectors.groupingBy(
                         o -> YearMonth.from(o.getCreatedAt().toLocalDate()),
                         Collectors.counting()));
@@ -188,7 +210,49 @@ public class DashboardService {
                         countByMonth.getOrDefault(ym, 0L).intValue()))
                 .collect(Collectors.toList());
 
-        return new SipDashboardDto(trend, sips, statusCounts);
+        return new SipDashboardDto(trend, sips, pendingSetup, statusCounts);
+    }
+
+    private SipItemDto toSipItem(
+            TransactionOrder order,
+            Map<UUID, Investor> investorMap,
+            Map<UUID, ProductScheme> schemeMap
+    ) {
+        Investor inv = investorMap.get(order.getInvestorId());
+        ProductScheme scheme = schemeMap.get(order.getProductSchemeId());
+        String status = sipItemStatus(order.getOrderStatus());
+
+        String rawCat = "OTHER";
+        if (order.getProductCategory() != null) {
+            rawCat = order.getProductCategory().toString();
+        } else if (scheme != null && scheme.getCategory() != null) {
+            rawCat = scheme.getCategory().toString();
+        }
+        rawCat = rawCat.toUpperCase();
+        String category = (rawCat.contains("MF") || rawCat.contains("MUTUAL")) ? "MF" : "SIF";
+
+        return new SipItemDto(
+                order.getId().toString(),
+                inv != null ? inv.getFullName() : "Unknown",
+                ProductSchemeOrderSupport.displayName(scheme),
+                "₹" + (order.getAmount() != null ? order.getAmount().toString() : "0"),
+                status,
+                "N/A",
+                formatMandate(order),
+                order.getMandateStatus(),
+                order.getExternalMandateId(),
+                order.getExternalOrderId(),
+                category
+        );
+    }
+
+    private static String formatMandate(TransactionOrder order) {
+        if (order.getExternalMandateId() == null || order.getExternalMandateId() <= 0) {
+            return order.getMandateMode() != null ? order.getMandateMode() : "—";
+        }
+        String mode = order.getMandateMode() != null ? order.getMandateMode() : "MANDATE";
+        String mandateStatus = order.getMandateStatus() != null ? order.getMandateStatus() : "CREATED";
+        return mode + " #" + order.getExternalMandateId() + " · " + mandateStatus;
     }
 
     public List<ActionItemDto> getActionCenter(UUID distributorId) {
@@ -323,6 +387,10 @@ public class DashboardService {
     private String sipStatusLabel(OrderStatus orderStatus) {
         OrderStatus groupedStatus = SIP_STATUS_GROUP.getOrDefault(orderStatus, OrderStatus.PROCESSING);
         return SIP_STATUS_LABEL.get(groupedStatus);
+    }
+
+    private String sipItemStatus(OrderStatus orderStatus) {
+        return SIP_ITEM_STATUS.getOrDefault(orderStatus, "Active");
     }
 
     private String lifeEventCategory(LifeEventType eventType) {

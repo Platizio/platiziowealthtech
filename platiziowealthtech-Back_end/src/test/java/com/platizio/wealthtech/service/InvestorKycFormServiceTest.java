@@ -11,13 +11,16 @@ import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.platizio.wealthtech.domain.Investor;
 import com.platizio.wealthtech.domain.InvestorKycForm;
 import com.platizio.wealthtech.domain.KycStatus;
 import com.platizio.wealthtech.dto.ExternalKycSyncResponse;
 import com.platizio.wealthtech.dto.InvestorKycFormResponse;
 import com.platizio.wealthtech.dto.KycFormUpdateRequest;
+import com.platizio.wealthtech.integration.CybrillaApiException;
 import com.platizio.wealthtech.integration.CybrillaClient;
+import com.platizio.wealthtech.integration.CybrillaIntegrationEnvironment;
 import com.platizio.wealthtech.repository.InvestorKycFormRepository;
 import java.time.LocalDate;
 import java.util.List;
@@ -37,10 +40,24 @@ class InvestorKycFormServiceTest {
     private final InvestorKycFormRepository repository = mock(InvestorKycFormRepository.class);
     private final CybrillaClient cybrillaClient = mock(CybrillaClient.class);
     private final AuditService auditService = mock(AuditService.class);
+    private final CybrillaIntegrationEnvironment integrationEnvironment = mock(CybrillaIntegrationEnvironment.class);
 
     private InvestorKycFormService service() {
+        return service(false);
+    }
+
+    private InvestorKycFormService service(boolean mockFallbackOnAccessDenied) {
         when(repository.save(any(InvestorKycForm.class))).thenAnswer(inv -> inv.getArgument(0));
-        return new InvestorKycFormService(investorService, repository, cybrillaClient, auditService, CALLBACK_BASE);
+        when(integrationEnvironment.enforceSandboxPanPatterns()).thenReturn(true);
+        return new InvestorKycFormService(
+                investorService,
+                repository,
+                cybrillaClient,
+                auditService,
+                integrationEnvironment,
+                CALLBACK_BASE,
+                mockFallbackOnAccessDenied
+        );
     }
 
     private Investor verifiedInvestor(UUID investorId, UUID actorId) {
@@ -68,19 +85,161 @@ class InvestorKycFormServiceTest {
     }
 
     @Test
-    void createRejectsWhenOngoingFormExists() {
+    void createRejectsInvalidSandboxPanBeforeCybrillaCall() {
+        UUID investorId = UUID.randomUUID();
+        UUID actorId = UUID.randomUUID();
+        Investor investor = verifiedInvestor(investorId, actorId);
+        investor.setPan("ANIVM3003F");
+        when(repository.findFirstByInvestorIdAndStatusInOrderByCreatedAtDesc(eq(investorId), any()))
+                .thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service().createModifyForm(investorId, actorId))
+                .isInstanceOf(ResponseStatusException.class)
+                .hasMessageContaining("simulator PAN");
+        verify(cybrillaClient, never()).createKycForm(any());
+    }
+
+    @Test
+    void createResumesWhenOngoingFormExists() {
         UUID investorId = UUID.randomUUID();
         UUID actorId = UUID.randomUUID();
         verifiedInvestor(investorId, actorId);
         InvestorKycForm ongoing = new InvestorKycForm();
         ongoing.setStatus("created");
+        ongoing.setExternalKycFormId("kycf_existing");
         when(repository.findFirstByInvestorIdAndStatusInOrderByCreatedAtDesc(eq(investorId), any()))
                 .thenReturn(Optional.of(ongoing));
 
-        assertThatThrownBy(() -> service().createModifyForm(investorId, actorId))
-                .isInstanceOf(ResponseStatusException.class)
-                .hasMessageContaining("on-going KYC modify form");
+        InvestorKycFormResponse response = service().createModifyForm(investorId, actorId);
+
+        assertThat(response.form().getExternalKycFormId()).isEqualTo("kycf_existing");
+        assertThat(response.form().getStatus()).isEqualTo("created");
         verify(cybrillaClient, never()).createKycForm(any());
+    }
+
+    @Test
+    void createUsesFrontendCallbackBaseWhenProvided() {
+        UUID investorId = UUID.randomUUID();
+        UUID actorId = UUID.randomUUID();
+        verifiedInvestor(investorId, actorId);
+        when(repository.findFirstByInvestorIdAndStatusInOrderByCreatedAtDesc(eq(investorId), any()))
+                .thenReturn(Optional.empty());
+        when(cybrillaClient.createKycForm(any())).thenAnswer(inv -> {
+            Map<String, Object> payload = inv.getArgument(0);
+            ObjectNode response = OBJECT_MAPPER.createObjectNode();
+            response.put("object", "kyc_form");
+            response.put("id", "kycf_custom");
+            response.put("status", "created");
+            response.put("proof_details_callback_url", String.valueOf(payload.get("proof_details_callback_url")));
+            return response;
+        });
+
+        InvestorKycFormResponse response = service().createModifyForm(
+                investorId,
+                actorId,
+                "http://localhost:3000");
+
+        ArgumentCaptor<Map<String, Object>> captor = ArgumentCaptor.forClass(Map.class);
+        verify(cybrillaClient).createKycForm(captor.capture());
+        assertThat(captor.getValue().get("proof_details_callback_url"))
+                .isEqualTo("http://localhost:3000/distributor/investors/" + investorId + "/kyc-modify/proof-callback");
+        assertThat(response.form().getProofCallbackUrl())
+                .isEqualTo("http://localhost:3000/distributor/investors/" + investorId + "/kyc-modify/proof-callback");
+    }
+
+    @Test
+    void createFallsBackToMockWhenPartnerDeniedAndFallbackEnabled() {
+        UUID investorId = UUID.randomUUID();
+        UUID actorId = UUID.randomUUID();
+        verifiedInvestor(investorId, actorId);
+        when(repository.findFirstByInvestorIdAndStatusInOrderByCreatedAtDesc(eq(investorId), any()))
+                .thenReturn(Optional.empty());
+        when(cybrillaClient.createKycForm(any())).thenThrow(new CybrillaApiException(
+                "Unable to create_kyc_form with Cybrilla POA: 403 FORBIDDEN response={\"error\":\"Partner not allowed to access kyc_forms.\"}"));
+
+        InvestorKycFormResponse response = service(true).createModifyForm(investorId, actorId);
+
+        assertThat(response.form().getExternalKycFormId()).startsWith("kycf_");
+        assertThat(response.form().getStatus()).isEqualTo("created");
+        assertThat(response.form().getProofFetchUrl())
+                .isEqualTo(CALLBACK_BASE + "/distributor/investors/" + investorId + "/kyc-modify/proof-callback?sandbox=digilocker");
+        assertThat(response.form().getProofStatus()).isEqualTo("pending");
+    }
+
+    @Test
+    void refreshDoesNotAdvanceMockProofWhenPartnerDenied() {
+        UUID investorId = UUID.randomUUID();
+        UUID actorId = UUID.randomUUID();
+        verifiedInvestor(investorId, actorId);
+        InvestorKycForm existing = new InvestorKycForm();
+        existing.setExternalKycFormId("kycf_existing");
+        existing.setStatus("created");
+        existing.setProofStatus("pending");
+        existing.setProofFetchUrl(CALLBACK_BASE + "/distributor/investors/" + investorId + "/kyc-modify/proof-callback?sandbox=digilocker");
+        existing.setExternalResponseJson("""
+                {"object":"kyc_form","id":"kycf_existing","status":"created",
+                 "proof_details":{"fetch_url":"%s","status":"pending"},
+                 "requirements":{"fields_needed":["identity_proof","address","signature"]}}
+                """.formatted(existing.getProofFetchUrl()));
+        when(repository.findFirstByInvestorIdAndExternalKycFormId(investorId, "kycf_existing"))
+                .thenReturn(Optional.of(existing));
+        when(cybrillaClient.fetchKycForm("kycf_existing")).thenThrow(new CybrillaApiException(
+                "Unable to fetch KYC form with Cybrilla POA: 403 FORBIDDEN response={\"error\":\"Partner not allowed to access kyc_forms.\"}"));
+
+        InvestorKycFormResponse response = service(true).refreshForm(investorId, "kycf_existing", actorId);
+
+        assertThat(response.form().getProofStatus()).isEqualTo("pending");
+        assertThat(response.form().getStatus()).isEqualTo("created");
+    }
+
+    @Test
+    void refreshUsesLocalMirrorWhenCybrillaReportsFormNotFound() throws Exception {
+        UUID investorId = UUID.randomUUID();
+        UUID actorId = UUID.randomUUID();
+        verifiedInvestor(investorId, actorId);
+        InvestorKycForm existing = new InvestorKycForm();
+        existing.setExternalKycFormId("kycf_existing");
+        existing.setStatus("created");
+        existing.setProofStatus("fetched");
+        existing.setExternalResponseJson("""
+                {"object":"kyc_form","id":"kycf_existing","status":"created",
+                 "proof_details":{"status":"fetched"},
+                 "requirements":{"fields_needed":["signature"]}}
+                """);
+        when(repository.findFirstByInvestorIdAndExternalKycFormId(investorId, "kycf_existing"))
+                .thenReturn(Optional.of(existing));
+        when(cybrillaClient.fetchKycForm("kycf_existing")).thenThrow(new CybrillaApiException(
+                "Unable to fetch KYC form with Cybrilla POA: 400 BAD_REQUEST response={\"errors\":[{\"message\":\"KYC form not found\"}]}"));
+
+        InvestorKycFormResponse response = service(true).refreshForm(investorId, "kycf_existing", actorId);
+
+        assertThat(response.form().getProofStatus()).isEqualTo("fetched");
+        assertThat(response.form().getStatus()).isEqualTo("created");
+    }
+
+    @Test
+    void simulateProofFetchMarksProofFetchedWhenSandboxEnabled() {
+        UUID investorId = UUID.randomUUID();
+        UUID actorId = UUID.randomUUID();
+        verifiedInvestor(investorId, actorId);
+        InvestorKycForm existing = new InvestorKycForm();
+        existing.setExternalKycFormId("kycf_existing");
+        existing.setStatus("created");
+        existing.setProofFetchUrl("https://s.finprim.com/identity_documents/fetch_my_proof?form=kycf_existing");
+        existing.setProofStatus("pending");
+        existing.setExternalResponseJson("""
+                {"object":"kyc_form","id":"kycf_existing","status":"created",
+                 "proof_details":{"fetch_url":"https://s.finprim.com/identity_documents/fetch_my_proof?form=kycf_existing","status":"pending"},
+                 "requirements":{"fields_needed":["identity_proof","address","signature"]}}
+                """);
+        when(repository.findFirstByInvestorIdAndExternalKycFormId(investorId, "kycf_existing"))
+                .thenReturn(Optional.of(existing));
+
+        InvestorKycFormResponse response = service(true).simulateProofFetch(investorId, "kycf_existing", actorId);
+
+        assertThat(response.form().getProofStatus()).isEqualTo("fetched");
+        assertThat(response.form().getFieldsNeededJson()).doesNotContain("identity_proof");
+        verify(cybrillaClient, never()).fetchKycForm(any());
     }
 
     @Test

@@ -7,6 +7,8 @@ import java.time.Duration;
 import java.util.Arrays;
 import java.util.Optional;
 import java.util.UUID;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.ResponseCookie;
@@ -14,6 +16,8 @@ import org.springframework.stereotype.Service;
 
 @Service
 public class AuthCookieService {
+
+    private static final Logger logger = LoggerFactory.getLogger(AuthCookieService.class);
 
     private final String cookieName;
     private final String refreshCookieName;
@@ -33,9 +37,18 @@ public class AuthCookieService {
         this.cookieName = cookieName;
         this.refreshCookieName = refreshCookieName;
         this.secure = secure;
-        this.sameSite = sameSite;
+        this.sameSite = resolveSameSite(sameSite, secure);
         this.expirationMs = expirationMs;
         this.refreshExpirationMs = refreshExpirationMs;
+    }
+
+    private static String resolveSameSite(String configured, boolean secure) {
+        if ("None".equalsIgnoreCase(configured) && !secure) {
+            logger.warn(
+                    "app.auth.cookie-same-site=None requires cookie-secure=true; using Lax for HTTP dev so login cookies are stored.");
+            return "Lax";
+        }
+        return configured;
     }
 
     public String cookieName() {

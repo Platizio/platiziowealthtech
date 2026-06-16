@@ -45,6 +45,11 @@ public class FinprimTenantProperties {
         return tenant.getName();
     }
 
+    /** Resolved OAuth token URL (Cybrilla doc template /v2/auth/tenant/token is rewritten to /v2/auth/{name}/token). */
+    public String resolvedTokenUrl() {
+        return resolveTokenUrl();
+    }
+
     private String resolveTokenUrl() {
         if (StringUtils.hasText(tenant.getAuth().getTokenUrl())) {
             String configuredTokenUrl = tenant.getAuth().getTokenUrl();

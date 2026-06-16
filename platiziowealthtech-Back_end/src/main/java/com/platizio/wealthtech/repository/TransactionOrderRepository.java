@@ -32,6 +32,13 @@ public interface TransactionOrderRepository extends JpaRepository<TransactionOrd
     List<TransactionOrder> findByInvestorId(UUID investorId);
     List<TransactionOrder> findByDistributorId(UUID distributorId);
     /**
+     * Looks up a local order by the FP/Cybrilla external id stored on it (the
+     * {@code mfp_} mf_purchase id). Used by the webhook handler to reconcile
+     * {@code mf_purchase.*}/{@code payment.*} events idempotently against
+     * authoritative provider state.
+     */
+    Optional<TransactionOrder> findByExternalOrderId(String externalOrderId);
+    /**
      * Unbounded variant used by the SIP dashboard service (B-71). Realistic
      * per-distributor SIP volume is in the low hundreds, well within memory
      * limits, and consistent with the unpaginated

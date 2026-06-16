@@ -169,7 +169,7 @@ class ExternalBearerTokenServiceTest {
     }
 
     @Test
-    void scheduledRefreshGeneratesTokenWhenNoCacheExists() throws Exception {
+    void scheduledRefreshSkipsWhenNoCachedTokenExists() throws Exception {
         AtomicInteger tokenRequests = new AtomicInteger();
         HttpServer server = createTokenServer(tokenRequests);
         server.start();
@@ -190,8 +190,41 @@ class ExternalBearerTokenServiceTest {
 
             boolean refreshed = tokenService.refreshCybrillaPreVerificationTokenIfCachedAndDue();
 
+            assertThat(refreshed).isFalse();
+            assertThat(tokenRequests).hasValue(0);
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void scheduledRefreshRenewsCachedTokenWhenDue() throws Exception {
+        AtomicInteger tokenRequests = new AtomicInteger();
+        HttpServer server = createTokenServer(tokenRequests);
+        server.start();
+
+        try {
+            CybrillaPreVerificationProperties cybrillaProperties = new CybrillaPreVerificationProperties();
+            cybrillaProperties.getAuth().setTokenUrl("http://localhost:" + server.getAddress().getPort() + "/token");
+            cybrillaProperties.getAuth().setClientId("client-id");
+            cybrillaProperties.getAuth().setClientSecret("client-secret");
+            cybrillaProperties.getAuth().setRefreshBufferSeconds(120);
+            MutableClock clock = new MutableClock(Instant.parse("2026-05-13T00:00:00Z"));
+
+            ExternalBearerTokenService tokenService = new ExternalBearerTokenService(
+                    cybrillaProperties,
+                    new FinprimTenantProperties(),
+                    disabledCacheStore(),
+                    RestClient.builder(),
+                    clock
+            );
+
+            tokenService.getCybrillaPreVerificationAccessToken();
+            clock.advance(Duration.ofMinutes(29));
+            boolean refreshed = tokenService.refreshCybrillaPreVerificationTokenIfCachedAndDue();
+
             assertThat(refreshed).isTrue();
-            assertThat(tokenRequests).hasValue(1);
+            assertThat(tokenRequests).hasValue(2);
         } finally {
             server.stop(0);
         }

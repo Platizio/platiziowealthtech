@@ -33,17 +33,54 @@ public interface CybrillaClient {
         }
     }
 
+    /** One Finprim catalogue page mapped for UI use plus the raw provider JSON. */
+    record LiveCataloguePage(
+            JsonNode rawResponse,
+            List<ProductScheme> schemes,
+            long totalElements,
+            int page,
+            int size,
+            String finprimPath
+    ) {
+    }
+
     String createInvestorProfile(Investor investor);
     void updateInvestorProfile(Investor investor);
+    /** Patches FATCA/order-required profile fields without resending immutable identity attributes. */
+    void ensureInvestorProfileOrderReady(Investor investor);
+    /** FP tenant: GET /v2/investor_profiles (requires {@code pan} or {@code type}). */
+    JsonNode listInvestorProfiles(String pan, String type);
+    /** FP tenant: GET /v2/investor_profiles/:id */
+    JsonNode fetchInvestorProfile(String profileId);
+    /** Creates FP address, email, and phone child resources when local investor data is present. */
+    void syncInvestorContactResources(Investor investor);
+    /** FP tenant: GET /v2/mf_investment_accounts?primary_investor={invp_id} */
+    JsonNode listMfInvestmentAccounts(String investorProfileId);
     String createMfInvestmentAccount(Investor investor);
+    /**
+     * Ensures FP {@code folio_defaults} are set on the investor's MF investment account
+     * (required before POA orders when the account is linked to an investor profile).
+     */
+    void ensureMfInvestmentAccountOrderReady(Investor investor, InvestorBankAccount bankAccount);
     void captureBankAccount(Investor investor, InvestorBankAccount bankAccount);
+    /** Creates FP {@code bac_} on the investor profile without starting POA/FP bank verification. */
+    void ensureFpBankAccountCaptured(Investor investor, InvestorBankAccount bankAccount);
     void startBankAccountVerification(Investor investor, InvestorBankAccount bankAccount);
+    /** FP onboarding lookup: GET /api/onb/ifsc_codes/{ifsc_code} */
+    IfscLookupResult fetchIfscDetails(String ifscCode);
+    /** FP onboarding lookup: GET /api/onb/pincodes/{pincode} */
+    PincodeLookupResult fetchPincodeDetails(String pincode);
     SchemeFetchResult fetchProductSchemes();
     String createOrder(TransactionOrder order, Investor investor, ProductScheme productScheme);
     JsonNode fetchBankAccountVerification(String bankAccountVerificationId);
     JsonNode fetchBankAccountVerificationWithPayloadSnapshot(String bankAccountVerificationId, Map<String, Object> payloadSnapshot);
     JsonNode createPreVerification(Map<String, Object> payload);
+    /** POA PAN/name/DOB validation shape for onboarding step 3. */
     JsonNode createKycCheck(Investor investor);
+    /** POA readiness + PAN + bank in one pre_verification for ONDC purchase review. */
+    JsonNode createCombinedOrderPreVerification(Investor investor, InvestorBankAccount bankAccount);
+    /** POA readiness-only shape ({@code investor_identifier}) for post-submit apply flow. */
+    JsonNode createReadinessCheck(Investor investor);
     JsonNode fetchKycCheck(String kycCheckId);
     JsonNode refetchKycCheck(String kycCheckId);
 
@@ -61,6 +98,8 @@ public interface CybrillaClient {
     JsonNode createIdentityDocument(Map<String, Object> payload);
     JsonNode fetchIdentityDocument(String identityDocumentId);
     JsonNode listIdentityDocuments(String kycRequestId, String fetchStatus);
+    JsonNode createEsign(Map<String, Object> payload);
+    JsonNode fetchEsign(String esignId);
 
     // Cybrilla POA KYC Forms API (modify workflow). POST/PATCH /poa/kyc_forms,
     // GET /poa/kyc_forms/{id}, plus signature upload and proof-fetch retry.
@@ -70,7 +109,44 @@ public interface CybrillaClient {
     JsonNode uploadKycFormSignature(String kycFormId, byte[] fileBytes, String filename, String contentType);
     JsonNode retryKycFormProofDetailsFetch(String kycFormId);
     String generateInvestorActionUrl(TransactionOrder order);
+    JsonNode fetchMfPurchase(String mfPurchaseId);
+    JsonNode updateMfPurchaseConsent(String mfPurchaseId, Map<String, Object> consent);
+    JsonNode createNetbankingPayment(List<Integer> amcOrderIds, String paymentPostbackUrl, String paymentMethod);
+    JsonNode createNetbankingPayment(
+            List<Integer> amcOrderIds,
+            String paymentPostbackUrl,
+            String paymentMethod,
+            Integer bankAccountOldId,
+            String providerName
+    );
+    JsonNode fetchPayment(int paymentId);
+    JsonNode simulatePayment(int paymentId, String status);
+    JsonNode confirmMfPurchase(String mfPurchaseId);
+    JsonNode fetchBankAccount(String bankAccountId);
+    JsonNode createMandate(int bankAccountOldId, String mandateType, int mandateLimit, String providerName);
+    JsonNode authorizeMandate(int mandateId, String paymentPostbackUrl);
+    JsonNode fetchMandate(int mandateId);
+    JsonNode simulateMandate(int mandateId, String status);
+    JsonNode fetchMfPurchasePlan(String mfPurchasePlanId);
+    JsonNode updateMfPurchasePlan(String mfPurchasePlanId, Map<String, Object> payload);
+    JsonNode listMfPurchasesForPlan(String mfPurchasePlanId);
+    JsonNode createNachPayment(int mandateId, List<Integer> amcOrderIds);
+    String createSipOrderWithMandate(TransactionOrder order, Investor investor, ProductScheme productScheme, int mandateId);
     String createRedemption(TransactionOrder order, Investor investor, ProductScheme productScheme);
     void cancelOrder(TransactionOrder order);
+
+    /**
+     * Cancels an FP mf_purchase_plan via {@code POST /v2/mf_purchase_plans/cancel}.
+     * Returns the provider response (state should be {@code cancelled}).
+     */
+    com.fasterxml.jackson.databind.JsonNode cancelPurchasePlan(String planId, String cancellationCode, String cancellationReason);
     JsonNode getFundSchemesPageWithPayloadSnapshot(int page, int size, Map<String, Object> payloadSnapshot);
+
+    /**
+     * Live catalogue page from Finprim. {@code endpoint} is one of:
+     * {@code poa-mf} ({@code GET /v2/mf_scheme_plans/cybrillapoa}),
+     * {@code oms-fund-schemes} ({@code GET /api/oms/fund_schemes}),
+     * {@code sif-poa} ({@code GET /v2/sif_scheme_plans/cybrillapoa}).
+     */
+    LiveCataloguePage fetchLiveCataloguePage(String endpoint, int page, int size);
 }

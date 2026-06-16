@@ -1,0 +1,4 @@
+interface:
+  display_name: "Cybrilla Backend Expert"
+  short_description: "Spring Boot Cybrilla integration specialist"
+  default_prompt: "Use $cybrilla-backend-expert under cybrilla-boss. Diagnose and fix backend KYC, bank, product catalogue, token, and webhook issues. Run targeted Maven tests."

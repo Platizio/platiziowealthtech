@@ -53,6 +53,50 @@ class InvestorServiceEmailConflictTest {
     }
 
     @Test
+    void createInvestorDuplicatePanExposesExistingInvestorIdForResume() throws Exception {
+        UUID existingId = UUID.randomUUID();
+        Investor existing = new Investor();
+        setInvestorId(existing, existingId);
+        AtomicBoolean saveCalled = new AtomicBoolean(false);
+        InvestorService investorService = new InvestorService(
+                investorRepositoryReturning(saveCalled, Optional.of(existing), Optional.empty()),
+                null,
+                null,
+                null,
+                null
+        );
+
+        assertThatThrownBy(() -> investorService.createInvestor(request()))
+                .isInstanceOf(DuplicateResourceException.class)
+                .hasMessage("An investor with this PAN already exists")
+                .extracting("resourceId", "conflictField")
+                .containsExactly(existingId, "pan");
+        assertThat(saveCalled).isFalse();
+    }
+
+    @Test
+    void createInvestorDuplicateEmailExposesExistingInvestorIdForResume() throws Exception {
+        UUID existingId = UUID.randomUUID();
+        Investor existing = new Investor();
+        setInvestorId(existing, existingId);
+        AtomicBoolean saveCalled = new AtomicBoolean(false);
+        InvestorService investorService = new InvestorService(
+                investorRepositoryReturning(saveCalled, Optional.empty(), Optional.of(existing)),
+                null,
+                null,
+                null,
+                null
+        );
+
+        assertThatThrownBy(() -> investorService.createInvestor(request()))
+                .isInstanceOf(DuplicateResourceException.class)
+                .hasMessage("An investor with this email address already exists")
+                .extracting("resourceId", "conflictField")
+                .containsExactly(existingId, "email");
+        assertThat(saveCalled).isFalse();
+    }
+
+    @Test
     void createMinorRequiresGuardianPanOrGuardianInvestorLink() {
         AtomicBoolean saveCalled = new AtomicBoolean(false);
         InvestorService investorService = new InvestorService(
@@ -149,6 +193,31 @@ class InvestorServiceEmailConflictTest {
                 null,
                 null
         );
+    }
+
+    private InvestorRepository investorRepositoryReturning(
+            AtomicBoolean saveCalled, Optional<Investor> byPan, Optional<Investor> byEmail) {
+        return (InvestorRepository) Proxy.newProxyInstance(
+                InvestorRepository.class.getClassLoader(),
+                new Class<?>[]{InvestorRepository.class},
+                (proxy, method, args) -> switch (method.getName()) {
+                    case "findByPan" -> byPan;
+                    case "findByEmail" -> byEmail;
+                    case "save" -> {
+                        saveCalled.set(true);
+                        yield args[0];
+                    }
+                    case "findAll", "findByDistributorId" -> List.of();
+                    default -> defaultValue(method.getReturnType());
+                }
+        );
+    }
+
+    private static void setInvestorId(Investor investor, UUID id) throws Exception {
+        java.lang.reflect.Field idField =
+                com.platizio.wealthtech.common.BaseEntity.class.getDeclaredField("id");
+        idField.setAccessible(true);
+        idField.set(investor, id);
     }
 
     private InvestorRepository investorRepositoryWithoutDuplicates(AtomicBoolean saveCalled) {

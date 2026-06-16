@@ -76,6 +76,14 @@ public class Investor extends BaseEntity {
     private String panVerificationReason;
     private String panAadhaarLinkStatus;
     private String panAadhaarLinkReason;
+    private String externalIdentityDocumentId;
+    private String aadhaarFetchStatus;
+    private String aadhaarFetchReason;
+    private String externalEsignId;
+    private String esignStatus;
+
+    @Column(nullable = false)
+    private Boolean aadhaarProofsAttached = Boolean.FALSE;
 
     // FP KYC Check (/api/kyc/check) compliance result — the authoritative KRA
     // "is this PAN already KYC compliant?" signal, with granular reason/action.
@@ -171,6 +179,18 @@ public class Investor extends BaseEntity {
     public void setPanAadhaarLinkStatus(String panAadhaarLinkStatus) { this.panAadhaarLinkStatus = panAadhaarLinkStatus; }
     public String getPanAadhaarLinkReason() { return panAadhaarLinkReason; }
     public void setPanAadhaarLinkReason(String panAadhaarLinkReason) { this.panAadhaarLinkReason = panAadhaarLinkReason; }
+    public String getExternalIdentityDocumentId() { return externalIdentityDocumentId; }
+    public void setExternalIdentityDocumentId(String externalIdentityDocumentId) { this.externalIdentityDocumentId = externalIdentityDocumentId; }
+    public String getAadhaarFetchStatus() { return aadhaarFetchStatus; }
+    public void setAadhaarFetchStatus(String aadhaarFetchStatus) { this.aadhaarFetchStatus = aadhaarFetchStatus; }
+    public String getAadhaarFetchReason() { return aadhaarFetchReason; }
+    public void setAadhaarFetchReason(String aadhaarFetchReason) { this.aadhaarFetchReason = aadhaarFetchReason; }
+    public String getExternalEsignId() { return externalEsignId; }
+    public void setExternalEsignId(String externalEsignId) { this.externalEsignId = externalEsignId; }
+    public String getEsignStatus() { return esignStatus; }
+    public void setEsignStatus(String esignStatus) { this.esignStatus = esignStatus; }
+    public Boolean getAadhaarProofsAttached() { return aadhaarProofsAttached; }
+    public void setAadhaarProofsAttached(Boolean aadhaarProofsAttached) { this.aadhaarProofsAttached = aadhaarProofsAttached; }
     public String getExternalKycComplianceId() { return externalKycComplianceId; }
     public void setExternalKycComplianceId(String externalKycComplianceId) { this.externalKycComplianceId = externalKycComplianceId; }
     public Boolean getKycComplianceStatus() { return kycComplianceStatus; }

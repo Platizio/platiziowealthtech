@@ -1,0 +1,42 @@
+---
+description: Activate achilles + cybrilla-boss for Platizio full-stack and Cybrilla page work
+alwaysApply: true
+---
+
+# Platizio subagents (achilles + cybrilla-boss)
+
+This project uses two dedicated subagents. Prefer them for feature and page work.
+
+## When to use which
+
+| Task | Agent |
+|------|-------|
+| New React page, backend endpoint, full E2E flow | **achilles** |
+| Cybrilla/FP API facts, sandbox data, KYC/payment/mandate workflow | **cybrilla-boss** |
+| Cybrilla-backed page (most distributor screens) | **both** — cybrilla-boss first for API contract, achilles implements |
+
+## Invoke
+
+```text
+@.cursor/agents/achilles.md @.cursor/agents/cybrilla-boss.md build [PAGE]: [goal]
+```
+
+Or pick **Achilles** / **Cybrilla Boss** from the agent picker after reloading Cursor.
+
+## Paths
+
+- Backend: `platiziowealthtech-Back_end` — API `http://localhost:8081/api/v1`
+- Frontend: `../platiziowealthtech-Front_End for now/platiziowealthtech-Front_End_sample`
+- Investor actions: `http://localhost:8081/investor-actions/{token}` (not Vite :3000)
+
+## Rules
+
+- React → Platizio `/api/v1` only. Never call FP/POA from the browser.
+- Orders use POA catalogue `mf_scheme_plans/cybrillapoa`, not OMS `fund_schemes`.
+- Read `page-build-playbook.md` and `page-cybrilla-map.md` before building pages.
+- Check `pending-work.md` for known gaps before claiming a flow is done.
+
+## Skill files
+
+- `.cursor/agents/achilles.md` · `.cursor/agents/cybrilla-boss.md`
+- `.codex/skills/achilles/SKILL.md` · `.codex/skills/cybrilla-boss/SKILL.md`

@@ -8,18 +8,24 @@ import com.platizio.wealthtech.domain.Investor;
 import com.platizio.wealthtech.domain.KycStatus;
 import com.platizio.wealthtech.domain.Notification;
 import com.platizio.wealthtech.domain.NotificationType;
+import com.platizio.wealthtech.domain.OrderStatus;
 import com.platizio.wealthtech.domain.ProductCategory;
 import com.platizio.wealthtech.domain.ProductScheme;
+import com.platizio.wealthtech.domain.RedemptionRecord;
+import com.platizio.wealthtech.domain.RedemptionStatus;
 import com.platizio.wealthtech.domain.TransactionOrder;
 import com.platizio.wealthtech.domain.TransactionType;
 import com.platizio.wealthtech.dto.BulkOrderCreateRequest;
 import com.platizio.wealthtech.dto.OrderCreateRequest;
+import com.platizio.wealthtech.integration.CybrillaApiException;
 import com.platizio.wealthtech.integration.CybrillaClient;
 import com.platizio.wealthtech.repository.ProductSchemeRepository;
+import com.platizio.wealthtech.repository.RedemptionRecordRepository;
 import com.platizio.wealthtech.repository.TransactionOrderRepository;
 import java.math.BigDecimal;
 import java.lang.reflect.Proxy;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -68,6 +74,8 @@ class OrderServiceTest {
                 null,
                 null,
                 null,
+                null,
+                null,
                 null
         );
 
@@ -108,6 +116,8 @@ class OrderServiceTest {
                 null,
                 null,
                 null,
+                null,
+                null,
                 null
         );
 
@@ -115,6 +125,124 @@ class OrderServiceTest {
 
         assertThat(order.getInvestorActionToken()).isNotBlank();
         assertThat(order.getInvestorActionUrl()).isEqualTo("/investor-actions/" + order.getInvestorActionToken());
+    }
+
+    @Test
+    void createOrderRejectsLumpsumWithNullZeroOrNegativeAmount() {
+        UUID distributorId = UUID.randomUUID();
+        List<TransactionOrder> savedOrders = new ArrayList<>();
+        OrderService orderService = new OrderService(
+                savingOrderRepository(savedOrders),
+                null,
+                new FixedInvestorService(verifiedInvestor(distributorId)),
+                new CountingAuditService(new AtomicInteger()),
+                new CountingNotificationService(new AtomicInteger()),
+                actionUrlCybrillaClient(),
+                null,
+                productSchemeRepository()
+        );
+
+        for (BigDecimal amount : Arrays.asList(null, BigDecimal.ZERO, new BigDecimal("-100"))) {
+            OrderCreateRequest request = new OrderCreateRequest(
+                    UUID.randomUUID(),
+                    UUID.randomUUID(),
+                    null,
+                    TransactionType.LUMPSUM_PURCHASE,
+                    amount,
+                    null,
+                    "NET_BANKING",
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null
+            );
+
+            assertThatThrownBy(() -> orderService.createOrder(request, distributorId))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("Lumpsum purchase amount must be greater than 0");
+        }
+
+        // Rejected before any local row is persisted.
+        assertThat(savedOrders).isEmpty();
+    }
+
+    @Test
+    void createOrderMarksOrderFailedAndRethrowsWhenProviderRejectsSubmit() {
+        UUID distributorId = UUID.randomUUID();
+        List<TransactionOrder> savedOrders = new ArrayList<>();
+        OrderService orderService = new OrderService(
+                savingOrderRepository(savedOrders),
+                null,
+                new FixedInvestorService(verifiedInvestor(distributorId)),
+                new CountingAuditService(new AtomicInteger()),
+                new CountingNotificationService(new AtomicInteger()),
+                apiErrorCybrillaClient(),
+                null,
+                productSchemeRepository()
+        );
+        OrderCreateRequest request = new OrderCreateRequest(
+                UUID.randomUUID(),
+                UUID.randomUUID(),
+                null,
+                TransactionType.LUMPSUM_PURCHASE,
+                BigDecimal.TEN,
+                null,
+                "NET_BANKING",
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+        );
+
+        assertThatThrownBy(() -> orderService.createOrder(request, distributorId))
+                .isInstanceOf(CybrillaApiException.class)
+                .hasMessage("provider rejected order");
+
+        TransactionOrder persisted = savedOrders.get(savedOrders.size() - 1);
+        assertThat(persisted.getOrderStatus()).isEqualTo(OrderStatus.FAILED);
+        assertThat(persisted.getOrderStatus()).isNotEqualTo(OrderStatus.CREATED);
+        assertThat(persisted.getInvestorActionUrl()).isNull();
+        assertThat(persisted.getFailureReason()).contains("provider rejected order");
+    }
+
+    @Test
+    void createRedemptionSavesRecordWithoutRequiringTransactionManager() {
+        UUID distributorId = UUID.randomUUID();
+        UUID investorId = UUID.randomUUID();
+        UUID orderId = UUID.randomUUID();
+        TransactionOrder order = new TransactionOrder();
+        order.setDistributorId(distributorId);
+        order.setInvestorId(investorId);
+        order.setProductSchemeId(UUID.randomUUID());
+        order.setExternalOrderId("mfp-external-1");
+        order.setAmount(BigDecimal.TEN);
+        List<RedemptionRecord> savedRedemptions = new ArrayList<>();
+        AtomicInteger auditCalls = new AtomicInteger();
+        AtomicInteger notificationCalls = new AtomicInteger();
+        OrderService orderService = new OrderService(
+                singleOrderRepository(order),
+                savingRedemptionRepository(savedRedemptions),
+                new FixedInvestorService(verifiedInvestor(distributorId)),
+                new CountingAuditService(auditCalls),
+                new CountingNotificationService(notificationCalls),
+                redemptionCybrillaClient(),
+                // No transaction manager: the FP pre-flight + provider call must not need one.
+                null,
+                productSchemeRepository()
+        );
+
+        RedemptionRecord record = orderService.createRedemption(orderId, distributorId);
+
+        assertThat(record.getExternalRedemptionId()).isEqualTo("external-redemption-1");
+        assertThat(record.getRedemptionStatus()).isEqualTo(RedemptionStatus.CREATED);
+        assertThat(savedRedemptions).hasSize(1);
+        assertThat(savedRedemptions.get(0).getOrderId()).isEqualTo(orderId);
+        assertThat(auditCalls.get()).isEqualTo(1);
+        assertThat(notificationCalls.get()).isEqualTo(1);
     }
 
     @Test
@@ -247,6 +375,7 @@ class OrderServiceTest {
                         }
                         yield "external-order-" + call;
                     }
+                    case "fetchMfPurchase" -> pendingMfPurchaseNode();
                     case "generateInvestorActionUrl" -> "https://example.test/action";
                     case "fetchProductSchemes" -> List.of();
                     default -> defaultValue(method.getReturnType());
@@ -260,6 +389,7 @@ class OrderServiceTest {
                 new Class<?>[]{CybrillaClient.class},
                 (proxy, method, args) -> switch (method.getName()) {
                     case "createOrder" -> "external-order";
+                    case "fetchMfPurchase" -> pendingMfPurchaseNode();
                     case "generateInvestorActionUrl" -> {
                         TransactionOrder order = (TransactionOrder) args[0];
                         yield "/investor-actions/" + order.getInvestorActionToken();
@@ -268,6 +398,26 @@ class OrderServiceTest {
                     default -> defaultValue(method.getReturnType());
                 }
         );
+    }
+
+    private CybrillaClient apiErrorCybrillaClient() {
+        return (CybrillaClient) Proxy.newProxyInstance(
+                CybrillaClient.class.getClassLoader(),
+                new Class<?>[]{CybrillaClient.class},
+                (proxy, method, args) -> switch (method.getName()) {
+                    case "createOrder" -> throw new CybrillaApiException("provider rejected order");
+                    case "fetchMfPurchase" -> pendingMfPurchaseNode();
+                    case "generateInvestorActionUrl" -> "https://example.test/action";
+                    case "fetchProductSchemes" -> List.of();
+                    default -> defaultValue(method.getReturnType());
+                }
+        );
+    }
+
+    private com.fasterxml.jackson.databind.JsonNode pendingMfPurchaseNode() throws Exception {
+        return new com.fasterxml.jackson.databind.ObjectMapper().readTree("""
+                {"object":"mf_purchase","id":"external-order","state":"pending"}
+                """);
     }
 
     private TransactionOrderRepository orderRepository(
@@ -289,6 +439,45 @@ class OrderServiceTest {
                         yield null;
                     }
                     case "findAll", "findByInvestorId", "findByDistributorId" -> List.of();
+                    default -> defaultValue(method.getReturnType());
+                }
+        );
+    }
+
+    private TransactionOrderRepository singleOrderRepository(TransactionOrder order) {
+        return (TransactionOrderRepository) Proxy.newProxyInstance(
+                TransactionOrderRepository.class.getClassLoader(),
+                new Class<?>[]{TransactionOrderRepository.class},
+                (proxy, method, args) -> switch (method.getName()) {
+                    case "findById" -> Optional.of(order);
+                    case "save" -> args[0];
+                    default -> defaultValue(method.getReturnType());
+                }
+        );
+    }
+
+    private RedemptionRecordRepository savingRedemptionRepository(List<RedemptionRecord> savedRedemptions) {
+        return (RedemptionRecordRepository) Proxy.newProxyInstance(
+                RedemptionRecordRepository.class.getClassLoader(),
+                new Class<?>[]{RedemptionRecordRepository.class},
+                (proxy, method, args) -> switch (method.getName()) {
+                    case "save" -> {
+                        RedemptionRecord record = (RedemptionRecord) args[0];
+                        savedRedemptions.add(record);
+                        yield record;
+                    }
+                    case "findByOrderId" -> List.of();
+                    default -> defaultValue(method.getReturnType());
+                }
+        );
+    }
+
+    private CybrillaClient redemptionCybrillaClient() {
+        return (CybrillaClient) Proxy.newProxyInstance(
+                CybrillaClient.class.getClassLoader(),
+                new Class<?>[]{CybrillaClient.class},
+                (proxy, method, args) -> switch (method.getName()) {
+                    case "createRedemption" -> "external-redemption-1";
                     default -> defaultValue(method.getReturnType());
                 }
         );

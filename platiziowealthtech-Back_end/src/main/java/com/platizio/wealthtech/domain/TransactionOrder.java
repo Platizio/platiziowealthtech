@@ -38,6 +38,9 @@ public class TransactionOrder extends BaseEntity {
     private String paymentMode;
     private String mandateMode;
     private String externalOrderId;
+    private Integer externalMandateId;
+    private String mandateStatus;
+    private Integer externalPaymentId;
     private String failureReason;
     private String investorActionUrl;
     private String investorActionToken;
@@ -47,6 +50,7 @@ public class TransactionOrder extends BaseEntity {
     @Column(nullable = false)
     private Boolean isDeleted = Boolean.FALSE;
     private LocalDateTime deletedAt;
+    private LocalDateTime cancelledAt;
 
     public UUID getInvestorId() { return investorId; }
     public void setInvestorId(UUID investorId) { this.investorId = investorId; }
@@ -68,6 +72,12 @@ public class TransactionOrder extends BaseEntity {
     public void setMandateMode(String mandateMode) { this.mandateMode = mandateMode; }
     public String getExternalOrderId() { return externalOrderId; }
     public void setExternalOrderId(String externalOrderId) { this.externalOrderId = externalOrderId; }
+    public Integer getExternalMandateId() { return externalMandateId; }
+    public void setExternalMandateId(Integer externalMandateId) { this.externalMandateId = externalMandateId; }
+    public String getMandateStatus() { return mandateStatus; }
+    public void setMandateStatus(String mandateStatus) { this.mandateStatus = mandateStatus; }
+    public Integer getExternalPaymentId() { return externalPaymentId; }
+    public void setExternalPaymentId(Integer externalPaymentId) { this.externalPaymentId = externalPaymentId; }
     public String getFailureReason() { return failureReason; }
     public void setFailureReason(String failureReason) { this.failureReason = failureReason; }
     public String getInvestorActionUrl() { return investorActionUrl; }
@@ -87,4 +97,6 @@ public class TransactionOrder extends BaseEntity {
     public void setIsDeleted(Boolean isDeleted) { this.isDeleted = isDeleted; }
     public LocalDateTime getDeletedAt() { return deletedAt; }
     public void setDeletedAt(LocalDateTime deletedAt) { this.deletedAt = deletedAt; }
+    public LocalDateTime getCancelledAt() { return cancelledAt; }
+    public void setCancelledAt(LocalDateTime cancelledAt) { this.cancelledAt = cancelledAt; }
 }

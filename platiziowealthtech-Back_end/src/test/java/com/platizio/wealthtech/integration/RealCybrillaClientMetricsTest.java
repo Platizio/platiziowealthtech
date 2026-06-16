@@ -39,9 +39,21 @@ class RealCybrillaClientMetricsTest {
                 new NoopExternalApiSnapshotService()
         );
 
+        // createInvestorProfile first lists existing profiles by PAN, then POSTs the new one,
+        // then runs syncInvestorContactResourcesForProfile which lists addresses + phone_numbers.
+        server.expect(once(), requestTo("https://finprim.test/v2/investor_profiles?pan=ABCDE1234F"))
+                .andExpect(method(HttpMethod.GET))
+                .andRespond(withSuccess("{\"data\":[]}", MediaType.APPLICATION_JSON));
         server.expect(once(), requestTo("https://finprim.test/v2/investor_profiles"))
                 .andExpect(method(HttpMethod.POST))
                 .andRespond(withSuccess("{\"id\":\"profile-1\"}", MediaType.APPLICATION_JSON));
+        // syncInvestorContactResourcesForProfile: addresses + phone_numbers lookups (empty, no email set).
+        server.expect(once(), requestTo("https://finprim.test/v2/addresses?profile=profile-1"))
+                .andExpect(method(HttpMethod.GET))
+                .andRespond(withSuccess("{\"data\":[]}", MediaType.APPLICATION_JSON));
+        server.expect(once(), requestTo("https://finprim.test/v2/phone_numbers?profile=profile-1"))
+                .andExpect(method(HttpMethod.GET))
+                .andRespond(withSuccess("{\"data\":[]}", MediaType.APPLICATION_JSON));
 
         String profileId = client.createInvestorProfile(investor());
 

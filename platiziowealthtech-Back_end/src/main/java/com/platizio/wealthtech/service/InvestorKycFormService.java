@@ -2,14 +2,19 @@ package com.platizio.wealthtech.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.platizio.wealthtech.domain.Investor;
 import com.platizio.wealthtech.domain.InvestorKycForm;
 import com.platizio.wealthtech.domain.KycStatus;
 import com.platizio.wealthtech.dto.ExternalKycSyncResponse;
 import com.platizio.wealthtech.dto.InvestorKycFormResponse;
 import com.platizio.wealthtech.dto.KycFormUpdateRequest;
+import com.platizio.wealthtech.integration.CybrillaApiException;
 import com.platizio.wealthtech.integration.CybrillaClient;
+import com.platizio.wealthtech.integration.CybrillaIntegrationEnvironment;
 import com.platizio.wealthtech.repository.InvestorKycFormRepository;
+import com.platizio.wealthtech.validation.PanFormat;
 import java.io.IOException;
 import java.time.OffsetDateTime;
 import java.util.LinkedHashMap;
@@ -40,6 +45,7 @@ public class InvestorKycFormService {
 
     private static final Logger logger = LoggerFactory.getLogger(InvestorKycFormService.class);
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+    private static final String FINPRIM_SANDBOX_BASE = "https://s.finprim.com";
 
     /** States in which a kyc_form is still "on-going" (blocks creating another). */
     static final List<String> ACTIVE_STATES =
@@ -54,31 +60,42 @@ public class InvestorKycFormService {
     private final InvestorKycFormRepository repository;
     private final CybrillaClient cybrillaClient;
     private final AuditService auditService;
+    private final CybrillaIntegrationEnvironment integrationEnvironment;
     private final String callbackBaseUrl;
+    private final boolean mockFallbackOnAccessDenied;
 
     public InvestorKycFormService(
             InvestorService investorService,
             InvestorKycFormRepository repository,
             CybrillaClient cybrillaClient,
             AuditService auditService,
-            @Value("${cybrilla.kyc-form.callback-base-url:http://localhost:3000}") String callbackBaseUrl
+            CybrillaIntegrationEnvironment integrationEnvironment,
+            @Value("${cybrilla.kyc-form.callback-base-url:http://localhost:3000}") String callbackBaseUrl,
+            @Value("${cybrilla.kyc-form.mock-fallback-on-access-denied:false}") boolean mockFallbackOnAccessDenied
     ) {
         this.investorService = investorService;
         this.repository = repository;
         this.cybrillaClient = cybrillaClient;
         this.auditService = auditService;
+        this.integrationEnvironment = integrationEnvironment;
         this.callbackBaseUrl = trimTrailingSlash(callbackBaseUrl);
+        this.mockFallbackOnAccessDenied = mockFallbackOnAccessDenied;
     }
 
     @Transactional(readOnly = true)
     public InvestorKycFormResponse getLatestForm(UUID investorId, UUID actorId) {
         investorService.getInvestor(investorId, actorId);
-        InvestorKycForm form = repository.findFirstByInvestorIdOrderByCreatedAtDesc(investorId).orElse(null);
-        return new InvestorKycFormResponse(form, parseJson(form == null ? null : form.getExternalResponseJson()));
+        InvestorKycForm form = resolveLatestForm(investorId);
+        return toResponse(form);
     }
 
     @Transactional
     public InvestorKycFormResponse createModifyForm(UUID investorId, UUID actorId) {
+        return createModifyForm(investorId, actorId, null);
+    }
+
+    @Transactional
+    public InvestorKycFormResponse createModifyForm(UUID investorId, UUID actorId, String callbackBaseOverride) {
         Investor investor = investorService.getInvestor(investorId, actorId);
         if (investor.getKycStatus() != KycStatus.COMPLETED) {
             throw new ResponseStatusException(
@@ -91,16 +108,22 @@ public class InvestorKycFormService {
                     HttpStatus.BAD_REQUEST,
                     "Investor date of birth is required (as per PAN/ITD records) to start a KYC modify form.");
         }
-        repository.findFirstByInvestorIdAndStatusInOrderByCreatedAtDesc(investorId, ACTIVE_STATES)
-                .ifPresent(existing -> {
-                    throw new ResponseStatusException(
-                            HttpStatus.CONFLICT,
-                            "An on-going KYC modify form already exists for this investor (status="
-                                    + existing.getStatus() + "). Complete or wait for it to expire before starting a new one.");
-                });
+        validatePanForKycForm(investor);
+        Optional<InvestorKycForm> ongoing =
+                repository.findFirstByInvestorIdAndStatusInOrderByCreatedAtDesc(investorId, ACTIVE_STATES);
+        if (ongoing.isPresent()) {
+            InvestorKycForm existing = ongoing.get();
+            logger.info(
+                    "kyc_form_workflow operation='create' action='resume_existing' investor_id='{}' kyc_form_id='{}' status='{}'",
+                    investorId,
+                    existing.getExternalKycFormId(),
+                    existing.getStatus());
+            return toResponse(existing);
+        }
 
-        String proofCallback = buildCallbackUrl(investorId, "proof-callback");
-        String esignCallback = buildCallbackUrl(investorId, "esign-callback");
+        String callbackBase = resolveCallbackBaseUrl(callbackBaseOverride);
+        String proofCallback = buildCallbackUrl(investorId, "proof-callback", callbackBase);
+        String esignCallback = buildCallbackUrl(investorId, "esign-callback", callbackBase);
 
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("type", "modify");
@@ -110,7 +133,7 @@ public class InvestorKycFormService {
         payload.put("proof_details_callback_url", proofCallback);
         payload.put("esign_callback_url", esignCallback);
 
-        JsonNode response = cybrillaClient.createKycForm(payload);
+        JsonNode response = createKycForm(payload);
 
         InvestorKycForm form = new InvestorKycForm();
         form.setInvestorId(investorId);
@@ -142,7 +165,7 @@ public class InvestorKycFormService {
         }
         form.setExternalRequestJson(writeJson(payload));
 
-        JsonNode response = cybrillaClient.updateKycForm(form.getExternalKycFormId(), payload);
+        JsonNode response = updateKycForm(form.getExternalKycFormId(), payload, form);
         applyExternalResponse(form, response);
 
         InvestorKycForm saved = repository.save(form);
@@ -154,7 +177,7 @@ public class InvestorKycFormService {
     public InvestorKycFormResponse refreshForm(UUID investorId, String kycFormId, UUID actorId) {
         investorService.getInvestor(investorId, actorId);
         InvestorKycForm form = loadForm(investorId, kycFormId);
-        JsonNode response = cybrillaClient.fetchKycForm(form.getExternalKycFormId());
+        JsonNode response = fetchKycForm(form.getExternalKycFormId(), form);
         applyExternalResponse(form, response);
         InvestorKycForm saved = repository.save(form);
         auditService.log("INVESTOR", investorId, "KYC_FORM_REFRESHED", actorId, auditDetails(saved));
@@ -175,11 +198,51 @@ public class InvestorKycFormService {
         String filename = StringUtils.hasText(file.getOriginalFilename()) ? file.getOriginalFilename() : "signature";
         String contentType = StringUtils.hasText(file.getContentType()) ? file.getContentType() : "application/octet-stream";
 
-        JsonNode response = cybrillaClient.uploadKycFormSignature(form.getExternalKycFormId(), bytes, filename, contentType);
+        JsonNode response = uploadKycFormSignature(form.getExternalKycFormId(), bytes, filename, contentType, form);
         applyExternalResponse(form, response);
         InvestorKycForm saved = repository.save(form);
         auditService.log("INVESTOR", investorId, "KYC_FORM_SIGNATURE_UPLOADED", actorId, auditDetails(saved));
         return new InvestorKycFormResponse(saved, response);
+    }
+
+    /**
+     * Local sandbox only: simulates a successful Digilocker proof fetch when Cybrilla
+     * {@code kyc_forms} is unavailable and the app is using mock POA responses.
+     * Real Digilocker URLs are issued only by Cybrilla after partner {@code kyc_forms} access.
+     */
+    @Transactional
+    public InvestorKycFormResponse simulateProofFetch(UUID investorId, String kycFormId, UUID actorId) {
+        requireSandboxSimulationEnabled();
+        investorService.getInvestor(investorId, actorId);
+        InvestorKycForm form = loadForm(investorId, kycFormId);
+        JsonNode response = mockProofFetchedResponse(form);
+        applyExternalResponse(form, response);
+        InvestorKycForm saved = repository.save(form);
+        auditService.log("INVESTOR", investorId, "KYC_FORM_PROOF_SIMULATED", actorId, auditDetails(saved));
+        logger.info(
+                "kyc_form_workflow operation='simulate_proof_fetch' investor_id='{}' kyc_form_id='{}'",
+                investorId,
+                saved.getExternalKycFormId());
+        return toResponse(saved);
+    }
+
+    /**
+     * Local sandbox only: simulates eSign completion for mock {@code kyc_form} flows.
+     */
+    @Transactional
+    public InvestorKycFormResponse simulateEsign(UUID investorId, String kycFormId, UUID actorId) {
+        requireSandboxSimulationEnabled();
+        investorService.getInvestor(investorId, actorId);
+        InvestorKycForm form = loadForm(investorId, kycFormId);
+        JsonNode response = mockEsignCompletedResponse(form);
+        applyExternalResponse(form, response);
+        InvestorKycForm saved = repository.save(form);
+        auditService.log("INVESTOR", investorId, "KYC_FORM_ESIGN_SIMULATED", actorId, auditDetails(saved));
+        logger.info(
+                "kyc_form_workflow operation='simulate_esign' investor_id='{}' kyc_form_id='{}'",
+                investorId,
+                saved.getExternalKycFormId());
+        return toResponse(saved);
     }
 
     @Transactional
@@ -191,7 +254,7 @@ public class InvestorKycFormService {
                     HttpStatus.CONFLICT,
                     "Proof details fetch can only be retried when its status is 'failed' (current: " + form.getProofStatus() + ").");
         }
-        JsonNode response = cybrillaClient.retryKycFormProofDetailsFetch(form.getExternalKycFormId());
+        JsonNode response = retryKycFormProofDetailsFetch(form.getExternalKycFormId(), form);
         applyExternalResponse(form, response);
         InvestorKycForm saved = repository.save(form);
         auditService.log("INVESTOR", investorId, "KYC_FORM_PROOF_RETRIED", actorId, auditDetails(saved));
@@ -218,7 +281,7 @@ public class InvestorKycFormService {
         InvestorKycForm form = existing.get();
         JsonNode canonical;
         try {
-            canonical = cybrillaClient.fetchKycForm(externalId.trim());
+            canonical = fetchKycForm(externalId.trim(), form);
         } catch (RuntimeException ex) {
             logger.warn("kyc_form_webhook refetch_failed kyc_form_id='{}' reason='{}' falling_back_to_payload", externalId, ex.getMessage());
             canonical = dataObject;
@@ -242,7 +305,7 @@ public class InvestorKycFormService {
                 continue;
             }
             try {
-                JsonNode response = cybrillaClient.fetchKycForm(form.getExternalKycFormId());
+                JsonNode response = fetchKycForm(form.getExternalKycFormId(), form);
                 applyExternalResponse(form, response);
                 repository.save(form);
                 synced++;
@@ -378,8 +441,30 @@ public class InvestorKycFormService {
         }
     }
 
+    private String resolveCallbackBaseUrl(String callbackBaseOverride) {
+        if (!StringUtils.hasText(callbackBaseOverride)) {
+            return callbackBaseUrl;
+        }
+        String normalized = trimTrailingSlash(callbackBaseOverride.trim());
+        if (!normalized.startsWith("http://") && !normalized.startsWith("https://")) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "callbackBaseUrl must start with http:// or https://");
+        }
+        if (normalized.contains("/distributor/")) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "callbackBaseUrl must be the frontend origin only (e.g. http://localhost:3000), not a full path.");
+        }
+        return normalized;
+    }
+
     private String buildCallbackUrl(UUID investorId, String suffix) {
-        return callbackBaseUrl + "/distributor/investors/" + investorId + "/kyc-modify/" + suffix;
+        return buildCallbackUrl(investorId, suffix, callbackBaseUrl);
+    }
+
+    private String buildCallbackUrl(UUID investorId, String suffix, String base) {
+        return base + "/distributor/investors/" + investorId + "/kyc-modify/" + suffix;
     }
 
     private static void putIfText(Map<String, Object> payload, String key, String value) {
@@ -429,6 +514,24 @@ public class InvestorKycFormService {
         }
     }
 
+    private void validatePanForKycForm(Investor investor) {
+        String pan = PanFormat.normalize(investor.getPan());
+        if (!StringUtils.hasText(pan)) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Investor PAN is required to start a KYC modify form.");
+        }
+        try {
+            if (integrationEnvironment.enforceSandboxPanPatterns()) {
+                PanFormat.validateBeforePoaApi(pan, true);
+            } else {
+                PanFormat.validateIndianPan(pan);
+            }
+        } catch (IllegalArgumentException ex) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, ex.getMessage());
+        }
+    }
+
     private static String trimTrailingSlash(String value) {
         if (value == null) {
             return "http://localhost:3000";
@@ -451,5 +554,326 @@ public class InvestorKycFormService {
 
     private static String safe(String value) {
         return value == null ? "" : value.replace("\"", "\\\"");
+    }
+
+    private JsonNode createKycForm(Map<String, Object> payload) {
+        try {
+            return cybrillaClient.createKycForm(payload);
+        } catch (CybrillaApiException ex) {
+            return mockKycFormResponseOrThrow("create", ex, null, () -> mockCreateKycFormResponse(payload));
+        }
+    }
+
+    private JsonNode updateKycForm(String kycFormId, Map<String, Object> payload, InvestorKycForm localMirror) {
+        try {
+            return cybrillaClient.updateKycForm(kycFormId, payload);
+        } catch (CybrillaApiException ex) {
+            return mockKycFormResponseOrThrow(
+                    "update",
+                    ex,
+                    localMirror,
+                    () -> mockUpdateKycFormResponse(kycFormId, localMirror));
+        }
+    }
+
+    private JsonNode fetchKycForm(String kycFormId, InvestorKycForm localMirror) {
+        try {
+            return cybrillaClient.fetchKycForm(kycFormId);
+        } catch (CybrillaApiException ex) {
+            return mockKycFormResponseOrThrow(
+                    "fetch",
+                    ex,
+                    localMirror,
+                    () -> mockFetchKycFormResponse(kycFormId, localMirror));
+        }
+    }
+
+    private JsonNode uploadKycFormSignature(
+            String kycFormId,
+            byte[] bytes,
+            String filename,
+            String contentType,
+            InvestorKycForm localMirror
+    ) {
+        try {
+            return cybrillaClient.uploadKycFormSignature(kycFormId, bytes, filename, contentType);
+        } catch (CybrillaApiException ex) {
+            return mockKycFormResponseOrThrow(
+                    "upload_signature",
+                    ex,
+                    localMirror,
+                    () -> mockSignatureKycFormResponse(kycFormId));
+        }
+    }
+
+    private JsonNode retryKycFormProofDetailsFetch(String kycFormId, InvestorKycForm localMirror) {
+        try {
+            return cybrillaClient.retryKycFormProofDetailsFetch(kycFormId);
+        } catch (CybrillaApiException ex) {
+            return mockKycFormResponseOrThrow(
+                    "retry_proof_details_fetch",
+                    ex,
+                    localMirror,
+                    () -> mockRetryProofKycFormResponse(kycFormId, localMirror));
+        }
+    }
+
+    private JsonNode mockKycFormResponseOrThrow(
+            String operation,
+            CybrillaApiException ex,
+            InvestorKycForm localMirror,
+            java.util.function.Supplier<JsonNode> mockResponse
+    ) {
+        if (!mockFallbackOnAccessDenied) {
+            throw ex;
+        }
+        if (isKycFormAccessDenied(ex)) {
+            logger.warn("kyc_form operation='{}' fallback='mock' reason='partner_access_denied'", operation);
+            if (localMirror != null) {
+                return localMirrorResponse(localMirror, mockResponse);
+            }
+            return mockResponse.get();
+        }
+        if (isKycFormNotFound(ex) && localMirror != null) {
+            logger.warn(
+                    "kyc_form operation='{}' fallback='local_mirror' kyc_form_id='{}'",
+                    operation,
+                    localMirror.getExternalKycFormId());
+            return localMirrorResponse(localMirror, mockResponse);
+        }
+        throw ex;
+    }
+
+    private JsonNode localMirrorResponse(InvestorKycForm form, java.util.function.Supplier<JsonNode> mockResponse) {
+        JsonNode existing = parseJson(form.getExternalResponseJson());
+        if (existing != null && !existing.isNull()) {
+            return existing;
+        }
+        return mockResponse.get();
+    }
+
+    private static boolean isKycFormAccessDenied(CybrillaApiException ex) {
+        String message = ex.getMessage();
+        if (!StringUtils.hasText(message)) {
+            return false;
+        }
+        String lower = message.toLowerCase(Locale.ROOT);
+        return (lower.contains("403") || lower.contains("forbidden"))
+                && lower.contains("kyc_form");
+    }
+
+    private static boolean isKycFormNotFound(CybrillaApiException ex) {
+        String message = ex.getMessage();
+        if (!StringUtils.hasText(message)) {
+            return false;
+        }
+        String lower = message.toLowerCase(Locale.ROOT);
+        return (lower.contains("400") || lower.contains("not found"))
+                && (lower.contains("kyc form not found") || lower.contains("get.id"));
+    }
+
+    private JsonNode mockCreateKycFormResponse(Map<String, Object> payload) {
+        String mockId = "kycf_" + UUID.randomUUID().toString().replace("-", "");
+        ObjectNode response = mockKycFormBase(mockId, "created");
+        response.put("pan", textValue(payload, "pan"));
+        response.put("name", textValue(payload, "name"));
+        response.put("date_of_birth", textValue(payload, "date_of_birth"));
+        response.put("proof_details_callback_url", textValue(payload, "proof_details_callback_url"));
+        response.put("esign_callback_url", textValue(payload, "esign_callback_url"));
+        response.putObject("proof_details")
+                .put("fetch_url", mockProofFetchUrl(null, payload, mockId))
+                .put("status", "pending");
+        response.putObject("esign_details").putNull("esign_url").putNull("status");
+        response.putObject("requirements").putArray("fields_needed")
+                .add("identity_proof").add("address").add("signature");
+        return response;
+    }
+
+    private JsonNode mockUpdateKycFormResponse(String kycFormId, InvestorKycForm localMirror) {
+        ObjectNode response = existingOrMockBase(localMirror, "created");
+        response.put("id", kycFormId);
+        if (!response.has("proof_details") || response.path("proof_details").isNull()) {
+            response.putObject("proof_details")
+                    .put("fetch_url", mockProofFetchUrl(localMirror, null, kycFormId))
+                    .put("status", StringUtils.hasText(localMirror == null ? null : localMirror.getProofStatus())
+                            ? localMirror.getProofStatus()
+                            : "pending");
+        }
+        response.putObject("requirements").putArray("fields_needed").add("signature");
+        return response;
+    }
+
+    /**
+     * Fetch must never advance mock workflow state — only explicit simulate/callback/webhook paths do.
+     */
+    private JsonNode mockFetchKycFormResponse(String kycFormId, InvestorKycForm localMirror) {
+        if (localMirror != null) {
+            JsonNode existing = parseJson(localMirror.getExternalResponseJson());
+            if (existing instanceof ObjectNode objectNode) {
+                return objectNode.deepCopy();
+            }
+            ObjectNode response = mockKycFormBase(
+                    kycFormId,
+                    StringUtils.hasText(localMirror.getStatus()) ? localMirror.getStatus() : "created");
+            response.putObject("proof_details")
+                    .put("fetch_url", StringUtils.hasText(localMirror.getProofFetchUrl())
+                            ? localMirror.getProofFetchUrl()
+                            : mockProofFetchUrl(localMirror, null, kycFormId))
+                    .put("status", StringUtils.hasText(localMirror.getProofStatus())
+                            ? localMirror.getProofStatus()
+                            : "pending");
+            if (StringUtils.hasText(localMirror.getEsignUrl()) || StringUtils.hasText(localMirror.getEsignStatus())) {
+                response.putObject("esign_details")
+                        .put("esign_url", localMirror.getEsignUrl())
+                        .put("status", localMirror.getEsignStatus());
+            }
+            response.put("signature_provided", Boolean.TRUE.equals(localMirror.getSignatureProvided()));
+            return response;
+        }
+        ObjectNode response = mockKycFormBase(kycFormId, "created");
+        response.putObject("proof_details")
+                .put("fetch_url", mockProofFetchUrl(null, null, kycFormId))
+                .put("status", "pending");
+        response.putObject("esign_details").putNull("esign_url").putNull("status");
+        response.put("signature_provided", false);
+        response.putObject("requirements").putArray("fields_needed")
+                .add("identity_proof").add("address").add("signature");
+        return response;
+    }
+
+    private JsonNode mockSignatureKycFormResponse(String kycFormId) {
+        ObjectNode response = mockKycFormBase(kycFormId, "created");
+        response.put("signature_provided", true);
+        return response;
+    }
+
+    private JsonNode mockRetryProofKycFormResponse(String kycFormId, InvestorKycForm localMirror) {
+        ObjectNode response = existingOrMockBase(
+                localMirror != null ? localMirror : mockMirrorStub(kycFormId),
+                "created");
+        response.put("id", kycFormId);
+        response.putObject("proof_details")
+                .put("fetch_url", mockProofFetchUrl(localMirror, null, kycFormId) + "&retry=1")
+                .put("status", "pending");
+        return response;
+    }
+
+    private static InvestorKycForm mockMirrorStub(String kycFormId) {
+        InvestorKycForm stub = new InvestorKycForm();
+        stub.setExternalKycFormId(kycFormId);
+        return stub;
+    }
+
+    private JsonNode mockProofFetchedResponse(InvestorKycForm form) {
+        ObjectNode response = existingOrMockBase(form, "created");
+        ObjectNode proof = response.putObject("proof_details");
+        proof.put("fetch_url", StringUtils.hasText(form.getProofFetchUrl())
+                ? form.getProofFetchUrl()
+                : mockProofFetchUrl(form, null, form.getExternalKycFormId()));
+        proof.put("status", "fetched");
+        JsonNode fieldsNeeded = response.path("requirements").path("fields_needed");
+        if (fieldsNeeded.isArray()) {
+            ArrayNode remaining = OBJECT_MAPPER.createArrayNode();
+            for (JsonNode field : fieldsNeeded) {
+                String value = field.asText("");
+                if (!"identity_proof".equals(value) && !"address".equals(value)) {
+                    remaining.add(value);
+                }
+            }
+            if (remaining.isEmpty()) {
+                response.putObject("requirements").putNull("fields_needed");
+            } else {
+                response.putObject("requirements").set("fields_needed", remaining);
+            }
+        }
+        return response;
+    }
+
+    private JsonNode mockEsignCompletedResponse(InvestorKycForm form) {
+        ObjectNode response = existingOrMockBase(form, "awaiting_submission");
+        response.putObject("proof_details")
+                .put("fetch_url", StringUtils.hasText(form.getProofFetchUrl())
+                        ? form.getProofFetchUrl()
+                        : mockProofFetchUrl(form, null, form.getExternalKycFormId()))
+                .put("status", "fetched");
+        response.putObject("esign_details")
+                .put("esign_url", StringUtils.hasText(form.getEsignUrl())
+                        ? form.getEsignUrl()
+                        : mockEsignUrl(form, null, form.getExternalKycFormId()))
+                .put("status", "successful");
+        response.put("signature_provided", Boolean.TRUE.equals(form.getSignatureProvided()));
+        response.putObject("requirements").putNull("fields_needed");
+        return response;
+    }
+
+    private ObjectNode existingOrMockBase(InvestorKycForm form, String defaultStatus) {
+        JsonNode existing = parseJson(form.getExternalResponseJson());
+        if (existing instanceof ObjectNode objectNode) {
+            return objectNode.deepCopy();
+        }
+        return mockKycFormBase(form.getExternalKycFormId(), defaultStatus);
+    }
+
+    private void requireSandboxSimulationEnabled() {
+        if (!mockFallbackOnAccessDenied) {
+            throw new ResponseStatusException(
+                    HttpStatus.FORBIDDEN,
+                    "KYC form sandbox simulation is only available when CYBRILLA_KYC_FORM_MOCK_FALLBACK is enabled "
+                            + "(local profile). For real Digilocker, ask Cybrilla to enable kyc_forms on your partner account.");
+        }
+    }
+
+    /**
+     * Sandbox mock for {@code proof_details.fetch_url}. When partner {@code kyc_forms} is unavailable,
+     * route the investor through the Platizio proof callback (same URL family Cybrilla uses post-Digilocker).
+     */
+    private String mockProofFetchUrl(InvestorKycForm form, Map<String, Object> payload, String kycFormId) {
+        String callback = textValue(payload, "proof_details_callback_url");
+        if (!StringUtils.hasText(callback) && form != null) {
+            callback = form.getProofCallbackUrl();
+        }
+        if (StringUtils.hasText(callback)) {
+            return callback + (callback.contains("?") ? "&" : "?") + "sandbox=digilocker";
+        }
+        return FINPRIM_SANDBOX_BASE + "/identity_documents/fetch_my_proof?form=" + kycFormId;
+    }
+
+    private String mockEsignUrl(InvestorKycForm form, Map<String, Object> payload, String kycFormId) {
+        String callback = textValue(payload, "esign_callback_url");
+        if (!StringUtils.hasText(callback) && form != null) {
+            callback = form.getEsignCallbackUrl();
+        }
+        if (StringUtils.hasText(callback)) {
+            return callback + (callback.contains("?") ? "&" : "?") + "sandbox=esign";
+        }
+        return FINPRIM_SANDBOX_BASE + "/v2/esigns/" + kycFormId + "/redirect";
+    }
+
+    private static ObjectNode mockKycFormBase(String id, String status) {
+        ObjectNode response = OBJECT_MAPPER.createObjectNode();
+        response.put("object", "kyc_form");
+        response.put("id", id);
+        response.put("type", "modify");
+        response.put("status", status);
+        response.putNull("reason");
+        return response;
+    }
+
+    private static String textValue(Map<String, Object> payload, String key) {
+        if (payload == null) {
+            return null;
+        }
+        Object value = payload.get(key);
+        return value == null ? null : String.valueOf(value);
+    }
+
+    private InvestorKycForm resolveLatestForm(UUID investorId) {
+        return repository.findFirstByInvestorIdAndStatusInOrderByCreatedAtDesc(investorId, ACTIVE_STATES)
+                .or(() -> repository.findFirstByInvestorIdOrderByCreatedAtDesc(investorId))
+                .orElse(null);
+    }
+
+    private InvestorKycFormResponse toResponse(InvestorKycForm form) {
+        return new InvestorKycFormResponse(form, parseJson(form == null ? null : form.getExternalResponseJson()));
     }
 }

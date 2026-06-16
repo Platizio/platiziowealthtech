@@ -161,7 +161,9 @@ public class BulkOrderUploadService {
                 mandateMode,
                 sipFrequency,
                 sipStartDate,
-                sipInstalments
+                sipInstalments,
+                scheme.getExternalSchemeCode(),
+                scheme.getExternalIsin()
         );
         return new RowWork(csvRow.rowNumber(), request, baseResult);
     }

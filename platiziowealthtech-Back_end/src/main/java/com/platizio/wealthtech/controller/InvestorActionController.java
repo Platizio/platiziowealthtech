@@ -1,17 +1,22 @@
 package com.platizio.wealthtech.controller;
 
+import com.platizio.wealthtech.integration.CybrillaApiException;
+import com.platizio.wealthtech.integration.CybrillaUnavailableException;
+import com.platizio.wealthtech.domain.OrderStatus;
 import com.platizio.wealthtech.service.InvestorActionService;
 import com.platizio.wealthtech.service.InvestorActionService.InvestorActionPage;
 import jakarta.persistence.EntityNotFoundException;
 import java.math.BigDecimal;
 import java.text.NumberFormat;
 import java.util.Locale;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
@@ -20,9 +25,13 @@ public class InvestorActionController {
     private static final Locale INDIA = new Locale.Builder().setLanguage("en").setRegion("IN").build();
 
     private final InvestorActionService investorActionService;
+    private final String frontendOrigin;
 
-    public InvestorActionController(InvestorActionService investorActionService) {
+    public InvestorActionController(
+            InvestorActionService investorActionService,
+            @Value("${app.frontend.origin:http://localhost:3000}") String frontendOrigin) {
         this.investorActionService = investorActionService;
+        this.frontendOrigin = frontendOrigin;
     }
 
     @GetMapping(
@@ -46,17 +55,106 @@ public class InvestorActionController {
             return ResponseEntity.ok(render(investorActionService.confirmPurchase(token)));
         } catch (EntityNotFoundException | IllegalArgumentException ex) {
             return ResponseEntity.status(HttpStatus.NOT_FOUND).body(renderError(ex.getMessage()));
+        } catch (IllegalStateException ex) {
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(renderError(ex.getMessage()));
+        } catch (CybrillaUnavailableException ex) {
+            return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(renderError(ex.getMessage()));
+        } catch (CybrillaApiException ex) {
+            return ResponseEntity.status(HttpStatus.BAD_GATEWAY).body(renderError(ex.getMessage()));
+        }
+    }
+
+    @GetMapping(
+            value = {"/investor-actions/{token}/payment-complete", "/investor-action/{token}/payment-complete"},
+            produces = MediaType.TEXT_HTML_VALUE
+    )
+    public ResponseEntity<String> paymentCompleteGet(
+            @PathVariable String token,
+            @RequestParam(required = false) String paymentId,
+            @RequestParam(required = false) String status
+    ) {
+        return paymentComplete(token, paymentId, status);
+    }
+
+    @PostMapping(
+            value = {"/investor-actions/{token}/payment-complete", "/investor-action/{token}/payment-complete"},
+            produces = MediaType.TEXT_HTML_VALUE
+    )
+    public ResponseEntity<String> paymentCompletePost(
+            @PathVariable String token,
+            @RequestParam(required = false) String paymentId,
+            @RequestParam(required = false) String status
+    ) {
+        return paymentComplete(token, paymentId, status);
+    }
+
+    private ResponseEntity<String> paymentComplete(String token, String paymentId, String status) {
+        try {
+            return ResponseEntity.ok(render(investorActionService.handlePaymentPostback(token, paymentId, status)));
+        } catch (EntityNotFoundException | IllegalArgumentException ex) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(renderError(ex.getMessage()));
+        } catch (IllegalStateException ex) {
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(renderError(ex.getMessage()));
+        } catch (CybrillaUnavailableException ex) {
+            return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(renderError(ex.getMessage()));
+        } catch (CybrillaApiException ex) {
+            return ResponseEntity.status(HttpStatus.BAD_GATEWAY).body(renderError(ex.getMessage()));
+        }
+    }
+
+    @PostMapping(
+            value = {"/investor-actions/{token}/sandbox/simulate-payment", "/investor-action/{token}/sandbox/simulate-payment"},
+            produces = MediaType.TEXT_HTML_VALUE
+    )
+    public ResponseEntity<String> simulateSandboxPayment(@PathVariable String token) {
+        try {
+            return ResponseEntity.ok(render(investorActionService.simulateSandboxPayment(token)));
+        } catch (EntityNotFoundException | IllegalArgumentException | IllegalStateException ex) {
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(renderError(ex.getMessage()));
+        } catch (CybrillaUnavailableException ex) {
+            return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(renderError(ex.getMessage()));
+        } catch (CybrillaApiException ex) {
+            return ResponseEntity.status(HttpStatus.BAD_GATEWAY).body(renderError(ex.getMessage()));
+        }
+    }
+
+    @PostMapping(
+            value = {"/investor-actions/{token}/prepare-investor", "/investor-action/{token}/prepare-investor"},
+            produces = MediaType.TEXT_HTML_VALUE
+    )
+    public ResponseEntity<String> prepareInvestor(@PathVariable String token) {
+        try {
+            return ResponseEntity.ok(render(investorActionService.prepareInvestorForRetry(token)));
+        } catch (EntityNotFoundException | IllegalArgumentException ex) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(renderError(ex.getMessage()));
+        } catch (IllegalStateException ex) {
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(renderError(ex.getMessage()));
+        } catch (CybrillaUnavailableException ex) {
+            return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(renderError(ex.getMessage()));
+        } catch (CybrillaApiException ex) {
+            return ResponseEntity.status(HttpStatus.BAD_GATEWAY).body(renderError(ex.getMessage()));
+        }
+    }
+
+    @PostMapping(
+            value = {"/investor-actions/{token}/sandbox/simulate-mandate", "/investor-action/{token}/sandbox/simulate-mandate"},
+            produces = MediaType.TEXT_HTML_VALUE
+    )
+    public ResponseEntity<String> simulateSandboxMandate(@PathVariable String token) {
+        try {
+            return ResponseEntity.ok(render(investorActionService.simulateSandboxMandateApproval(token)));
+        } catch (EntityNotFoundException | IllegalArgumentException | IllegalStateException ex) {
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(renderError(ex.getMessage()));
+        } catch (CybrillaUnavailableException ex) {
+            return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(renderError(ex.getMessage()));
+        } catch (CybrillaApiException ex) {
+            return ResponseEntity.status(HttpStatus.BAD_GATEWAY).body(renderError(ex.getMessage()));
         }
     }
 
     private String render(InvestorActionPage page) {
-        String button = page.confirmationAllowed()
-                ? """
-                    <form method="post" action="/investor-actions/%s/confirm">
-                      <button type="submit">Confirm Purchase</button>
-                    </form>
-                    """.formatted(escape(page.token()))
-                : "";
+        String actions = renderActionButtons(page);
+        String statusClass = page.orderStatus() == OrderStatus.FAILED ? "status-failed" : "status";
 
         return """
                 <!doctype html>
@@ -118,6 +216,31 @@ public class InvestorActionController {
                       font-weight: 700;
                       white-space: nowrap;
                     }
+                    .status-failed {
+                      padding: 10px 14px;
+                      border-radius: 6px;
+                      background: #fef2f2;
+                      color: #991b1b;
+                      font-size: 14px;
+                      font-weight: 700;
+                      white-space: nowrap;
+                    }
+                    .action-hint {
+                      padding: 0 24px 8px;
+                      color: var(--muted);
+                      font-size: 14px;
+                      line-height: 1.5;
+                    }
+                    .btn-secondary {
+                      background: #475569;
+                    }
+                    .btn-secondary:hover { background: #334155; }
+                    .btn-outline {
+                      background: transparent;
+                      color: var(--brand-dark);
+                      border: 1px solid var(--line);
+                    }
+                    .btn-outline:hover { background: #f1f5f9; }
                     .panel {
                       background: var(--panel);
                       border: 1px solid var(--line);
@@ -171,8 +294,10 @@ public class InvestorActionController {
                       padding: 24px;
                       display: flex;
                       justify-content: flex-end;
+                      align-items: center;
                     }
-                    button {
+                    .actions { gap: 12px; flex-wrap: wrap; }
+                    .pay-link, button {
                       border: 0;
                       border-radius: 6px;
                       background: var(--ok);
@@ -181,8 +306,36 @@ public class InvestorActionController {
                       font-weight: 700;
                       padding: 14px 22px;
                       cursor: pointer;
+                      text-decoration: none;
+                      display: inline-block;
                     }
+                    button.simulate-btn { background: #0f4c81; }
                     button:hover { background: #0b5f59; }
+                    button.simulate-btn:hover { background: #0c3d68; }
+                    .debug-panel {
+                      margin: 0 24px 24px;
+                      padding: 16px;
+                      border: 1px dashed #94a3b8;
+                      border-radius: 8px;
+                      background: #f8fafc;
+                      font-size: 12px;
+                      color: #334155;
+                    }
+                    .debug-panel summary {
+                      cursor: pointer;
+                      font-weight: 700;
+                      color: #0f4c81;
+                      margin-bottom: 8px;
+                    }
+                    .debug-panel pre {
+                      margin: 8px 0 0;
+                      white-space: pre-wrap;
+                      word-break: break-word;
+                      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+                      font-size: 11px;
+                      max-height: 280px;
+                      overflow: auto;
+                    }
                     @media (max-width: 720px) {
                       main { padding: 28px 0; }
                       .header { display: block; }
@@ -202,10 +355,11 @@ public class InvestorActionController {
                         <div class="brand">Platizio Investor Action</div>
                         <h1>Review Purchase</h1>
                       </div>
-                      <div class="status">%s</div>
+                      <div class="%s">%s</div>
                     </div>
                     <section class="panel">
                       <div class="notice">%s</div>
+                      %s
                       <div class="content">
                         <div class="section">
                           <h2>Investor</h2>
@@ -234,18 +388,34 @@ public class InvestorActionController {
                           <dl>
                             <div><dt>Mode</dt><dd>%s</dd></div>
                             <div><dt>Mandate</dt><dd>%s</dd></div>
+                            <div><dt>Mandate Status</dt><dd>%s</dd></div>
                             <div><dt>Order ID</dt><dd>%s</dd></div>
                           </dl>
                         </div>
                       </div>
                       <div class="actions">%s</div>
+                      <details class="debug-panel">
+                        <summary>Technical details (support)</summary>
+                        <pre id="lumpsum-debug-json"></pre>
+                      </details>
                     </section>
                   </main>
+                  <script>
+                    (function () {
+                      const LUMPSUM_PAYMENT_DEBUG = %s;
+                      const pre = document.getElementById('lumpsum-debug-json');
+                      if (pre) {
+                        pre.textContent = JSON.stringify(LUMPSUM_PAYMENT_DEBUG, null, 2);
+                      }
+                    })();
+                  </script>
                 </body>
                 </html>
                 """.formatted(
+                statusClass,
                 escape(label(page.orderStatus().name())),
                 escape(page.message()),
+                renderActionHint(page),
                 escape(page.investorName()),
                 escape(defaultText(page.investorEmail())),
                 escape(page.schemeName()),
@@ -254,10 +424,74 @@ public class InvestorActionController {
                 escape(defaultText(page.units() == null ? null : page.units().toPlainString())),
                 escape(label(page.transactionType())),
                 escape(defaultText(page.paymentMode())),
-                escape(defaultText(page.mandateMode())),
+                escape(mandateLabel(page)),
+                escape(defaultText(page.mandateStatus())),
                 escape(page.orderId().toString()),
-                button
+                actions,
+                page.debugJson() == null || page.debugJson().isBlank() ? "{}" : page.debugJson()
         );
+    }
+
+    private String renderActionHint(InvestorActionPage page) {
+        if (page.orderStatus() == OrderStatus.FAILED) {
+            return """
+                    <p class="action-hint">This Finprim purchase cannot be confirmed or paid once review has failed. \
+                    Repair the investor profile, then create a <strong>new</strong> order from the distributor Ledger.</p>
+                    """;
+        }
+        if (page.confirmationAllowed()) {
+            return """
+                    <p class="action-hint">Step 1 of 3: Confirm your purchase. \
+                    Platizio will collect consent and open secure payment on Fintech Primitives.</p>
+                    """;
+        }
+        if (page.orderStatus() == OrderStatus.PAYMENT_PENDING) {
+            return """
+                    <p class="action-hint">Step 2 of 3: Complete payment on the secure Fintech Primitives page \
+                    (or use sandbox simulate below).</p>
+                    """;
+        }
+        return "";
+    }
+
+    private String renderActionButtons(InvestorActionPage page) {
+        StringBuilder actions = new StringBuilder();
+        if (page.orderStatus() == OrderStatus.FAILED) {
+            actions.append("""
+                    <form method="post" action="/investor-actions/%s/prepare-investor">
+                      <button type="submit" class="btn-secondary">Repair Investor Profile</button>
+                    </form>
+                    <a class="pay-link btn-outline" href="%s/distributor/ledger">Place New Order (Ledger)</a>
+                    """.formatted(escape(page.token()), escape(frontendOrigin)));
+            return actions.toString();
+        }
+        if (page.confirmationAllowed()) {
+            actions.append("""
+                    <form method="post" action="/investor-actions/%s/confirm">
+                      <button type="submit">Confirm Purchase &amp; Continue</button>
+                    </form>
+                    """.formatted(escape(page.token())));
+        }
+        if (page.paymentRedirectUrl() != null && !page.paymentRedirectUrl().isBlank()) {
+            actions.append("""
+                    <a class="pay-link" href="%s">Continue to Secure Payment</a>
+                    """.formatted(escape(page.paymentRedirectUrl())));
+        }
+        if (page.sandboxMandateSimulationAllowed()) {
+            actions.append("""
+                    <form method="post" action="/investor-actions/%s/sandbox/simulate-mandate">
+                      <button type="submit" class="simulate-btn">Simulate Mandate Approval (Sandbox)</button>
+                    </form>
+                    """.formatted(escape(page.token())));
+        }
+        if (page.sandboxPaymentSimulationAllowed()) {
+            actions.append("""
+                    <form method="post" action="/investor-actions/%s/sandbox/simulate-payment">
+                      <button type="submit" class="simulate-btn">Simulate Payment Success (Sandbox)</button>
+                    </form>
+                    """.formatted(escape(page.token())));
+        }
+        return actions.toString();
     }
 
     private String renderError(String message) {
@@ -289,6 +523,14 @@ public class InvestorActionController {
 
     private String defaultText(String value) {
         return value == null || value.isBlank() ? "-" : value;
+    }
+
+    private String mandateLabel(InvestorActionPage page) {
+        if (page.externalMandateId() != null && page.externalMandateId() > 0) {
+            String mode = page.mandateMode() == null || page.mandateMode().isBlank() ? "MANDATE" : page.mandateMode();
+            return mode + " #" + page.externalMandateId();
+        }
+        return defaultText(page.mandateMode());
     }
 
     private String label(String value) {

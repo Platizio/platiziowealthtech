@@ -15,6 +15,17 @@ jwt:
 app:
   auth:
     cookie-secure: ${AUTH_COOKIE_SECURE:false}
+    # Vite proxies /api/v1 to :8081 — browser sees same-origin; Lax is correct for HTTP dev.
+    cookie-same-site: ${AUTH_COOKIE_SAME_SITE:Lax}
+
+external-auth:
+  auto-refresh:
+    # Local dev: fetch POA/FP tokens lazily on first API use instead of every restart.
+    warm-on-startup: false
+
+cybrilla:
+  kyc-form:
+    mock-fallback-on-access-denied: ${CYBRILLA_KYC_FORM_MOCK_FALLBACK:true}
 
 logging:
   level:

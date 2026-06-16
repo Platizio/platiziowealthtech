@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import jakarta.validation.Validation;
 import jakarta.validation.Validator;
 import jakarta.validation.ValidatorFactory;
+import com.platizio.wealthtech.validation.PanFormat;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 import java.util.Arrays;
@@ -33,7 +34,7 @@ class InvestorCreateRequestValidationTest {
     void rejectsPanWithInvalidFormat() {
         Set<String> messages = messagesFor(requestWithPan("abcde1234f"));
 
-        assertThat(messages).contains("Invalid PAN format. Expected format: AAAAA9999A");
+        assertThat(messages).contains(PanFormat.INDIAN_PAN_MESSAGE);
     }
 
     @Test
@@ -53,8 +54,8 @@ class InvestorCreateRequestValidationTest {
         assertThat(size.min()).isEqualTo(10);
         assertThat(size.max()).isEqualTo(10);
         assertThat(pattern).isNotNull();
-        assertThat(pattern.regexp()).isEqualTo("^[A-Z]{5}[0-9]{4}[A-Z]$");
-        assertThat(pattern.message()).isEqualTo("Invalid PAN format. Expected format: AAAAA9999A");
+        assertThat(pattern.regexp()).isEqualTo(PanFormat.INDIAN_PAN_REGEX);
+        assertThat(pattern.message()).isEqualTo(PanFormat.INDIAN_PAN_MESSAGE);
     }
 
     @Test

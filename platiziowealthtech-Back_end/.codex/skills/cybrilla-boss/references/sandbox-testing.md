@@ -25,7 +25,9 @@ The pre-verification page defines separate PAN-validation patterns:
 - `XXXPANNNNX`: Aadhaar-not-linked simulation
 - `XXXPXNNNNX`: valid PAN simulation
 
-Replace each `X` with an alphabetic character and each `N` with a digit.
+Replace each `X` with an alphabetic character and each `N` with a digit. The 4th PAN character must be `P` (pattern `XXXPXNNNNX`). Official POA doc example: `GYAPS3751D`.
+
+Do not restrict the 5th character to `I`/`A`/`X` only — any letter is valid for `XXXPXNNNNX`; `I` and `A` in position 5 are specific failure simulators (`XXXPINNNNX`, `XXXPANNNNX`).
 
 The same page defines:
 

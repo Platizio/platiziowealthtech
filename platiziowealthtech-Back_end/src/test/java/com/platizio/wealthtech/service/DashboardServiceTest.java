@@ -118,7 +118,10 @@ class DashboardServiceTest {
 
         assertThat(dashboard.getSips())
                 .extracting(SipItemDto::getStatus)
-                .containsExactly("Active SIPs", "Paused SIPs", "Completed SIPs", "Failed SIPs");
+                .containsExactly("Paused", "Failed");
+        assertThat(dashboard.getPendingSetup())
+                .extracting(SipItemDto::getStatus)
+                .containsExactly("Pending", "Pending");
         assertThat(dashboard.getStatusCounts()).containsAllEntriesOf(Map.of(
                 "Active SIPs", 12L,
                 "Paused SIPs", 4L,

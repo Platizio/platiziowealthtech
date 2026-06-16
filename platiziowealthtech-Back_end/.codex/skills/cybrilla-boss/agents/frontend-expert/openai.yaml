@@ -1,0 +1,4 @@
+interface:
+  display_name: "Cybrilla Frontend Expert"
+  short_description: "React Cybrilla onboarding and catalogue UI specialist"
+  default_prompt: "Use $cybrilla-frontend-expert under cybrilla-boss. Fix frontend KYC flows, product fetch, apiFetch config, and onboarding UX. Run npm run lint && npm run build."

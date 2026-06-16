@@ -15,18 +15,27 @@ public class ExternalAuthTokenAutoRefreshScheduler {
 
     private final ExternalBearerTokenService tokenService;
     private final boolean autoRefreshEnabled;
+    private final boolean warmOnStartup;
 
     public ExternalAuthTokenAutoRefreshScheduler(
             ExternalBearerTokenService tokenService,
-            @Value("${external-auth.auto-refresh.enabled:true}") boolean autoRefreshEnabled
+            @Value("${external-auth.auto-refresh.enabled:true}") boolean autoRefreshEnabled,
+            @Value("${external-auth.auto-refresh.warm-on-startup:true}") boolean warmOnStartup
     ) {
         this.tokenService = tokenService;
         this.autoRefreshEnabled = autoRefreshEnabled;
+        this.warmOnStartup = warmOnStartup;
     }
 
-    /** Always warm Cybrilla/Finprim OAuth tokens once the app is ready. */
+    /** Optionally warm Cybrilla/Finprim OAuth tokens once the app is ready. */
     @EventListener(ApplicationReadyEvent.class)
     public void acquireTokensOnStartup() {
+        if (!warmOnStartup) {
+            logger.info(
+                    "external_auth_auto_refresh trigger='startup' action='skipped' reason='warm_on_startup_disabled'"
+            );
+            return;
+        }
         acquireTokens("startup");
     }
 
@@ -42,14 +51,18 @@ public class ExternalAuthTokenAutoRefreshScheduler {
     }
 
     private void acquireTokens(String trigger) {
-        acquireCybrillaPreVerificationToken(trigger);
-        acquireFinprimTenantToken(trigger);
+        refreshCybrillaPreVerificationToken(trigger);
+        refreshFinprimTenantToken(trigger);
     }
 
-    private void acquireCybrillaPreVerificationToken(String trigger) {
+    private void refreshCybrillaPreVerificationToken(String trigger) {
         try {
-            logger.info("external_auth_auto_refresh trigger='{}' provider='Cybrilla pre-verification' action='acquire'", trigger);
-            tokenService.getCybrillaPreVerificationAccessToken();
+            logger.info("external_auth_auto_refresh trigger='{}' provider='Cybrilla pre-verification' action='refresh_if_due'", trigger);
+            if ("startup".equals(trigger)) {
+                tokenService.getCybrillaPreVerificationAccessToken();
+            } else {
+                tokenService.refreshCybrillaPreVerificationTokenIfCachedAndDue();
+            }
         } catch (RuntimeException ex) {
             logger.warn(
                     "external_auth_auto_refresh failed trigger='{}' provider='Cybrilla pre-verification' reason='{}'",
@@ -59,10 +72,14 @@ public class ExternalAuthTokenAutoRefreshScheduler {
         }
     }
 
-    private void acquireFinprimTenantToken(String trigger) {
+    private void refreshFinprimTenantToken(String trigger) {
         try {
-            logger.info("external_auth_auto_refresh trigger='{}' provider='Fintech Primitives tenant' action='acquire'", trigger);
-            tokenService.getFinprimTenantAccessToken();
+            logger.info("external_auth_auto_refresh trigger='{}' provider='Fintech Primitives tenant' action='refresh_if_due'", trigger);
+            if ("startup".equals(trigger)) {
+                tokenService.getFinprimTenantAccessToken();
+            } else {
+                tokenService.refreshFinprimTenantTokenIfCachedAndDue();
+            }
         } catch (RuntimeException ex) {
             logger.warn(
                     "external_auth_auto_refresh failed trigger='{}' provider='Fintech Primitives tenant' reason='{}'",

@@ -16,6 +16,7 @@ import com.platizio.wealthtech.domain.BankVerificationStatus;
 import com.platizio.wealthtech.domain.Investor;
 import com.platizio.wealthtech.domain.InvestorBankAccount;
 import com.platizio.wealthtech.domain.KycStatus;
+import com.platizio.wealthtech.dto.ExternalBankSyncResponse;
 import com.platizio.wealthtech.integration.CybrillaApiException;
 import com.platizio.wealthtech.integration.CybrillaClient;
 import com.platizio.wealthtech.repository.InvestorBankAccountRepository;
@@ -44,8 +45,8 @@ class InvestorBankVerificationSyncTest {
         investor.setDistributorId(distributorId);
         investor.setKycStatus(KycStatus.COMPLETED);
         investor.setBankVerificationStatus(BankVerificationStatus.VERIFICATION_PENDING);
-        investor.setCybrillaInvestorId("invp_1");
-        investor.setExternalMfInvestmentAccountId("mfia_1");
+        investor.setCybrillaInvestorId("invp_12345678");
+        investor.setExternalMfInvestmentAccountId("mfia_12345678");
 
         InvestorBankAccount bankAccount = new InvestorBankAccount();
         ReflectionTestUtils.setField(bankAccount, "id", bankAccountId);
@@ -108,8 +109,8 @@ class InvestorBankVerificationSyncTest {
         investor.setDistributorId(distributorId);
         investor.setKycStatus(KycStatus.COMPLETED);
         investor.setBankVerificationStatus(BankVerificationStatus.VERIFICATION_PENDING);
-        investor.setCybrillaInvestorId("invp_1");
-        investor.setExternalMfInvestmentAccountId("mfia_1");
+        investor.setCybrillaInvestorId("invp_12345678");
+        investor.setExternalMfInvestmentAccountId("mfia_12345678");
 
         InvestorBankAccount bankAccount = new InvestorBankAccount();
         ReflectionTestUtils.setField(bankAccount, "id", bankAccountId);
@@ -129,7 +130,7 @@ class InvestorBankVerificationSyncTest {
         when(investorRepository.save(any(Investor.class))).thenAnswer(invocation -> invocation.getArgument(0));
         doAnswer(invocation -> {
             InvestorBankAccount captured = invocation.getArgument(1);
-            captured.setCybrillaBankId("bac_1");
+            captured.setCybrillaBankId("bac_12345678");
             captured.setExternalSyncPending(true);
             captured.setExternalSyncMessage("verification disabled");
             return null;
@@ -146,7 +147,7 @@ class InvestorBankVerificationSyncTest {
         int synced = service.syncOutstandingBankVerificationStatuses(10);
 
         assertThat(synced).isEqualTo(1);
-        assertThat(bankAccount.getCybrillaBankId()).isEqualTo("bac_1");
+        assertThat(bankAccount.getCybrillaBankId()).isEqualTo("bac_12345678");
         assertThat(bankAccount.getCybrillaBankVerificationId()).isNull();
         assertThat(bankAccount.getVerificationStatus()).isEqualTo(BankVerificationStatus.VERIFICATION_PENDING);
         assertThat(bankAccount.getExternalSyncPending()).isTrue();
@@ -312,6 +313,92 @@ class InvestorBankVerificationSyncTest {
     }
 
     @Test
+    void poaBankPreVerificationKeepsPendingForRetryableFailureCodes() throws Exception {
+        UUID distributorId = UUID.randomUUID();
+        Investor investor = investor(UUID.randomUUID(), distributorId);
+        InvestorBankAccount bankAccount = bankAccount(UUID.randomUUID(), investor.getId(), "pv_retryable");
+
+        InvestorRepository investorRepository = mock(InvestorRepository.class);
+        InvestorBankAccountRepository bankAccountRepository = mock(InvestorBankAccountRepository.class);
+        CybrillaClient cybrillaClient = mock(CybrillaClient.class);
+
+        when(bankAccountRepository.findBankVerificationSyncCandidates(
+                eq(List.of(BankVerificationStatus.VERIFICATION_PENDING, BankVerificationStatus.CAPTURED)),
+                any(Pageable.class)
+        )).thenReturn(List.of(bankAccount));
+        when(investorRepository.findById(investor.getId())).thenReturn(Optional.of(investor));
+        when(bankAccountRepository.save(any(InvestorBankAccount.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(investorRepository.save(any(Investor.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(cybrillaClient.fetchBankAccountVerificationWithPayloadSnapshot(eq("pv_retryable"), any(Map.class))).thenReturn(json("""
+                {
+                  "object":"pre_verification",
+                  "id":"pv_retryable",
+                  "status":"completed",
+                  "bank_accounts":[{"status":"failed","code":"low_confidence","reason":"name mismatch"}]
+                }
+                """));
+
+        InvestorService service = new InvestorService(
+                investorRepository,
+                bankAccountRepository,
+                null,
+                new NoopAuditService(),
+                cybrillaClient
+        );
+
+        service.syncOutstandingBankVerificationStatuses(10);
+
+        assertThat(bankAccount.getVerificationStatus()).isEqualTo(BankVerificationStatus.VERIFICATION_PENDING);
+        assertThat(investor.getBankVerificationStatus()).isEqualTo(BankVerificationStatus.VERIFICATION_PENDING);
+        assertThat(bankAccount.getExternalSyncMessage()).contains("low_confidence");
+    }
+
+    @Test
+    void handleBankPreVerificationWebhookSyncsMatchingBankAccount() throws Exception {
+        UUID distributorId = UUID.randomUUID();
+        Investor investor = investor(UUID.randomUUID(), distributorId);
+        InvestorBankAccount bankAccount = bankAccount(UUID.randomUUID(), investor.getId(), "pv_bank_webhook");
+
+        InvestorRepository investorRepository = mock(InvestorRepository.class);
+        InvestorBankAccountRepository bankAccountRepository = mock(InvestorBankAccountRepository.class);
+        CybrillaClient cybrillaClient = mock(CybrillaClient.class);
+        RecordingAuditService auditService = new RecordingAuditService();
+
+        when(bankAccountRepository.findByCybrillaBankVerificationId("pv_bank_webhook")).thenReturn(Optional.of(bankAccount));
+        when(investorRepository.findById(investor.getId())).thenReturn(Optional.of(investor));
+        when(bankAccountRepository.save(any(InvestorBankAccount.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(investorRepository.save(any(Investor.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(cybrillaClient.fetchBankAccountVerificationWithPayloadSnapshot(eq("pv_bank_webhook"), any(Map.class))).thenReturn(json("""
+                {
+                  "object":"pre_verification",
+                  "id":"pv_bank_webhook",
+                  "status":"completed",
+                  "bank_accounts":[{"status":"verified","code":null,"reason":null}]
+                }
+                """));
+
+        InvestorService service = new InvestorService(
+                investorRepository,
+                bankAccountRepository,
+                null,
+                auditService,
+                cybrillaClient
+        );
+
+        ExternalBankSyncResponse response = service.handleBankPreVerificationWebhook(json("""
+                {
+                  "type":"pre_verification.completed",
+                  "data":{"object":{"object":"pre_verification","id":"pv_bank_webhook","status":"completed"}}
+                }
+                """));
+
+        assertThat(response.status()).isEqualTo("synced");
+        assertThat(response.investorId()).isEqualTo(investor.getId());
+        assertThat(response.bankVerificationStatus()).isEqualTo(BankVerificationStatus.VERIFIED);
+        assertThat(auditService.actionType).isEqualTo("EXTERNAL_BANK_WEBHOOK_SYNCED");
+    }
+
+    @Test
     void syncOutstandingBankVerificationStatusesStopsBatchAndBacksOffAfterExternalFailure() {
         UUID distributorId = UUID.randomUUID();
         Investor firstInvestor = investor(UUID.randomUUID(), distributorId);
@@ -351,6 +438,72 @@ class InvestorBankVerificationSyncTest {
         verify(bankAccountRepository, times(1)).findBankVerificationSyncCandidates(any(), any());
     }
 
+    @Test
+    void ensureMfInvestmentAccountSkipsOrderReadyPatchWhenProfileAndMfAccountAlreadyLinked() throws Exception {
+        // BUG-012: when invp_+mfia_ are already linked at entry, the redundant order-ready
+        // PATCH (which re-triggers FP occupation-immutability) must be skipped.
+        UUID investorId = UUID.randomUUID();
+        UUID distributorId = UUID.randomUUID();
+        UUID bankAccountId = UUID.randomUUID();
+
+        Investor investor = new Investor();
+        ReflectionTestUtils.setField(investor, "id", investorId);
+        investor.setDistributorId(distributorId);
+        investor.setKycStatus(KycStatus.COMPLETED);
+        investor.setBankVerificationStatus(BankVerificationStatus.VERIFIED);
+        investor.setCybrillaInvestorId("invp_12345678");
+        investor.setExternalMfInvestmentAccountId("mfia_12345678");
+
+        InvestorBankAccount bankAccount = new InvestorBankAccount();
+        ReflectionTestUtils.setField(bankAccount, "id", bankAccountId);
+        bankAccount.setInvestorId(investorId);
+        bankAccount.setAccountNumber("000123456789"); // non-sandbox (not ending 1193)
+        bankAccount.setVerificationStatus(BankVerificationStatus.VERIFIED);
+        bankAccount.setCybrillaBankId("bac_12345678");
+        bankAccount.setCybrillaBankVerificationId("pv_linked");
+
+        InvestorRepository investorRepository = mock(InvestorRepository.class);
+        InvestorBankAccountRepository bankAccountRepository = mock(InvestorBankAccountRepository.class);
+        CybrillaClient cybrillaClient = mock(CybrillaClient.class);
+
+        when(investorRepository.findById(investorId)).thenReturn(Optional.of(investor));
+        when(bankAccountRepository.findByInvestorId(investorId)).thenReturn(List.of(bankAccount));
+        when(bankAccountRepository.save(any(InvestorBankAccount.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(investorRepository.save(any(Investor.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        // Profile + MF account already linked: listMfInvestmentAccounts returns a matching account.
+        when(cybrillaClient.listMfInvestmentAccounts("invp_12345678")).thenReturn(json("""
+                {"data":[{"id":"mfia_12345678","primary_investor":"invp_12345678"}]}
+                """));
+        // Bank verification poll settles as verified so the prep block proceeds to the PATCH gate.
+        when(cybrillaClient.fetchBankAccountVerificationWithPayloadSnapshot(eq("pv_linked"), any(Map.class))).thenReturn(json("""
+                {
+                  "object":"pre_verification",
+                  "id":"pv_linked",
+                  "status":"completed",
+                  "bank_accounts":[{"status":"verified","code":null,"reason":null}]
+                }
+                """));
+
+        InvestorService service = new InvestorService(
+                investorRepository,
+                bankAccountRepository,
+                null,
+                new NoopAuditService(),
+                cybrillaClient
+        );
+
+        Investor result = service.ensureMfInvestmentAccount(investorId);
+
+        assertThat(result.getCybrillaInvestorId()).isEqualTo("invp_12345678");
+        assertThat(result.getExternalMfInvestmentAccountId()).isEqualTo("mfia_12345678");
+        // The redundant order-ready PATCH calls must NOT fire when already linked at entry.
+        verify(cybrillaClient, never()).ensureInvestorProfileOrderReady(any(Investor.class));
+        verify(cybrillaClient, never()).ensureMfInvestmentAccountOrderReady(any(Investor.class), any(InvestorBankAccount.class));
+        // No new external profile / MF account creation either (both already exist).
+        verify(cybrillaClient, never()).createInvestorProfile(any(Investor.class));
+        verify(cybrillaClient, never()).createMfInvestmentAccount(any(Investor.class));
+    }
+
     private JsonNode json(String value) throws Exception {
         return OBJECT_MAPPER.readTree(value);
     }
@@ -383,6 +536,19 @@ class InvestorBankVerificationSyncTest {
         @Override
         public void log(String entityType, UUID entityId, String actionType, UUID actorId, String detailsJson) {
             // no-op for unit tests
+        }
+    }
+
+    private static class RecordingAuditService extends AuditService {
+        private String actionType;
+
+        RecordingAuditService() {
+            super(null);
+        }
+
+        @Override
+        public void log(String entityType, UUID entityId, String actionType, UUID actorId, String detailsJson) {
+            this.actionType = actionType;
         }
     }
 }

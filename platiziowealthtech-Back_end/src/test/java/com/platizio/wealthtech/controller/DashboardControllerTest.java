@@ -8,7 +8,9 @@ import com.platizio.wealthtech.dto.ActionItemDto;
 import com.platizio.wealthtech.dto.OnboardingPipelineDto;
 import com.platizio.wealthtech.dto.SipDashboardDto;
 import com.platizio.wealthtech.security.AuthenticatedDistributorPrincipal;
+import com.platizio.wealthtech.dto.PortfolioDto;
 import com.platizio.wealthtech.service.DashboardService;
+import com.platizio.wealthtech.service.PortfolioService;
 import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
@@ -20,7 +22,7 @@ class DashboardControllerTest {
     @Test
     void ownDistributorCanReadSipDashboard() {
         RecordingDashboardService dashboardService = new RecordingDashboardService();
-        DashboardController controller = new DashboardController(dashboardService);
+        DashboardController controller = new DashboardController(dashboardService, new RecordingPortfolioService());
         UUID distributorId = UUID.randomUUID();
 
         controller.getSipDashboard(distributorId, principal(distributorId, DistributorRole.SUB_DISTRIBUTOR));
@@ -32,7 +34,7 @@ class DashboardControllerTest {
     @Test
     void adminCanReadAnotherDistributorDashboard() {
         RecordingDashboardService dashboardService = new RecordingDashboardService();
-        DashboardController controller = new DashboardController(dashboardService);
+        DashboardController controller = new DashboardController(dashboardService, new RecordingPortfolioService());
         UUID adminId = UUID.randomUUID();
         UUID distributorId = UUID.randomUUID();
 
@@ -45,7 +47,7 @@ class DashboardControllerTest {
     @Test
     void nonAdminCannotReadAnotherDistributorSipDashboard() {
         RecordingDashboardService dashboardService = new RecordingDashboardService();
-        DashboardController controller = new DashboardController(dashboardService);
+        DashboardController controller = new DashboardController(dashboardService, new RecordingPortfolioService());
 
         assertThatThrownBy(() -> controller.getSipDashboard(
                 UUID.randomUUID(),
@@ -57,7 +59,7 @@ class DashboardControllerTest {
     @Test
     void nonAdminCannotReadAnotherDistributorActions() {
         RecordingDashboardService dashboardService = new RecordingDashboardService();
-        DashboardController controller = new DashboardController(dashboardService);
+        DashboardController controller = new DashboardController(dashboardService, new RecordingPortfolioService());
 
         assertThatThrownBy(() -> controller.getActionCenter(
                 UUID.randomUUID(),
@@ -69,7 +71,7 @@ class DashboardControllerTest {
     @Test
     void nonAdminCannotReadAnotherDistributorOnboardingPipeline() {
         RecordingDashboardService dashboardService = new RecordingDashboardService();
-        DashboardController controller = new DashboardController(dashboardService);
+        DashboardController controller = new DashboardController(dashboardService, new RecordingPortfolioService());
 
         assertThatThrownBy(() -> controller.getOnboardingPipeline(
                 UUID.randomUUID(),
@@ -86,6 +88,17 @@ class DashboardControllerTest {
                 role,
                 List.of(new SimpleGrantedAuthority("ROLE_" + role.name()))
         );
+    }
+
+    private static class RecordingPortfolioService extends PortfolioService {
+        RecordingPortfolioService() {
+            super(null, null, null, null);
+        }
+
+        @Override
+        public PortfolioDto getPortfolio(UUID distributorId, String categoryFilter) {
+            return new PortfolioDto(null, List.of(), List.of(), List.of(), List.of());
+        }
     }
 
     private static class RecordingDashboardService extends DashboardService {

@@ -40,32 +40,33 @@ class ProductServiceTest {
 
         when(cybrillaClient.fetchProductSchemes())
                 .thenReturn(CybrillaClient.SchemeFetchResult.complete(List.of(fetched)));
-        when(repository.deleteSchemesByCategoryIn(anyList())).thenReturn(5);
+        when(repository.findFirstByExternalSchemeCodeIgnoreCase("INF001")).thenReturn(java.util.Optional.empty());
+        when(repository.save(any(ProductScheme.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(repository.deactivateActiveSchemesNotIn(anyList(), anyList())).thenReturn(2);
         when(repository.deleteByExternalFetchRequestJsonIsNull()).thenReturn(0);
-        when(repository.saveAll(anyList())).thenAnswer(invocation -> invocation.getArgument(0));
         when(repository.searchSchemes(eq(null), eq(Boolean.TRUE), eq(null), eq(null), eq(null), any(Pageable.class)))
                 .thenReturn(localPage);
 
         ProductService service = productService(repository, cybrillaClient);
         Page<ProductScheme> result = service.syncAvailableFundsFromCybrilla(0, 20);
 
-        @SuppressWarnings("unchecked")
-        ArgumentCaptor<List<ProductScheme>> savedSchemes = ArgumentCaptor.forClass(List.class);
-        verify(repository).saveAll(savedSchemes.capture());
+        ArgumentCaptor<ProductScheme> savedScheme = ArgumentCaptor.forClass(ProductScheme.class);
+        verify(repository).save(savedScheme.capture());
 
-        assertThat(savedSchemes.getValue()).singleElement().satisfies(saved -> {
+        assertThat(savedScheme.getValue()).satisfies(saved -> {
             assertThat(saved.getSchemeName()).isEqualTo("Alpha Fund Updated");
             assertThat(saved.getExternalSchemeCode()).isEqualTo("INF001");
         });
         assertThat(result.getContent()).containsExactly(listed);
         InOrder ordered = inOrder(cybrillaClient, repository);
         ordered.verify(cybrillaClient).fetchProductSchemes();
-        ordered.verify(repository).deleteSchemesByCategoryIn(anyList());
+        ordered.verify(repository).findFirstByExternalSchemeCodeIgnoreCase("INF001");
+        ordered.verify(repository).save(any(ProductScheme.class));
+        ordered.verify(repository).deactivateActiveSchemesNotIn(anyList(), anyList());
         ordered.verify(repository).deleteByExternalFetchRequestJsonIsNull();
-        ordered.verify(repository).saveAll(anyList());
         ordered.verify(repository).searchSchemes(eq(null), eq(Boolean.TRUE), eq(null), eq(null), eq(null), any(Pageable.class));
-        verify(repository, never()).findFirstByExternalSchemeCodeIgnoreCase(any());
-        verify(repository, never()).deactivateActiveSchemesNotIn(any(), any());
+        verify(repository, never()).deleteSchemesByCategoryIn(any());
+        verify(repository, never()).saveAll(anyList());
     }
 
     @Test
@@ -149,16 +150,81 @@ class ProductServiceTest {
 
         when(cybrillaClient.fetchProductSchemes())
                 .thenReturn(CybrillaClient.SchemeFetchResult.complete(List.of(cached)));
-        when(repository.deleteSchemesByCategoryIn(anyList())).thenReturn(0);
+        when(repository.findFirstByExternalSchemeCodeIgnoreCase("INF001")).thenReturn(java.util.Optional.of(cached));
+        when(repository.save(any(ProductScheme.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(repository.deactivateActiveSchemesNotIn(anyList(), anyList())).thenReturn(0);
         when(repository.deleteByExternalFetchRequestJsonIsNull()).thenReturn(0);
-        when(repository.saveAll(anyList())).thenAnswer(invocation -> invocation.getArgument(0));
 
-        service.syncAvailableFundsFromCybrilla(true, null, Boolean.TRUE, null, null, null, 0, 20);
+        service.syncAvailableFundsFromCybrilla(true, true, null, Boolean.TRUE, null, null, null, 0, 20);
         verify(cybrillaClient).fetchProductSchemes();
     }
 
+    @Test
+    void syncAvailableFundsUsesLiveCatalogueForBrowseButPersistsWhenExplicitSyncRequested() {
+        ProductSchemeRepository repository = mock(ProductSchemeRepository.class);
+        CybrillaClient cybrillaClient = mock(CybrillaClient.class);
+        ProductScheme live = scheme("INF001", "Live Alpha Fund");
+        UUID browsePersistedId = UUID.randomUUID();
+        ProductScheme persisted = scheme("INF001", "Live Alpha Fund");
+        setId(persisted, UUID.randomUUID());
+        Page<ProductScheme> localPage = new PageImpl<>(List.of(persisted));
+
+        when(cybrillaClient.fetchLiveCataloguePage("poa-mf", 0, 20))
+                .thenReturn(new CybrillaClient.LiveCataloguePage(null, List.of(live), 1L, 0, 20, "/v2/mf_scheme_plans/cybrillapoa"));
+        when(cybrillaClient.fetchProductSchemes())
+                .thenReturn(CybrillaClient.SchemeFetchResult.complete(List.of(live)));
+        when(repository.findFirstByExternalSchemeCodeIgnoreCase("INF001")).thenReturn(java.util.Optional.empty());
+        when(repository.save(any(ProductScheme.class))).thenAnswer(invocation -> {
+            ProductScheme saved = invocation.getArgument(0);
+            setId(saved, browsePersistedId);
+            return saved;
+        });
+        when(repository.deactivateActiveSchemesNotIn(anyList(), anyList())).thenReturn(0);
+        when(repository.deleteByExternalFetchRequestJsonIsNull()).thenReturn(0);
+        when(repository.searchSchemes(eq(null), eq(Boolean.TRUE), eq(null), eq(null), eq(null), any(Pageable.class)))
+                .thenReturn(localPage);
+
+        ProductService service = liveProductService(repository, cybrillaClient);
+
+        Page<ProductScheme> browse = service.syncAvailableFundsFromCybrilla(false, false, null, Boolean.TRUE, null, null, null, 0, 20);
+        assertThat(browse.getContent()).singleElement().satisfies(saved -> assertThat(saved.getId()).isEqualTo(browsePersistedId));
+        verify(repository).save(any(ProductScheme.class));
+        verify(cybrillaClient, never()).fetchProductSchemes();
+
+        Page<ProductScheme> synced = service.syncAvailableFundsFromCybrilla(true, false, null, Boolean.TRUE, null, null, null, 0, 20);
+        assertThat(synced.getContent()).containsExactly(persisted);
+        verify(cybrillaClient).fetchProductSchemes();
+    }
+
+    @Test
+    void resolveSchemesPageUsesLiveCybrillaCatalogueByDefault() {
+        ProductSchemeRepository repository = mock(ProductSchemeRepository.class);
+        CybrillaClient cybrillaClient = mock(CybrillaClient.class);
+        ProductScheme live = scheme("INF001", "Live Alpha Fund");
+        UUID persistedId = UUID.randomUUID();
+        when(cybrillaClient.fetchLiveCataloguePage("poa-mf", 0, 20))
+                .thenReturn(new CybrillaClient.LiveCataloguePage(null, List.of(live), 1L, 0, 20, "/v2/mf_scheme_plans/cybrillapoa"));
+        when(repository.findFirstByExternalSchemeCodeIgnoreCase("INF001")).thenReturn(java.util.Optional.empty());
+        when(repository.save(any(ProductScheme.class))).thenAnswer(invocation -> {
+            ProductScheme saved = invocation.getArgument(0);
+            setId(saved, persistedId);
+            return saved;
+        });
+
+        ProductService service = liveProductService(repository, cybrillaClient);
+        Page<ProductScheme> result = service.resolveSchemesPage(false, null, Boolean.TRUE, null, null, null, 0, 20);
+
+        assertThat(result.getContent()).singleElement().satisfies(saved -> assertThat(saved.getId()).isEqualTo(persistedId));
+        verify(repository).save(any(ProductScheme.class));
+        verify(repository, never()).searchSchemes(any(), any(), any(), any(), any(), any(Pageable.class));
+    }
+
     private ProductService productService(ProductSchemeRepository repository, CybrillaClient cybrillaClient) {
-        return new ProductService(repository, cybrillaClient, 25);
+        return new ProductService(repository, cybrillaClient, 25, "local", "poa-mf");
+    }
+
+    private ProductService liveProductService(ProductSchemeRepository repository, CybrillaClient cybrillaClient) {
+        return new ProductService(repository, cybrillaClient, 25, "cybrilla", "poa-mf");
     }
 
     private void setId(ProductScheme scheme, UUID id) {

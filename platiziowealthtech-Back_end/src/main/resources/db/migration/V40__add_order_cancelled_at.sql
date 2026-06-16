@@ -1,0 +1,2 @@
+ALTER TABLE transaction_orders
+    ADD COLUMN IF NOT EXISTS cancelled_at TIMESTAMP WITH TIME ZONE;

@@ -1,5 +1,6 @@
 package com.platizio.wealthtech.dto;
 
+import com.platizio.wealthtech.validation.PanFormat;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Past;
@@ -18,7 +19,7 @@ public record InvestorPreVerificationRequest(
 
         @NotBlank
         @Size(min = 10, max = 10, message = "PAN must be exactly 10 characters")
-        @Pattern(regexp = "^[A-Z]{5}[0-9]{4}[A-Z]$", message = "Invalid PAN format. Expected format: AAAAA9999A")
+        @Pattern(regexp = PanFormat.INDIAN_PAN_REGEX, message = PanFormat.INDIAN_PAN_MESSAGE)
         String pan,
 
         @NotNull(message = "Date of birth is required for PAN validation")

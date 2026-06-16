@@ -54,21 +54,60 @@ management:
     web:
       exposure:
         include: health,info,prometheus
+  endpoint:
+    health:
+      show-details: when_authorized
+  health:
+    # SMTP is optional locally (OTP is logged when MAIL_HOST is unset). Without this,
+    # MailHealthIndicator marks the app DOWN even though PostgreSQL and APIs are fine.
+    mail:
+      enabled: false
 
 server:
-  port: 8081
+  port: ${SERVER_PORT:8081}
 
 cybrilla:
+  # sandbox | production — production enables live PAN/KYC verification for any valid Indian PAN.
+  environment: ${CYBRILLA_ENVIRONMENT:sandbox}
+  webhook:
+    # Required outside the local profile. Cybrilla sends this value in X-Cybrilla-Webhook-Secret.
+    secret: ${CYBRILLA_WEBHOOK_SECRET:}
   integration:
     real-client-enabled: ${CYBRILLA_REAL_CLIENT_ENABLED:true}
+    # When true, import Finprim catalogue on startup if fewer than 3 local schemes exist.
+    bootstrap-catalogue-on-startup: ${CYBRILLA_BOOTSTRAP_CATALOGUE_ON_STARTUP:false}
+    # cybrilla = live Finprim catalogue (default). local = PostgreSQL seed/manual rows only.
+    product-catalogue-source: ${CYBRILLA_PRODUCT_CATALOGUE_SOURCE:cybrilla}
+    # poa-mf | oms-fund-schemes | sif-poa — see Finprim POA gateway docs.
+    product-catalogue-endpoint: ${CYBRILLA_PRODUCT_CATALOGUE_ENDPOINT:poa-mf}
     # Skip full Finprim catalogue re-import when a sync ran recently (aligns with ~30m JWT lifetime).
     catalogue-refresh-min-interval-minutes: ${CYBRILLA_CATALOGUE_REFRESH_MIN_INTERVAL_MINUTES:25}
+    # cybrilla = reconcile investor list from GET /v2/investor_profiles before reads (default).
+    # local = PostgreSQL investors table only (demo/offline).
+    investor-data-source: ${CYBRILLA_INVESTOR_DATA_SOURCE:cybrilla}
+    investor-sync-min-interval-minutes: ${CYBRILLA_INVESTOR_SYNC_MIN_INTERVAL_MINUTES:5}
+  payment:
+    mandate-provider-name: ${CYBRILLA_MANDATE_PROVIDER_NAME:CYBRILLAPOA}
+    sandbox-simulate-mandate-approval: ${CYBRILLA_SANDBOX_SIMULATE_MANDATE_APPROVAL:true}
+    sandbox-simulate-payment: ${CYBRILLA_SANDBOX_SIMULATE_PAYMENT:true}
   kyc-form:
     # Frontend origin the investor is redirected back to after the Digilocker
     # and eSign journeys. Used to build proof_details_callback_url / esign_callback_url.
     callback-base-url: ${CYBRILLA_KYC_FORM_CALLBACK_BASE_URL:http://localhost:3000}
+    # When Cybrilla returns 403 "Partner not allowed to access kyc_forms", synthesize
+    # mock POA responses locally so the modify workflow can be exercised in dev.
+    mock-fallback-on-access-denied: ${CYBRILLA_KYC_FORM_MOCK_FALLBACK:false}
+  kyc:
+    identity-document:
+      # Postback path appended to callback-base-url for FP /v2/identity_documents Digilocker return.
+      postback-path: ${CYBRILLA_IDENTITY_DOCUMENT_POSTBACK_PATH:/distributor/investor-onboarding}
+    esign:
+      # Postback path appended to callback-base-url for FP /v2/esigns completion return.
+      postback-path: ${CYBRILLA_ESIGN_POSTBACK_PATH:/distributor/investor-onboarding}
   pre-verification:
     base-url: ${CYBRILLA_PRE_VERIFICATION_BASE_URL:https://api.sandbox.cybrilla.com}
+    # Unset = auto (simulator PANs enforced in sandbox, real PANs allowed in production).
+    enforce-sandbox-pan-patterns: ${CYBRILLA_ENFORCE_SANDBOX_PAN_PATTERNS:}
     auth:
       token-url: ${CYBRILLA_PRE_VERIFICATION_TOKEN_URL:https://s.finprim.com/v2/auth/cybrillarta/token}
       client-id: ${CYBRILLA_PRE_VERIFICATION_CLIENT_ID:}
@@ -88,8 +127,10 @@ finprim:
 
 external-auth:
   auto-refresh:
-    # Startup always acquires tokens; scheduled refresh runs every ~30 minutes by default.
+    # Scheduled refresh runs every ~30 minutes by default and only renews tokens already in cache.
     enabled: ${EXTERNAL_AUTH_AUTO_REFRESH_ENABLED:true}
+    # When true, load or fetch both OAuth tokens at startup. When false, first Cybrilla/FP API call acquires them.
+    warm-on-startup: ${EXTERNAL_AUTH_WARM_ON_STARTUP:true}
     check-interval-ms: ${EXTERNAL_AUTH_AUTO_REFRESH_CHECK_INTERVAL_MS:1800000}
     startup-delay-ms: ${EXTERNAL_AUTH_AUTO_REFRESH_STARTUP_DELAY_MS:1800000}
   token-cache:
@@ -104,8 +145,10 @@ jwt:
   expiration-ms: 900000  # 15 minutes
 
 app:
+  payment:
+    postback-url: ${PAYMENT_POSTBACK_URL:http://localhost:8081/investor-actions/{token}/payment-complete}
   cors:
-    allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:3000,http://localhost:5173,http://localhost:8080}
+    allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:3000,http://localhost:5173,http://127.0.0.1:3000,http://127.0.0.1:5173}
   auth:
     cookie-name: ${AUTH_COOKIE_NAME:access_token}
     refresh-cookie-name: ${AUTH_REFRESH_COOKIE_NAME:refresh_token}
@@ -123,7 +166,12 @@ app:
     from-address: ${MAIL_FROM:no-reply@platizio.local}
     from-name: ${MAIL_FROM_NAME:Platizio}
   kyc-sync:
+    enabled: ${KYC_SYNC_ENABLED:true}
+    interval-ms: ${KYC_SYNC_INTERVAL_MS:180000}
+    batch-size: ${KYC_SYNC_BATCH_SIZE:50}
     failure-backoff-ms: ${KYC_SYNC_FAILURE_BACKOFF_MS:900000}
+    pre-verification-poll-max-attempts: ${KYC_PRE_VERIFICATION_POLL_MAX_ATTEMPTS:15}
+    pre-verification-poll-interval-ms: ${KYC_PRE_VERIFICATION_POLL_INTERVAL_MS:2000}
   kyc-form-sync:
     # Polling fallback for the KYC Forms (modify) workflow. Webhooks are primary;
     # enable this only if you cannot rely on webhook delivery.

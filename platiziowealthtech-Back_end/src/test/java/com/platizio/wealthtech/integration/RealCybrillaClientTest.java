@@ -96,22 +96,24 @@ class RealCybrillaClientTest {
     }
 
     @Test
-    void fetchProductSchemesUsesDocumentedFundSchemeListEndpoint() {
+    void fetchProductSchemesUsesPoaOrderableMfSchemePlansEndpoint() {
         ClientFixture fixture = clientFixture(new StaticBearerTokenService("tenant-token"));
 
-        fixture.server.expect(once(), requestTo("https://finprim.test/api/oms/fund_schemes?page=0&size=100"))
+        fixture.server.expect(once(), requestTo(
+                        "https://finprim.test/v2/mf_scheme_plans/cybrillapoa?expand=mf_scheme,mf_fund&page=0&size=100"))
                 .andExpect(method(HttpMethod.GET))
                 .andExpect(header(HttpHeaders.AUTHORIZATION, "Bearer tenant-token"))
                 .andExpect(header("x-tenant-id", "tenant-123"))
                 .andRespond(withSuccess("""
                         {
-                          "fund_schemes": [
+                          "mf_scheme_plans": [
                             {
-                              "fund_scheme_id": 101,
+                              "object": "mf_scheme_plan",
+                              "gateway": "cybrillapoa",
                               "isin": "INF001",
-                              "name": "Alpha Liquid Fund",
-                              "amc_id": 12,
-                              "active": true
+                              "active": true,
+                              "mf_scheme": { "name": "Alpha Liquid Fund" },
+                              "mf_fund": { "name": "Alpha AMC" }
                             }
                           ]
                         }
@@ -129,7 +131,7 @@ class RealCybrillaClientTest {
         assertThat(result.schemes()).hasSize(1);
         ProductScheme scheme = result.schemes().getFirst();
         assertThat(scheme.getSchemeName()).isEqualTo("Alpha Liquid Fund");
-        assertThat(scheme.getAmcName()).isEqualTo("AMC 12");
+        assertThat(scheme.getAmcName()).isEqualTo("Alpha AMC");
         assertThat(scheme.getCategory()).isEqualTo(ProductCategory.MF);
         assertThat(scheme.getExternalSchemeCode()).isEqualTo("INF001");
         assertThat(scheme.getExternalIsin()).isEqualTo("INF001");
@@ -140,15 +142,18 @@ class RealCybrillaClientTest {
     void fetchProductSchemesMergesSifSchemePlansFromFinprimGateway() {
         ClientFixture fixture = clientFixture(new StaticBearerTokenService("tenant-token"));
 
-        fixture.server.expect(once(), requestTo("https://finprim.test/api/oms/fund_schemes?page=0&size=100"))
+        fixture.server.expect(once(), requestTo(
+                        "https://finprim.test/v2/mf_scheme_plans/cybrillapoa?expand=mf_scheme,mf_fund&page=0&size=100"))
                 .andExpect(method(HttpMethod.GET))
                 .andRespond(withSuccess("""
                         {
-                          "fund_schemes": [
+                          "mf_scheme_plans": [
                             {
+                              "object": "mf_scheme_plan",
+                              "gateway": "cybrillapoa",
                               "isin": "INF001",
-                              "name": "Alpha Liquid Fund",
-                              "active": true
+                              "active": true,
+                              "mf_scheme": { "name": "Alpha Liquid Fund" }
                             }
                           ]
                         }
@@ -189,12 +194,23 @@ class RealCybrillaClientTest {
     }
 
     @Test
-    void updateInvestorProfilePatchesMutableProfileFields() {
+    void updateInvestorProfilePatchesOnlyMissingProfileFields() {
         ClientFixture fixture = clientFixture(new StaticBearerTokenService("tenant-token"));
         Investor investor = investor("invp_1", null);
         investor.setFullName("Rani Gupta");
         investor.setDateOfBirth(LocalDate.of(1955, 10, 25));
         investor.setCity("Mumbai");
+
+        fixture.server.expect(once(), requestTo("https://finprim.test/v2/investor_profiles/invp_1"))
+                .andExpect(method(HttpMethod.GET))
+                .andRespond(withSuccess("""
+                        {
+                          "object": "investor_profile",
+                          "id": "invp_1",
+                          "name": "Rani Gupta",
+                          "occupation": "service"
+                        }
+                        """, MediaType.APPLICATION_JSON));
 
         fixture.server.expect(once(), requestTo("https://finprim.test/v2/investor_profiles"))
                 .andExpect(method(HttpMethod.PATCH))
@@ -204,7 +220,6 @@ class RealCybrillaClientTest {
                         {
                           "id": "invp_1",
                           "tax_status": "resident_individual",
-                          "name": "Rani Gupta",
                           "date_of_birth": "1955-10-25",
                           "place_of_birth": "Mumbai",
                           "nationality_country": "IN",
@@ -216,6 +231,154 @@ class RealCybrillaClientTest {
                 .andRespond(withSuccess("{\"object\":\"investor_profile\",\"id\":\"invp_1\"}", MediaType.APPLICATION_JSON));
 
         fixture.client.updateInvestorProfile(investor);
+
+        fixture.server.verify();
+    }
+
+    @Test
+    void ensureInvestorProfileOrderReadySkipsOccupationWhenAlreadySetOnProfile() {
+        ClientFixture fixture = clientFixture(new StaticBearerTokenService("tenant-token"));
+        Investor investor = investor("invp_1", null);
+
+        fixture.server.expect(once(), requestTo("https://finprim.test/v2/investor_profiles/invp_1"))
+                .andExpect(method(HttpMethod.GET))
+                .andExpect(header(HttpHeaders.AUTHORIZATION, "Bearer tenant-token"))
+                .andRespond(withSuccess("""
+                        {
+                          "object": "investor_profile",
+                          "id": "invp_1",
+                          "gender": "female",
+                          "country_of_birth": "IN",
+                          "place_of_birth": "Mumbai",
+                          "nationality_country": "IN",
+                          "use_default_tax_residences": true,
+                          "occupation": "service",
+                          "source_of_wealth": "salary",
+                          "income_slab": "upto_1lakh",
+                          "pep_details": "not_applicable"
+                        }
+                        """, MediaType.APPLICATION_JSON));
+
+        fixture.client.ensureInvestorProfileOrderReady(investor);
+
+        fixture.server.verify();
+    }
+
+    @Test
+    void ensureInvestorProfileOrderReadyRetriesWithoutImmutableOccupationField() {
+        ClientFixture fixture = clientFixture(new StaticBearerTokenService("tenant-token"));
+        Investor investor = investor("invp_1", null);
+
+        fixture.server.expect(once(), requestTo("https://finprim.test/v2/investor_profiles/invp_1"))
+                .andExpect(method(HttpMethod.GET))
+                .andRespond(withSuccess("""
+                        {
+                          "object": "investor_profile",
+                          "id": "invp_1"
+                        }
+                        """, MediaType.APPLICATION_JSON));
+
+        fixture.server.expect(once(), requestTo("https://finprim.test/v2/investor_profiles"))
+                .andExpect(method(HttpMethod.PATCH))
+                .andExpect(content().json("""
+                        {
+                          "id": "invp_1",
+                          "source_of_wealth": "salary",
+                          "income_slab": "upto_1lakh",
+                          "pep_details": "not_applicable"
+                        }
+                        """))
+                .andRespond(withStatus(HttpStatus.BAD_REQUEST).body("""
+                        {
+                          "error": {
+                            "status": 400,
+                            "message": "source_of_wealth is already set and cannot be modified"
+                          }
+                        }
+                        """));
+
+        fixture.server.expect(once(), requestTo("https://finprim.test/v2/investor_profiles"))
+                .andExpect(method(HttpMethod.PATCH))
+                .andExpect(content().json("""
+                        {
+                          "id": "invp_1",
+                          "income_slab": "upto_1lakh",
+                          "pep_details": "not_applicable"
+                        }
+                        """))
+                .andRespond(withSuccess("{\"object\":\"investor_profile\",\"id\":\"invp_1\"}", MediaType.APPLICATION_JSON));
+
+        fixture.client.ensureInvestorProfileOrderReady(investor);
+
+        fixture.server.verify();
+    }
+
+    @Test
+    void ensureInvestorProfileOrderReadyNeverPatchesOccupationOnExistingProfile() {
+        ClientFixture fixture = clientFixture(new StaticBearerTokenService("tenant-token"));
+        Investor investor = investor("invp_1", null);
+
+        fixture.server.expect(once(), requestTo("https://finprim.test/v2/investor_profiles/invp_1"))
+                .andExpect(method(HttpMethod.GET))
+                .andRespond(withSuccess("""
+                        {
+                          "object": "investor_profile",
+                          "id": "invp_1",
+                          "pan": "AAAPX1234A",
+                          "name": "Alice Investor"
+                        }
+                        """, MediaType.APPLICATION_JSON));
+
+        fixture.server.expect(once(), requestTo("https://finprim.test/v2/investor_profiles"))
+                .andExpect(method(HttpMethod.PATCH))
+                .andExpect(content().json("""
+                        {
+                          "id": "invp_1",
+                          "source_of_wealth": "salary",
+                          "income_slab": "upto_1lakh",
+                          "pep_details": "not_applicable"
+                        }
+                        """))
+                .andRespond(withSuccess("{\"object\":\"investor_profile\",\"id\":\"invp_1\"}", MediaType.APPLICATION_JSON));
+
+        fixture.client.ensureInvestorProfileOrderReady(investor);
+
+        fixture.server.verify();
+    }
+
+    @Test
+    void ensureInvestorProfileOrderReadyRetriesWhenBadRequestUsesHttpStatusCodeNotEnum() {
+        ClientFixture fixture = clientFixture(new StaticBearerTokenService("tenant-token"));
+        Investor investor = investor("invp_1", null);
+
+        fixture.server.expect(once(), requestTo("https://finprim.test/v2/investor_profiles/invp_1"))
+                .andExpect(method(HttpMethod.GET))
+                .andRespond(withSuccess("{\"object\":\"investor_profile\",\"id\":\"invp_1\"}", MediaType.APPLICATION_JSON));
+
+        fixture.server.expect(once(), requestTo("https://finprim.test/v2/investor_profiles"))
+                .andExpect(method(HttpMethod.PATCH))
+                .andRespond(withStatus(org.springframework.http.HttpStatusCode.valueOf(400)).body("""
+                        {
+                          "error": {
+                            "status": 400,
+                            "code": "BAD_REQUEST_ERROR",
+                            "message": "income_slab is already set and cannot be modified",
+                            "errors": null
+                          }
+                        }
+                        """));
+        fixture.server.expect(once(), requestTo("https://finprim.test/v2/investor_profiles"))
+                .andExpect(method(HttpMethod.PATCH))
+                .andExpect(content().json("""
+                        {
+                          "id": "invp_1",
+                          "source_of_wealth": "salary",
+                          "pep_details": "not_applicable"
+                        }
+                        """))
+                .andRespond(withSuccess("{\"object\":\"investor_profile\",\"id\":\"invp_1\"}", MediaType.APPLICATION_JSON));
+
+        fixture.client.ensureInvestorProfileOrderReady(investor);
 
         fixture.server.verify();
     }
@@ -270,6 +433,55 @@ class RealCybrillaClientTest {
     }
 
     @Test
+    void createEsignPostsToEsignsEndpoint() {
+        ClientFixture fixture = clientFixture(new StaticBearerTokenService("tenant-token"));
+
+        fixture.server.expect(once(), requestTo("https://finprim.test/v2/esigns"))
+                .andExpect(method(HttpMethod.POST))
+                .andExpect(header(HttpHeaders.AUTHORIZATION, "Bearer tenant-token"))
+                .andExpect(header("x-tenant-id", "tenant-123"))
+                .andExpect(content().json("""
+                        {
+                          "kyc_request": "kycr_1",
+                          "postback_url": "https://app.example/kyc/esign"
+                        }
+                        """))
+                .andRespond(withSuccess(
+                        "{\"id\":\"esign_1\",\"status\":\"pending\",\"redirect_url\":\"https://s.finprim.com/v2/esigns/esign_1/redirect\"}",
+                        MediaType.APPLICATION_JSON
+                ));
+
+        JsonNode response = fixture.client.createEsign(Map.of(
+                "kyc_request", "kycr_1",
+                "postback_url", "https://app.example/kyc/esign"
+        ));
+
+        fixture.server.verify();
+        assertThat(response.path("id").asText()).isEqualTo("esign_1");
+        assertThat(response.path("status").asText()).isEqualTo("pending");
+    }
+
+    @Test
+    void fetchEsignGetsEsignById() {
+        ClientFixture fixture = clientFixture(new StaticBearerTokenService("tenant-token"));
+
+        fixture.server.expect(once(), requestTo("https://finprim.test/v2/esigns/esign_1"))
+                .andExpect(method(HttpMethod.GET))
+                .andExpect(header(HttpHeaders.AUTHORIZATION, "Bearer tenant-token"))
+                .andExpect(header("x-tenant-id", "tenant-123"))
+                .andRespond(withSuccess(
+                        "{\"id\":\"esign_1\",\"status\":\"successful\",\"redirect_url\":\"https://s.finprim.com/v2/esigns/esign_1/redirect\"}",
+                        MediaType.APPLICATION_JSON
+                ));
+
+        JsonNode response = fixture.client.fetchEsign("esign_1");
+
+        fixture.server.verify();
+        assertThat(response.path("id").asText()).isEqualTo("esign_1");
+        assertThat(response.path("status").asText()).isEqualTo("successful");
+    }
+
+    @Test
     void createOrderPostsToMfPurchasesEndpointWithPayloadAndIdempotencyKey() {
         ClientFixture fixture = clientFixture(new StaticBearerTokenService("tenant-token"));
         TransactionOrder order = order(TransactionType.LUMPSUM_PURCHASE);
@@ -286,7 +498,10 @@ class RealCybrillaClientTest {
                           "source_ref_id": "%s",
                           "mf_investment_account": "mfia-1",
                           "scheme": "INF209KA1K47",
-                          "amount": 1500.50
+                          "amount": 1500.50,
+                          "user_ip": "127.0.0.1",
+                          "gateway": "ondc",
+                          "initiated_via": "web"
                         }
                         """.formatted(
                         order.getId()
@@ -322,7 +537,9 @@ class RealCybrillaClientTest {
                           "frequency": "monthly",
                           "start_date": "2026-07-01",
                           "number_of_installments": 12,
-                          "auto_generate_installments": true
+                          "auto_generate_installments": true,
+                          "user_ip": "127.0.0.1",
+                          "gateway": "ondc"
                         }
                         """.formatted(order.getId())))
                 .andRespond(withSuccess("{\"id\":\"mfpp_1\"}", MediaType.APPLICATION_JSON));
@@ -351,7 +568,8 @@ class RealCybrillaClientTest {
                           "source_ref_id": "redemption-%s",
                           "mf_investment_account": "mfia-1",
                           "scheme": "INF209KA1K47",
-                          "units": 10.25
+                          "units": 10.25,
+                          "gateway": "ondc"
                         }
                         """.formatted(
                         order.getId()
@@ -439,6 +657,11 @@ class RealCybrillaClientTest {
         ClientFixture fixture = clientFixture(new StaticBearerTokenService("tenant-token"));
         Investor investor = investor("profile-1", null);
 
+        // createMfInvestmentAccount first lists existing accounts by primary_investor, then POSTs.
+        // Mock the list call (empty) so the subsequent POST is what the test asserts.
+        fixture.server.expect(once(), requestTo("https://finprim.test/v2/mf_investment_accounts?primary_investor=profile-1"))
+                .andExpect(method(HttpMethod.GET))
+                .andRespond(withSuccess("{\"data\":[]}", MediaType.APPLICATION_JSON));
         fixture.server.expect(once(), requestTo("https://finprim.test/v2/mf_investment_accounts"))
                 .andExpect(method(HttpMethod.POST))
                 .andExpect(content().json("""
@@ -453,6 +676,29 @@ class RealCybrillaClientTest {
 
         fixture.server.verify();
         assertThat(accountId).isEqualTo("mfia_1");
+    }
+
+    @Test
+    void createMfInvestmentAccountResolvesDuplicateWhenListOmitsPrimaryInvestor() {
+        ClientFixture fixture = clientFixture(new StaticBearerTokenService("tenant-token"));
+        Investor investor = investor("invp_existing_profile", null);
+
+        fixture.server.expect(once(), requestTo("https://finprim.test/v2/mf_investment_accounts?primary_investor=invp_existing_profile"))
+                .andExpect(method(HttpMethod.GET))
+                .andRespond(withSuccess("{\"data\":[]}", MediaType.APPLICATION_JSON));
+        fixture.server.expect(once(), requestTo("https://finprim.test/v2/mf_investment_accounts"))
+                .andExpect(method(HttpMethod.POST))
+                .andRespond(withStatus(HttpStatus.BAD_REQUEST).body("""
+                        {"error":{"message":"investment account already present for given investor/holding_pattern combination"}}
+                        """));
+        fixture.server.expect(once(), requestTo("https://finprim.test/v2/mf_investment_accounts?primary_investor=invp_existing_profile"))
+                .andExpect(method(HttpMethod.GET))
+                .andRespond(withSuccess("{\"data\":[{\"id\":\"mfia_existing_99\"}]}", MediaType.APPLICATION_JSON));
+
+        String accountId = fixture.client.createMfInvestmentAccount(investor);
+
+        fixture.server.verify();
+        assertThat(accountId).isEqualTo("mfia_existing_99");
     }
 
     @Test
@@ -477,15 +723,11 @@ class RealCybrillaClientTest {
                 .andExpect(method(HttpMethod.POST))
                 .andExpect(content().json("""
                         {
-                          "investor_identifier": "AAAPX1234A",
                           "pan": {
                             "value": "AAAPX1234A"
                           },
                           "name": {
                             "value": "Alice Investor"
-                          },
-                          "date_of_birth": {
-                            "value": "1990-01-01"
                           },
                           "bank_accounts": [
                             {
@@ -519,6 +761,143 @@ class RealCybrillaClientTest {
         assertThat(bankAccount.getCybrillaBankId()).isEqualTo("bac_1");
         assertThat(bankAccount.getCybrillaBankVerificationId()).isEqualTo("pv_bank_1");
         assertThat(bankAccount.getCybrillaBankVerificationStatus()).isEqualTo("accepted");
+    }
+
+    @Test
+    void fetchIfscDetailsUsesFinprimOnboardingLookup() {
+        ClientFixture fixture = clientFixture(new StaticBearerTokenService("tenant-token"));
+
+        fixture.server.expect(once(), requestTo("https://finprim.test/api/onb/ifsc_codes/HDFC0001330"))
+                .andExpect(header("Authorization", "Bearer tenant-token"))
+                .andExpect(header("x-tenant-id", "tenant-123"))
+                .andRespond(withSuccess("""
+                        {
+                          "ifsc_code": "HDFC0001330",
+                          "bank_name": "HDFC Bank",
+                          "branch_name": "MG Road",
+                          "branch_address": "MG Road Branch",
+                          "city": "Bengaluru",
+                          "district": "Bengaluru Urban",
+                          "state": "Karnataka",
+                          "micr_code": "560240002"
+                        }
+                        """, MediaType.APPLICATION_JSON));
+
+        IfscLookupResult result = fixture.client.fetchIfscDetails("hdfc0001330");
+
+        fixture.server.verify();
+        assertThat(result.ifscCode()).isEqualTo("HDFC0001330");
+        assertThat(result.bankName()).isEqualTo("HDFC Bank");
+        assertThat(result.branchName()).isEqualTo("MG Road");
+    }
+
+    @Test
+    void fetchPincodeDetailsSanitizesCorruptedSandboxCityLabels() {
+        ClientFixture fixture = clientFixture(new StaticBearerTokenService("tenant-token"));
+
+        fixture.server.expect(once(), requestTo("https://finprim.test/api/onb/pincodes/400001"))
+                .andExpect(header("Authorization", "Bearer tenant-token"))
+                .andExpect(header("x-tenant-id", "tenant-123"))
+                .andRespond(withSuccess("""
+                        {
+                          "code": "400001",
+                          "city": "Mumbai%00$##$$@#$T^&*&^%$#",
+                          "district": "Mumbai",
+                          "state_name": "MAHARASHTRA",
+                          "country_ansi_code": "IN",
+                          "cities": ["Mumbai%00$##$$@#$T^&*&^%$#"]
+                        }
+                        """, MediaType.APPLICATION_JSON));
+
+        PincodeLookupResult result = fixture.client.fetchPincodeDetails("400001");
+
+        fixture.server.verify();
+        assertThat(result.city()).isEqualTo("Mumbai");
+        assertThat(result.district()).isEqualTo("Mumbai");
+        assertThat(result.stateName()).isEqualTo("Maharashtra");
+        assertThat(result.cities()).containsExactly("Mumbai");
+    }
+
+    @Test
+    void fetchPincodeDetailsUsesFinprimOnboardingLookup() {
+        ClientFixture fixture = clientFixture(new StaticBearerTokenService("tenant-token"));
+
+        fixture.server.expect(once(), requestTo("https://finprim.test/api/onb/pincodes/560102"))
+                .andExpect(header("Authorization", "Bearer tenant-token"))
+                .andExpect(header("x-tenant-id", "tenant-123"))
+                .andRespond(withSuccess("""
+                        {
+                          "code": "560102",
+                          "city": "Bangalore South",
+                          "district": "Bangalore",
+                          "state_name": "Karnataka",
+                          "country_ansi_code": "IN"
+                        }
+                        """, MediaType.APPLICATION_JSON));
+
+        PincodeLookupResult result = fixture.client.fetchPincodeDetails("560102");
+
+        fixture.server.verify();
+        assertThat(result.code()).isEqualTo("560102");
+        assertThat(result.city()).isEqualTo("Bangalore South");
+        assertThat(result.stateName()).isEqualTo("Karnataka");
+        assertThat(result.cities()).containsExactly("Bangalore South");
+    }
+
+    @Test
+    void confirmPurchaseFlowUsesConsentPaymentAndConfirmEndpoints() {
+        ClientFixture fixture = clientFixture(new StaticBearerTokenService("tenant-token"));
+
+        fixture.server.expect(once(), requestTo("https://finprim.test/v2/mf_purchases"))
+                .andExpect(method(HttpMethod.PATCH))
+                .andRespond(withSuccess("""
+                        {"object":"mf_purchase","id":"mfp_1","state":"pending"}
+                        """, MediaType.APPLICATION_JSON));
+        fixture.server.expect(once(), requestTo("https://finprim.test/api/pg/payments/netbanking"))
+                .andExpect(method(HttpMethod.POST))
+                .andRespond(withSuccess("""
+                        {"id":9,"token_url":"https://payments.fp/token"}
+                        """, MediaType.APPLICATION_JSON));
+        fixture.server.expect(once(), requestTo("https://finprim.test/v2/mf_purchases"))
+                .andExpect(method(HttpMethod.PATCH))
+                .andRespond(withSuccess("""
+                        {"object":"mf_purchase","id":"mfp_1","state":"submitted"}
+                        """, MediaType.APPLICATION_JSON));
+
+        fixture.client.updateMfPurchaseConsent("mfp_1", Map.of("email", "investor@example.com"));
+        JsonNode payment = fixture.client.createNetbankingPayment(
+                List.of(77), "http://localhost/postback", "NETBANKING", 417, "ONDC");
+        JsonNode confirmed = fixture.client.confirmMfPurchase("mfp_1");
+
+        fixture.server.verify();
+        assertThat(payment.path("token_url").asText()).isEqualTo("https://payments.fp/token");
+        assertThat(confirmed.path("state").asText()).isEqualTo("submitted");
+    }
+
+    @Test
+    void pollBankAccountVerificationThrowsRetryableWhenInterruptedWhilePending() {
+        ClientFixture fixture = clientFixture(new StaticBearerTokenService("tenant-token"));
+
+        fixture.server.expect(once(), requestTo("https://finprim.test/v2/bank_account_verifications/bav_1"))
+                .andExpect(method(HttpMethod.GET))
+                .andRespond(withSuccess("{\"id\":\"bav_1\",\"status\":\"pending\"}", MediaType.APPLICATION_JSON));
+
+        // Pre-set the interrupt flag so the first Thread.sleep in the poll loop throws
+        // InterruptedException immediately (no real delay).
+        Thread.currentThread().interrupt();
+        try {
+            assertThatThrownBy(() -> ReflectionTestUtils.invokeMethod(
+                    fixture.client, "pollFpBankAccountVerificationUntilSettled", "bav_1"))
+                    .isInstanceOf(CybrillaUnavailableException.class)
+                    .hasMessageContaining("Interrupted")
+                    .hasMessageContaining("bav_1");
+            assertThat(Thread.currentThread().isInterrupted()).isTrue();
+        } finally {
+            // Clear the interrupt flag so it does not leak into other tests.
+            Thread.interrupted();
+        }
+
+        fixture.server.verify();
     }
 
     private ClientFixture clientFixture(ExternalBearerTokenService tokenService) {

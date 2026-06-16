@@ -7,6 +7,7 @@ import com.platizio.wealthtech.dto.ProductSchemeRequest;
 import com.platizio.wealthtech.integration.CybrillaApiException;
 import com.platizio.wealthtech.integration.CybrillaClient;
 import com.platizio.wealthtech.repository.ProductSchemeRepository;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.persistence.EntityNotFoundException;
 import java.time.Duration;
@@ -21,6 +22,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
@@ -46,21 +48,88 @@ public class ProductService {
     private final ProductSchemeRepository productSchemeRepository;
     private final CybrillaClient cybrillaClient;
     private final Duration catalogueRefreshMinInterval;
+    private final String catalogueSource;
+    private final String catalogueEndpoint;
 
     private volatile Instant lastSuccessfulCatalogueSyncAt;
 
     public ProductService(
             ProductSchemeRepository productSchemeRepository,
             CybrillaClient cybrillaClient,
-            @Value("${cybrilla.integration.catalogue-refresh-min-interval-minutes:25}") int catalogueRefreshMinIntervalMinutes
+            @Value("${cybrilla.integration.catalogue-refresh-min-interval-minutes:25}") int catalogueRefreshMinIntervalMinutes,
+            @Value("${cybrilla.integration.product-catalogue-source:cybrilla}") String catalogueSource,
+            @Value("${cybrilla.integration.product-catalogue-endpoint:poa-mf}") String catalogueEndpoint
     ) {
         this.productSchemeRepository = productSchemeRepository;
         this.cybrillaClient = cybrillaClient;
         this.catalogueRefreshMinInterval = Duration.ofMinutes(Math.max(0, catalogueRefreshMinIntervalMinutes));
+        this.catalogueSource = catalogueSource == null ? "cybrilla" : catalogueSource.trim().toLowerCase();
+        this.catalogueEndpoint = catalogueEndpoint == null ? "poa-mf" : catalogueEndpoint.trim().toLowerCase();
     }
 
     public List<ProductScheme> listSchemes() {
         return productSchemeRepository.findAll();
+    }
+
+    public boolean usesCybrillaCatalogueByDefault() {
+        return !"local".equals(catalogueSource);
+    }
+
+    public String configuredCatalogueEndpoint() {
+        return catalogueEndpoint;
+    }
+
+    /** Raw Finprim catalogue page for the configured endpoint (default POA MF plans). */
+    public JsonNode fetchLiveCataloguePage(int page, int size) {
+        return fetchLiveCataloguePage(catalogueEndpoint, page, size);
+    }
+
+    public JsonNode fetchLiveCataloguePage(String endpoint, int page, int size) {
+        return cybrillaClient.fetchLiveCataloguePage(endpoint, page, size).rawResponse();
+    }
+
+    public Page<ProductScheme> listSchemesPageFromCybrilla(
+            String query,
+            Boolean active,
+            String assetClass,
+            String category,
+            String productType,
+            int page,
+            int size
+    ) {
+        return listSchemesPageFromCybrilla(catalogueEndpoint, query, active, assetClass, category, productType, page, size);
+    }
+
+    public Page<ProductScheme> listSchemesPageFromCybrilla(
+            String endpoint,
+            String query,
+            Boolean active,
+            String assetClass,
+            String category,
+            String productType,
+            int page,
+            int size
+    ) {
+        CybrillaClient.LiveCataloguePage live = cybrillaClient.fetchLiveCataloguePage(endpoint, page, size);
+        List<ProductScheme> filtered = filterLiveSchemes(live.schemes(), query, active, assetClass, category, productType);
+        List<ProductScheme> persisted = upsertLiveSchemes(filtered);
+        return new PageImpl<>(persisted, schemePageRequest(page, size), live.totalElements());
+    }
+
+    public Page<ProductScheme> resolveSchemesPage(
+            boolean local,
+            String query,
+            Boolean active,
+            String assetClass,
+            String category,
+            String productType,
+            int page,
+            int size
+    ) {
+        if (local || "local".equals(catalogueSource)) {
+            return listSchemesPage(query, active, assetClass, category, productType, page, size);
+        }
+        return listSchemesPageFromCybrilla(query, active, assetClass, category, productType, page, size);
     }
 
     public Page<ProductScheme> listSchemesPage(String query, Boolean active, int page, int size) {
@@ -146,14 +215,20 @@ public class ProductService {
             );
         }
 
-        int removed = productSchemeRepository.deleteSchemesByCategoryIn(EXTERNAL_FUND_CATEGORIES);
+        List<ProductScheme> saved = upsertLiveSchemes(latest);
+        List<String> activeCodes = saved.stream()
+                .map(ProductScheme::getExternalSchemeCode)
+                .filter(StringUtils::hasText)
+                .map(String::trim)
+                .distinct()
+                .toList();
+        int deactivated = productSchemeRepository.deactivateActiveSchemesNotIn(activeCodes, EXTERNAL_FUND_CATEGORIES);
         int removedUnsynced = productSchemeRepository.deleteByExternalFetchRequestJsonIsNull();
-        List<ProductScheme> saved = saveSchemesInBatches(latest);
         logger.info(
-                "product_scheme_refresh status='catalogue_replaced' removed_count='{}' removed_unsynced='{}' saved_count='{}'",
-                removed,
-                removedUnsynced,
-                saved.size()
+                "product_scheme_refresh status='catalogue_upserted' upserted_count='{}' deactivated_count='{}' removed_unsynced='{}'",
+                saved.size(),
+                deactivated,
+                removedUnsynced
         );
         lastSuccessfulCatalogueSyncAt = Instant.now();
         return saved;
@@ -193,8 +268,36 @@ public class ProductService {
             int page,
             int size
     ) {
-        return refreshThenListOrCachedFallback(
+        return syncAvailableFundsFromCybrilla(
+                false,
                 forceCatalogueRefresh,
+                query,
+                active,
+                assetClass,
+                category,
+                productType,
+                page,
+                size
+        );
+    }
+
+    @Transactional
+    public Page<ProductScheme> syncAvailableFundsFromCybrilla(
+            boolean explicitSyncRequest,
+            boolean forceCatalogueRefresh,
+            String query,
+            Boolean active,
+            String assetClass,
+            String category,
+            String productType,
+            int page,
+            int size
+    ) {
+        if (usesCybrillaCatalogueByDefault() && !explicitSyncRequest) {
+            return listSchemesPageFromCybrilla(query, active, assetClass, category, productType, page, size);
+        }
+        return refreshThenListOrCachedFallback(
+                forceCatalogueRefresh || explicitSyncRequest,
                 () -> listSchemesPage(query, active, assetClass, category, productType, page, size)
         );
     }
@@ -289,6 +392,44 @@ public class ProductService {
         return saved;
     }
 
+    /**
+     * Upserts a live Cybrilla catalogue page so UI rows and POST /orders receive
+     * stable {@code product_schemes.id} values instead of transient in-memory rows.
+     */
+    private List<ProductScheme> upsertLiveSchemes(List<ProductScheme> liveSchemes) {
+        if (liveSchemes == null || liveSchemes.isEmpty()) {
+            return List.of();
+        }
+        List<ProductScheme> persisted = new ArrayList<>(liveSchemes.size());
+        for (ProductScheme live : liveSchemes) {
+            String externalCode = trimToNull(live.getExternalSchemeCode());
+            if (!StringUtils.hasText(externalCode)) {
+                logger.warn(
+                        "product_scheme_upsert status='skipped' reason='missing_external_scheme_code' scheme_name='{}'",
+                        live.getSchemeName()
+                );
+                continue;
+            }
+            ProductScheme target = productSchemeRepository.findFirstByExternalSchemeCodeIgnoreCase(externalCode)
+                    .orElseGet(ProductScheme::new);
+            mergeLiveSchemeInto(target, live);
+            persisted.add(productSchemeRepository.save(target));
+        }
+        return persisted;
+    }
+
+    private void mergeLiveSchemeInto(ProductScheme target, ProductScheme live) {
+        target.setSchemeName(live.getSchemeName());
+        target.setAmcName(live.getAmcName());
+        target.setCategory(live.getCategory());
+        target.setExternalSchemeCode(live.getExternalSchemeCode());
+        target.setExternalIsin(live.getExternalIsin());
+        target.setProductType(live.getProductType());
+        target.setActive(live.getActive());
+        target.setMetadataJson(live.getMetadataJson());
+        target.setExternalFetchRequestJson(live.getExternalFetchRequestJson());
+    }
+
     private String normalizeLower(String value) {
         String trimmed = trimToNull(value);
         return trimmed == null ? null : trimmed.toLowerCase(java.util.Locale.ROOT);
@@ -347,6 +488,49 @@ public class ProductService {
             uniqueSchemes.put(externalSchemeCode, scheme);
         }
         return List.copyOf(uniqueSchemes.values());
+    }
+
+    private List<ProductScheme> filterLiveSchemes(
+            List<ProductScheme> schemes,
+            String query,
+            Boolean active,
+            String assetClass,
+            String category,
+            String productType
+    ) {
+        String queryPattern = likePattern(query);
+        ProductCategory categoryFilter = parseCategory(category);
+        String assetClassFilter = normalizeAssetClass(assetClass);
+        String productTypeFilter = normalizeLower(productType);
+        return schemes.stream()
+                .filter(scheme -> active == null || active.equals(scheme.getActive()))
+                .filter(scheme -> categoryFilter == null || scheme.getCategory() == categoryFilter)
+                .filter(scheme -> assetClassFilter == null || matchesAssetClass(scheme, assetClassFilter))
+                .filter(scheme -> productTypeFilter == null || productTypeFilter.equals(normalizeLower(scheme.getProductType())))
+                .filter(scheme -> queryPattern == null || matchesQuery(scheme, queryPattern))
+                .toList();
+    }
+
+    private boolean matchesAssetClass(ProductScheme scheme, String assetClassFilter) {
+        if ("MF".equals(assetClassFilter)) {
+            return scheme.getCategory() != ProductCategory.SIF;
+        }
+        if ("SIF".equals(assetClassFilter)) {
+            return scheme.getCategory() == ProductCategory.SIF;
+        }
+        return true;
+    }
+
+    private boolean matchesQuery(ProductScheme scheme, String queryPattern) {
+        String normalizedPattern = queryPattern.toLowerCase(java.util.Locale.ROOT);
+        String haystack = String.join(
+                " ",
+                normalizeLower(scheme.getSchemeName()),
+                normalizeLower(scheme.getAmcName()),
+                normalizeLower(scheme.getExternalSchemeCode()),
+                normalizeLower(scheme.getExternalIsin())
+        );
+        return haystack != null && haystack.contains(normalizedPattern.replace("%", ""));
     }
 
     private PageRequest schemePageRequest(int page, int size) {

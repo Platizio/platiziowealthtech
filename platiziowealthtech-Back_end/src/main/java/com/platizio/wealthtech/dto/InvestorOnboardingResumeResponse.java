@@ -13,6 +13,8 @@ public record InvestorOnboardingResumeResponse(
         boolean canReKyc,
         boolean canAddBankAccount,
         boolean canRefreshBankVerification,
+        boolean documentsComplete,
+        List<String> missingDocumentTypes,
         boolean readyForTransactions,
         String message
 ) {}

@@ -37,10 +37,12 @@ public class SecurityConfig {
     @org.springframework.beans.factory.annotation.Value("${app.cors.allowed-origins}")
     private List<String> allowedOrigins;
 
-    public SecurityConfig(JwtAuthFilter jwtAuthFilter,
-                          LoginRateLimitFilter loginRateLimitFilter,
-                          CustomUserDetailsService userDetailsService,
-                          ObjectMapper objectMapper) {
+    public SecurityConfig(
+            JwtAuthFilter jwtAuthFilter,
+            LoginRateLimitFilter loginRateLimitFilter,
+            CustomUserDetailsService userDetailsService,
+            ObjectMapper objectMapper
+    ) {
         this.jwtAuthFilter = jwtAuthFilter;
         this.loginRateLimitFilter = loginRateLimitFilter;
         this.userDetailsService = userDetailsService;
@@ -55,13 +57,6 @@ public class SecurityConfig {
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers(
                     "/api/v1/auth/**",
-                    // NOTE: /api/v1/debug/external-auth/** is deliberately NOT
-                    // permit-listed. The ExternalAuthDebugController is already
-                    // gated by @ConditionalOnProperty(external-auth.debug.enabled,
-                    // default=false) so the bean only exists when explicitly
-                    // opted in; on top of that, when it IS enabled it must still
-                    // require an authenticated principal (falls through to
-                    // .anyRequest().authenticated() below). Do not re-add it here.
                     "/actuator/health",
                     "/actuator/info",
                     "/v3/api-docs/**",
@@ -82,7 +77,7 @@ public class SecurityConfig {
                     response.setContentType("application/json");
                     response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
                     ApiErrorResponse error = new ApiErrorResponse(
-                            OffsetDateTime.now(), 401, "UNAUTHORIZED", 
+                            OffsetDateTime.now(), 401, "UNAUTHORIZED",
                             authException.getMessage(), request.getRequestURI());
                     response.getWriter().write(objectMapper.writeValueAsString(error));
                 })
@@ -90,7 +85,7 @@ public class SecurityConfig {
                     response.setContentType("application/json");
                     response.setStatus(HttpServletResponse.SC_FORBIDDEN);
                     ApiErrorResponse error = new ApiErrorResponse(
-                            OffsetDateTime.now(), 403, "FORBIDDEN", 
+                            OffsetDateTime.now(), 403, "FORBIDDEN",
                             "Access denied", request.getRequestURI());
                     response.getWriter().write(objectMapper.writeValueAsString(error));
                 })
@@ -100,8 +95,6 @@ public class SecurityConfig {
             )
             .authenticationProvider(authenticationProvider())
             .addFilterBefore(jwtAuthFilter, UsernamePasswordAuthenticationFilter.class)
-            // Rate limiter runs ahead of JwtAuthFilter so an attacker flooding
-            // /api/v1/auth/login is rejected with 429 before any work is done.
             .addFilterBefore(loginRateLimitFilter, JwtAuthFilter.class);
 
         return http.build();
@@ -109,36 +102,27 @@ public class SecurityConfig {
 
     @Bean
     public CorsConfigurationSource corsConfigurationSource() {
-        CorsConfiguration config = new CorsConfiguration();
-        config.setAllowedOrigins(allowedOrigins);
-        config.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"));
-        // B-73: pin allowed request headers to the actual set the app uses.
-        // Previously this was List.of("*"), which the Fetch spec treats as
-        // literal (not a wildcard) when allowCredentials=true — Spring papered
-        // over that by reflecting requested headers back, but the loose
-        // posture violated least-privilege.
-        //   • Content-Type      — apiFetch sends "application/json" on every
-        //                         JSON POST/PUT/PATCH.
-        //   • Authorization     — not used today (auth is via HttpOnly cookies)
-        //                         but standard and forward-compatible.
-        //   • X-Requested-With  — legacy AJAX convention; harmless to permit.
-        //   • X-Forwarded-For   — read by LoginRateLimitFilter (B-46) for
-        //                         per-IP rate limiting when behind a proxy.
-        config.setAllowedHeaders(List.of(
+        CorsConfiguration apiConfig = new CorsConfiguration();
+        apiConfig.setAllowedOrigins(allowedOrigins);
+        apiConfig.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"));
+        apiConfig.setAllowedHeaders(List.of(
                 "Authorization",
                 "Content-Type",
                 "X-Requested-With",
                 "X-Forwarded-For"));
-        // B-73: do NOT expose Set-Cookie. It is on the Fetch spec's forbidden
-        // response-header list — JavaScript can never read it via
-        // response.headers.get('Set-Cookie') regardless of CORS exposure, so
-        // the prior setExposedHeaders(List.of("Set-Cookie")) was zero-effect
-        // misleading config. Auth in this app intentionally uses HttpOnly
-        // cookies so JS *cannot* see them; exposing Set-Cookie suggested the
-        // opposite.
-        config.setAllowCredentials(true);
+        apiConfig.setAllowCredentials(true);
+
+        // FP/Cybrilla payment and mandate pages may POST back to these HTML endpoints cross-origin.
+        CorsConfiguration investorActionConfig = new CorsConfiguration();
+        investorActionConfig.setAllowedOriginPatterns(List.of("*"));
+        investorActionConfig.setAllowedMethods(List.of("GET", "POST", "OPTIONS", "HEAD"));
+        investorActionConfig.setAllowedHeaders(List.of("*"));
+        investorActionConfig.setAllowCredentials(false);
+
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
-        source.registerCorsConfiguration("/**", config);
+        source.registerCorsConfiguration("/investor-actions/**", investorActionConfig);
+        source.registerCorsConfiguration("/investor-action/**", investorActionConfig);
+        source.registerCorsConfiguration("/**", apiConfig);
         return source;
     }
 

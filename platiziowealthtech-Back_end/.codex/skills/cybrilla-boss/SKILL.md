@@ -1,6 +1,6 @@
 ---
 name: cybrilla-boss
-description: End-to-end Cybrilla integration specialist for Platizio backend and frontend. Use when implementing, debugging, reviewing, testing, or documenting POA/Fintech Primitives flows including dual token audiences, 30-minute token lifecycle handling, backend-only provider calls, request/response persistence, onboarding/KYC/bank verification, orders, redirects, webhooks, polling, and production hardening.
+description: End-to-end Cybrilla integration specialist for Platizio. Maps pages to POA/FP APIs, sandbox data, token lifecycle, KYC, orders, payments, mandates. Use when building Cybrilla-backed pages, debugging provider flows, or needing exact API contracts before achilles implements.
 ---
 
 # Cybrilla Boss
@@ -38,6 +38,40 @@ Act as the Cybrilla integration owner for the Platizio application. Translate of
 - Store local and provider identifiers separately. Preserve prefixes such as `pv_`, `invp_`, `bac_`, `kycr_`, and `iddoc_`.
 - Add focused tests for payload mapping, auth headers, `401` retry, pending/completed/failed transitions, webhook reconciliation, sandbox scenarios, and frontend resume states touched by the change.
 
+## Sub-Agents
+
+**Orchestrator:** [achilles](../achilles/SKILL.md) owns full-stack Platizio delivery (Spring Boot + React + PostgreSQL) and delegates Cybrilla API facts to this skill.
+
+Delegate by domain after reading this skill:
+
+| Agent | Skill path | Use when |
+|-------|------------|----------|
+| **Achilles** | [../achilles/SKILL.md](../achilles/SKILL.md) | End-to-end features, cross-stack bugs, shipping under deadline |
+| **Backend expert** | [agents/backend-expert/SKILL.md](agents/backend-expert/SKILL.md) | Java services, Cybrilla client, tokens, schedulers, webhooks, DB, Maven tests |
+| **Frontend expert** | [agents/frontend-expert/SKILL.md](agents/frontend-expert/SKILL.md) | React views, KYC UX, product catalogue UI, `apiFetch`, TypeScript build |
+
+For full-stack bugs (KYC loop, empty products), use **achilles** or run **both** experts: backend fixes provider/sync logic; frontend fixes duplicate calls, API URL, and refresh params.
+
+## Page Build Support (fast path)
+
+When building or fixing a **React page**, read [references/page-cybrilla-map.md](references/page-cybrilla-map.md) first.
+
+Deliver in order:
+
+1. Page route + view file from `App.tsx`
+2. Platizio backend endpoints (existing or gap)
+3. Cybrilla/FP API per step (surface, method, path, audience, key fields)
+4. Async UI states the page must show
+5. Sandbox test row from [sandbox-testing.md](references/sandbox-testing.md)
+6. Open items from [pending-work.md](references/pending-work.md)
+7. Implementation handoff for **achilles**
+
+Pair invoke:
+
+```text
+@.codex/skills/cybrilla-boss/SKILL.md @.cursor/agents/achilles.md build [PAGE]
+```
+
 ## Workflow Guide
 
 For investor onboarding, KYC, bank verification, orders, and sandbox cases, read:
@@ -45,11 +79,14 @@ For investor onboarding, KYC, bank verification, orders, and sandbox cases, read
 - [references/onboarding-and-orders.md](references/onboarding-and-orders.md)
 - [references/pre-verifications.md](references/pre-verifications.md)
 - [references/sandbox-testing.md](references/sandbox-testing.md)
+- [references/pending-work.md](references/pending-work.md) — live gap list for demo/production
+- [references/fp-profile-patch-rules.md](references/fp-profile-patch-rules.md) — **occupation / immutable PATCH** (orders + redemptions)
 
 For application-specific entry points, read:
 
 - [references/platizio-backend-map.md](references/platizio-backend-map.md)
 - [references/platizio-frontend-map.md](references/platizio-frontend-map.md)
+- [references/page-cybrilla-map.md](references/page-cybrilla-map.md)
 - [references/docs-index.md](references/docs-index.md)
 
 ## Review Checklist

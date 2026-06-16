@@ -10,6 +10,7 @@ import com.platizio.wealthtech.repository.InvestorDocumentRepository;
 import com.platizio.wealthtech.repository.InvestorRepository;
 import jakarta.persistence.EntityNotFoundException;
 import java.io.IOException;
+import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 import java.util.UUID;
@@ -42,6 +43,16 @@ public class InvestorDocumentService {
         this.investorDocumentRepository = investorDocumentRepository;
         this.distributorService = distributorService;
         this.auditService = auditService;
+    }
+
+    @Transactional(readOnly = true)
+    public List<UploadedInvestorDocumentResponse> listDocuments(UUID investorId, UUID actorId) {
+        Investor investor = investorRepository.findById(investorId)
+                .orElseThrow(() -> new EntityNotFoundException("Investor not found"));
+        assertCanModifyInvestor(investor, actorId);
+        return investorDocumentRepository.findAllByInvestorIdOrderByDocumentTypeAsc(investorId).stream()
+                .map(UploadedInvestorDocumentResponse::from)
+                .toList();
     }
 
     @Transactional

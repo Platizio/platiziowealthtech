@@ -23,7 +23,7 @@ class InvestorControllerListTest {
         InvestorController controller = new InvestorController(investorService, null, null);
         UUID actorId = UUID.randomUUID();
 
-        controller.listAll(null, 0, 20, auth(actorId));
+        controller.listAll(null, false, false, 0, 20, auth(actorId));
 
         assertThat(investorService.requesterId).isEqualTo(actorId);
         assertThat(investorService.distributorId).isNull();
@@ -37,7 +37,7 @@ class InvestorControllerListTest {
         InvestorController controller = new InvestorController(investorService, null, null);
         UUID actorId = UUID.randomUUID();
 
-        controller.search("jane", null, 10, auth(actorId));
+        controller.search("jane", null, false, false, 10, auth(actorId));
 
         assertThat(investorService.requesterId).isEqualTo(actorId);
         assertThat(investorService.query).isEqualTo("jane");

@@ -30,6 +30,12 @@ final class InvestorKycStateReset {
         investor.setPanVerificationReason(null);
         investor.setPanAadhaarLinkStatus(null);
         investor.setPanAadhaarLinkReason(null);
+        investor.setExternalIdentityDocumentId(null);
+        investor.setAadhaarFetchStatus(null);
+        investor.setAadhaarFetchReason(null);
+        investor.setExternalEsignId(null);
+        investor.setEsignStatus(null);
+        investor.setAadhaarProofsAttached(Boolean.FALSE);
         investor.setExternalKycComplianceId(null);
         investor.setKycComplianceStatus(null);
         investor.setKycComplianceReason(null);
