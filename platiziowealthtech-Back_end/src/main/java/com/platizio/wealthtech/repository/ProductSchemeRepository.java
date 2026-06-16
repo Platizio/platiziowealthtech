@@ -96,6 +96,26 @@ public interface ProductSchemeRepository extends JpaRepository<ProductScheme, UU
     @Query("DELETE FROM ProductScheme p WHERE p.externalFetchRequestJson IS NULL")
     int deleteByExternalFetchRequestJsonIsNull();
 
+    /**
+     * Deletes only stale Cybrilla POA purchase-catalogue rows. Manual/local
+     * rows and the general OMS master catalogue are intentionally left as DB
+     * fallback/reference data.
+     */
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Query("""
+            DELETE FROM ProductScheme p
+             WHERE p.category IN :categories
+               AND p.externalFetchRequestJson IS NOT NULL
+               AND (LOWER(p.externalFetchRequestJson) LIKE '%/v2/mf_scheme_plans/%'
+                    OR LOWER(p.externalFetchRequestJson) LIKE '%/v2/sif_scheme_plans/%')
+               AND LENGTH(TRIM(p.externalSchemeCode)) > 0
+               AND p.externalSchemeCode NOT IN :codes
+            """)
+    int deleteStalePurchaseSchemesNotIn(
+            @Param("codes") Collection<String> codes,
+            @Param("categories") Collection<ProductCategory> categories
+    );
+
     long countByExternalFetchRequestJsonIsNotNull();
 
     Optional<ProductScheme> findFirstByExternalSchemeCodeIgnoreCase(String externalSchemeCode);

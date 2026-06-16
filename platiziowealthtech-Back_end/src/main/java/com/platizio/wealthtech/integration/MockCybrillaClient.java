@@ -640,10 +640,31 @@ public class MockCybrillaClient implements CybrillaClient {
     }
 
     @Override
+    public JsonNode createUpiUriPayment(
+            List<Integer> amcOrderIds,
+            String paymentPostbackUrl,
+            Integer bankAccountOldId,
+            String providerName
+    ) {
+        ObjectNode response = OBJECT_MAPPER.createObjectNode();
+        response.put("id", 2001);
+        response.putNull("token_url");
+        ObjectNode upi = response.putObject("upi");
+        upi.put("type", "uri");
+        upi.putNull("vpa");
+        upi.put("uri", "upi://pay?pa=platizio@upi&pn=Platizio&am=5000.00&cu=INR");
+        return response;
+    }
+
+    @Override
     public JsonNode fetchPayment(int paymentId) {
         ObjectNode response = OBJECT_MAPPER.createObjectNode();
         response.put("id", paymentId);
         response.put("token_url", "sandbox://platizio/simulate-payment");
+        ObjectNode upi = response.putObject("upi");
+        upi.put("type", "uri");
+        upi.putNull("vpa");
+        upi.put("uri", "upi://pay?pa=platizio@upi&pn=Platizio&am=5000.00&cu=INR");
         response.put("status", "PENDING");
         return response;
     }

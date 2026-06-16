@@ -86,3 +86,27 @@
 - `[—]` Frontend: BUG-004/016/017/018/019 (+ docs FE bugs) — no React app in this repo
 - `[—]` External/Ops: BUG-044 postback tunnel; BUG-029 tenant config (Cybrilla side)
 - Backlog (from `docs/bugs.md`, not re-verified post-WIP): BUG-039/040/041/042/043/045/046
+
+---
+
+## Feature batch (post-bugfix, per user) — payments / SIP / redemption (doc-driven)
+
+> Decisions locked by user: in-place SIP edit if FP allows; analyse docs + diagnose payment then make success honest; every (real POA) holding redeemable; follow FP docs. See `history.md` for the doc analysis + payment-failure diagnosis.
+
+- `[✓]` **SIP in-place edit** — `PATCH /v2/mf_purchase_plans` (amount + installment_day). Backend `OrderService.updateSipPlan` + `PATCH /orders/{id}/sip` + `SipUpdateRequest`; FE `SipDashboard` Edit modal. Verified backend 283/0/0 + FE vite build.
+- `[ ]` **Payment honesty + retry** — gate `DemoOrderAdvancer` (BUG-030) so PAYMENT_PENDING no longer auto-advances to SUCCESSFUL; make sandbox "Simulate Payment" the demo driver; add FP-documented **payment-retry** (new payment attempt on failure, no re-confirm). Diagnosis: real payment isn't code-broken — only postback/finalization (localhost postback unreachable) + the timer mask; hard-fails are upstream Cybrilla tenant config (BUG-029).
+- `[ ]` **Redemption** — complete FP lifecycle (consent OTP → confirm → poll), surface it (sidebar/per-holding), and produce a real redeemable holding (demo placeholder `fp_purchase_demo_001` is not a real POA folio → not redeemable). FP redemption is folio-level, gated by `redeemable_units>0`, POA-folios only.
+- `[ ]` **Integration gaps** — portfolio holdings refresh after SUCCESSFUL, sync-from-cybrilla prominence, mandate webhook reconcile (BUG-047).
+
+---
+
+## 2026-06-16 — "Unknown Fund" + redemption/edit (product · order · portfolio · redemption · edit)
+
+> Scope: product/order/portfolio/redemption/edit only. Cybrilla-first + DB-fallback + fresh local copy already existed in `ProductService` and was left intact. Build: `mvnw test` → **288/0/0 GREEN**; frontend `tsc --noEmit` → **exit 0**.
+
+- `[✓]` **Unknown Fund (root cause = FE).** Backend already snapshots the fund onto every order (`OrderService.applyProductSchemeSnapshot`) and the order JSON carries `productSchemeName`; the portfolio (`DashboardService` + `ProductSchemeOrderSupport.displayName`) already falls back to it. `Transactions.tsx`/`InvestorRedeem.tsx` ignored the snapshot and used an `id→scheme` map from `/products/schemes?...size=1000|200`, which `ProductService.schemePageRequest` caps to 100 rows → orders past the first 100 schemes alphabetically missed → "Unknown fund" + false "Payment Failed". **Fix:** FE now prefers `productSchemeName`; BE adds a read-time `ensureSchemeSnapshot` self-heal (findById by PK, no cap/active filter) for legacy orders. Files: `views/Transactions.tsx`, `views/InvestorRedeem.tsx`, `service/OrderService.java`.
+- `[✓]` **Logging.** `product_scheme_fetch status='cybrilla_live'` (ProductService live fetch+upsert), existing `fallback_to_cache` (DB fallback), `order_scheme_backfill` (read-time resolve), `redemption_create` start/completed/rejected.
+- `[✓]` **Redemption surfaced.** New `views/Redemptions.tsx` (distributor-wide list, snapshot names), sidebar entry in `layout/AppLayout.tsx`, route in `App.tsx`. Backend `createRedemption` (POST `/v2/mf_redemptions`) unchanged + logged.
+- `[✓]` **SIP edit surfaced in Transactions** (`PATCH /orders/{id}/sip`) in addition to the existing SIP Dashboard editor.
+- `[✓]` **ProductServiceTest** aligned to the working-tree `refreshFromCybrilla` (`deleteStalePurchaseSchemesNotIn`, B-68/B-69) — this test was already red in the tree pre-session; test-only change.
+- `[—]` **Auth token generation/caching** — review delivered as recommendations only; no token code changed (per user).

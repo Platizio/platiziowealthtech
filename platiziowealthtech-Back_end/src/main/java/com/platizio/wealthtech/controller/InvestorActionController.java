@@ -446,6 +446,12 @@ public class InvestorActionController {
                     """;
         }
         if (page.orderStatus() == OrderStatus.PAYMENT_PENDING) {
+            if (isUpiPaymentUrl(page.paymentRedirectUrl())) {
+                return """
+                        <p class="action-hint">Step 2 of 3: Open your UPI app and complete the payment \
+                        (or use sandbox simulate below).</p>
+                        """;
+            }
             return """
                     <p class="action-hint">Step 2 of 3: Complete payment on the secure Fintech Primitives page \
                     (or use sandbox simulate below).</p>
@@ -474,8 +480,11 @@ public class InvestorActionController {
         }
         if (page.paymentRedirectUrl() != null && !page.paymentRedirectUrl().isBlank()) {
             actions.append("""
-                    <a class="pay-link" href="%s">Continue to Secure Payment</a>
-                    """.formatted(escape(page.paymentRedirectUrl())));
+                    <a class="pay-link" href="%s">%s</a>
+                    """.formatted(
+                    escape(page.paymentRedirectUrl()),
+                    isUpiPaymentUrl(page.paymentRedirectUrl()) ? "Open UPI App" : "Continue to Secure Payment"
+            ));
         }
         if (page.sandboxMandateSimulationAllowed()) {
             actions.append("""
@@ -538,6 +547,10 @@ public class InvestorActionController {
             return "-";
         }
         return value.replace('_', ' ');
+    }
+
+    private boolean isUpiPaymentUrl(String value) {
+        return value != null && value.toLowerCase(Locale.ROOT).startsWith("upi://");
     }
 
     private String escape(String value) {

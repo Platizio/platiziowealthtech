@@ -62,7 +62,7 @@ class BlockedTokenPurgeSchedulerTest {
         private int purgeCalls;
 
         RecordingAuthService() {
-            super(null, null, null, null, null, null, null);
+            super(null, null, null, null, null, null, null, null);
         }
 
         @Override

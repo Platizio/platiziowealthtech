@@ -8,6 +8,7 @@ import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
 import jakarta.persistence.Table;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.UUID;
 
 @Entity
@@ -35,6 +36,16 @@ public class Distributor extends BaseEntity {
 
     @Column(unique = true)
     private String eUinNumber;
+
+    // Know-Your-Distributor (ARN/KYD) validation outcome, captured at signup from the
+    // configured ARN-validation provider. Distinct from the account approval `status`.
+    @Enumerated(EnumType.STRING)
+    private ArnValidationStatus arnValidationStatus;
+    private LocalDateTime arnValidatedAt;
+    private String arnHolderName;
+    private String firmName;
+    private String kydStatus;
+    private String arnValidationSource;
 
     private UUID masterDistributorId;
 
@@ -75,6 +86,18 @@ public class Distributor extends BaseEntity {
     public void setNismExpiryDate(LocalDate nismExpiryDate) { this.nismExpiryDate = nismExpiryDate; }
     public String geteUinNumber() { return eUinNumber; }
     public void seteUinNumber(String eUinNumber) { this.eUinNumber = eUinNumber; }
+    public ArnValidationStatus getArnValidationStatus() { return arnValidationStatus; }
+    public void setArnValidationStatus(ArnValidationStatus arnValidationStatus) { this.arnValidationStatus = arnValidationStatus; }
+    public LocalDateTime getArnValidatedAt() { return arnValidatedAt; }
+    public void setArnValidatedAt(LocalDateTime arnValidatedAt) { this.arnValidatedAt = arnValidatedAt; }
+    public String getArnHolderName() { return arnHolderName; }
+    public void setArnHolderName(String arnHolderName) { this.arnHolderName = arnHolderName; }
+    public String getFirmName() { return firmName; }
+    public void setFirmName(String firmName) { this.firmName = firmName; }
+    public String getKydStatus() { return kydStatus; }
+    public void setKydStatus(String kydStatus) { this.kydStatus = kydStatus; }
+    public String getArnValidationSource() { return arnValidationSource; }
+    public void setArnValidationSource(String arnValidationSource) { this.arnValidationSource = arnValidationSource; }
     public UUID getMasterDistributorId() { return masterDistributorId; }
     public void setMasterDistributorId(UUID masterDistributorId) { this.masterDistributorId = masterDistributorId; }
     public DistributorRole getRole() { return role; }

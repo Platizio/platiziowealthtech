@@ -535,9 +535,8 @@ class RealCybrillaClientTest {
                           "amount": 1500.50,
                           "systematic": true,
                           "frequency": "monthly",
-                          "start_date": "2026-07-01",
+                          "installment_day": 1,
                           "number_of_installments": 12,
-                          "auto_generate_installments": true,
                           "user_ip": "127.0.0.1",
                           "gateway": "ondc"
                         }
@@ -872,6 +871,34 @@ class RealCybrillaClientTest {
         fixture.server.verify();
         assertThat(payment.path("token_url").asText()).isEqualTo("https://payments.fp/token");
         assertThat(confirmed.path("state").asText()).isEqualTo("submitted");
+    }
+
+    @Test
+    void createUpiUriPaymentSendsCustomCheckoutPayload() {
+        ClientFixture fixture = clientFixture(new StaticBearerTokenService("tenant-token"));
+
+        fixture.server.expect(once(), requestTo("https://finprim.test/api/pg/payments/netbanking"))
+                .andExpect(method(HttpMethod.POST))
+                .andExpect(content().json("""
+                        {
+                          "amc_order_ids": [77],
+                          "payment_postback_url": "http://localhost/postback",
+                          "method": "UPI",
+                          "bank_account_id": 417,
+                          "upi": {"type": "uri"},
+                          "provider_name": "ONDC"
+                        }
+                        """))
+                .andRespond(withSuccess("""
+                        {"id":9,"token_url":null,"upi":{"type":"uri","uri":null}}
+                        """, MediaType.APPLICATION_JSON));
+
+        JsonNode payment = fixture.client.createUpiUriPayment(
+                List.of(77), "http://localhost/postback", 417, "ONDC");
+
+        fixture.server.verify();
+        assertThat(payment.path("id").asInt()).isEqualTo(9);
+        assertThat(payment.path("upi").path("type").asText()).isEqualTo("uri");
     }
 
     @Test

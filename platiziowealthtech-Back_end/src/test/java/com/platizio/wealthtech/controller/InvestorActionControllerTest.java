@@ -34,6 +34,51 @@ class InvestorActionControllerTest {
     }
 
     @Test
+    void showActionPageRendersUpiPaymentAction() {
+        InvestorActionController controller = new InvestorActionController(
+                new FixedInvestorActionService() {
+                    @Override
+                    public InvestorActionPage getPage(String token) {
+                        return new InvestorActionPage(
+                                token,
+                                UUID.randomUUID(),
+                                "external-order",
+                                "Riya Shah",
+                                "riya@example.com",
+                                "Focused Equity Fund",
+                                "Platizio AMC",
+                                new BigDecimal("25000.00"),
+                                null,
+                                "LUMPSUM_PURCHASE",
+                                OrderStatus.PAYMENT_PENDING,
+                                "UPI",
+                                null,
+                                null,
+                                null,
+                                null,
+                                null,
+                                null,
+                                false,
+                                "UPI payment is ready. Open your UPI app to complete your purchase.",
+                                "upi://pay?pa=billdesk@hdfcbank&am=25000.00&cu=INR",
+                                true,
+                                false,
+                                "{\"page\":\"investor-action\"}"
+                        );
+                    }
+                },
+                FRONTEND_ORIGIN);
+
+        ResponseEntity<String> response = controller.showActionPage("action-token");
+
+        assertThat(response.getStatusCode().is2xxSuccessful()).isTrue();
+        assertThat(response.getBody())
+                .contains("Open UPI App")
+                .contains("upi://pay?pa=billdesk@hdfcbank&amp;am=25000.00&amp;cu=INR")
+                .contains("Simulate Payment Success");
+    }
+
+    @Test
     void confirmPurchaseReturns503WhenProviderUnavailable() {
         InvestorActionController controller = new InvestorActionController(
                 new FixedInvestorActionService() {

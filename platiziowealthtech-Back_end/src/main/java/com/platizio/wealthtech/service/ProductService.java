@@ -36,13 +36,11 @@ public class ProductService {
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
     private static final int SCHEME_SAVE_BATCH_SIZE = 250;
     private static final int MAX_SCHEME_PAGE_SIZE = 100;
-    /** Categories replaced when importing the Finprim fund catalogue (includes Flyway seed rows). */
-    private static final List<ProductCategory> EXTERNAL_FUND_CATEGORIES = List.of(
+    /** Categories owned by the Cybrilla POA purchase catalogue refresh. */
+    private static final List<ProductCategory> PURCHASE_SCHEME_CATEGORIES = List.of(
             ProductCategory.MF,
             ProductCategory.MUTUAL_FUND,
-            ProductCategory.SIF,
-            ProductCategory.OTHER,
-            ProductCategory.EQUITY
+            ProductCategory.SIF
     );
 
     private final ProductSchemeRepository productSchemeRepository;
@@ -113,6 +111,11 @@ public class ProductService {
         CybrillaClient.LiveCataloguePage live = cybrillaClient.fetchLiveCataloguePage(endpoint, page, size);
         List<ProductScheme> filtered = filterLiveSchemes(live.schemes(), query, active, assetClass, category, productType);
         List<ProductScheme> persisted = upsertLiveSchemes(filtered);
+        logger.info(
+                "product_scheme_fetch status='cybrilla_live' endpoint='{}' page='{}' size='{}' live_count='{}' "
+                        + "persisted_count='{}' total_elements='{}'",
+                endpoint, page, size, live.schemes() == null ? 0 : live.schemes().size(),
+                persisted.size(), live.totalElements());
         return new PageImpl<>(persisted, schemePageRequest(page, size), live.totalElements());
     }
 
@@ -129,7 +132,15 @@ public class ProductService {
         if (local || "local".equals(catalogueSource)) {
             return listSchemesPage(query, active, assetClass, category, productType, page, size);
         }
-        return listSchemesPageFromCybrilla(query, active, assetClass, category, productType, page, size);
+        return liveSchemesPageOrCachedFallback(
+                query,
+                active,
+                assetClass,
+                category,
+                productType,
+                page,
+                size
+        );
     }
 
     public Page<ProductScheme> listSchemesPage(String query, Boolean active, int page, int size) {
@@ -208,7 +219,7 @@ public class ProductService {
             );
         }
 
-        // Full replace of Cybrilla-sourced MF + SIF catalogue rows (removes seed/dummy schemes).
+        // Full replace of the Cybrilla POA purchase catalogue slice.
         if (latest.isEmpty()) {
             throw new CybrillaApiException(
                     "Cybrilla returned no fund schemes; refusing to wipe the local catalogue with an empty import"
@@ -222,13 +233,14 @@ public class ProductService {
                 .map(String::trim)
                 .distinct()
                 .toList();
-        int deactivated = productSchemeRepository.deactivateActiveSchemesNotIn(activeCodes, EXTERNAL_FUND_CATEGORIES);
-        int removedUnsynced = productSchemeRepository.deleteByExternalFetchRequestJsonIsNull();
+        int removedStalePurchaseSchemes = productSchemeRepository.deleteStalePurchaseSchemesNotIn(
+                activeCodes,
+                PURCHASE_SCHEME_CATEGORIES
+        );
         logger.info(
-                "product_scheme_refresh status='catalogue_upserted' upserted_count='{}' deactivated_count='{}' removed_unsynced='{}'",
+                "product_scheme_refresh status='catalogue_replaced' upserted_count='{}' removed_stale_purchase_schemes='{}'",
                 saved.size(),
-                deactivated,
-                removedUnsynced
+                removedStalePurchaseSchemes
         );
         lastSuccessfulCatalogueSyncAt = Instant.now();
         return saved;
@@ -294,7 +306,7 @@ public class ProductService {
             int size
     ) {
         if (usesCybrillaCatalogueByDefault() && !explicitSyncRequest) {
-            return listSchemesPageFromCybrilla(query, active, assetClass, category, productType, page, size);
+            return liveSchemesPageOrCachedFallback(query, active, assetClass, category, productType, page, size);
         }
         return refreshThenListOrCachedFallback(
                 forceCatalogueRefresh || explicitSyncRequest,
@@ -381,6 +393,31 @@ public class ProductService {
             throw ex;
         }
         return localPageSupplier.get();
+    }
+
+    private Page<ProductScheme> liveSchemesPageOrCachedFallback(
+            String query,
+            Boolean active,
+            String assetClass,
+            String category,
+            String productType,
+            int page,
+            int size
+    ) {
+        try {
+            return listSchemesPageFromCybrilla(query, active, assetClass, category, productType, page, size);
+        } catch (CybrillaApiException ex) {
+            Page<ProductScheme> cachedPage = listSchemesPage(query, active, assetClass, category, productType, page, size);
+            if (cachedPage.hasContent() || productSchemeRepository.count() > 0) {
+                logger.warn(
+                        "product_scheme_live_page status='fallback_to_cache' reason='{}' cached_page_count='{}'",
+                        ex.getMessage(),
+                        cachedPage.getNumberOfElements()
+                );
+                return cachedPage;
+            }
+            throw ex;
+        }
     }
 
     private List<ProductScheme> saveSchemesInBatches(List<ProductScheme> schemes) {

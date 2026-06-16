@@ -74,7 +74,7 @@ public class OrderService {
     }
 
     public List<TransactionOrder> listOrdersByInvestor(UUID investorId) {
-        return transactionOrderRepository.findByInvestorId(investorId);
+        return ensureSchemeSnapshot(transactionOrderRepository.findByInvestorId(investorId));
     }
 
     /**
@@ -87,7 +87,7 @@ public class OrderService {
         }
         Investor investor = investorService.getInvestor(investorId);
         assertOrderOwnership(investor.getDistributorId(), principal);
-        return transactionOrderRepository.findByInvestorId(investorId);
+        return ensureSchemeSnapshot(transactionOrderRepository.findByInvestorId(investorId));
     }
 
     @Transactional(readOnly = true)
@@ -126,7 +126,9 @@ public class OrderService {
             spec = spec.and((root, query, cb) -> cb.lessThanOrEqualTo(root.get("createdAt"), to));
         }
 
-        return transactionOrderRepository.findAll(spec, pageRequest);
+        Page<TransactionOrder> result = transactionOrderRepository.findAll(spec, pageRequest);
+        result.getContent().forEach(this::ensureSchemeSnapshot);
+        return result;
     }
 
     @Transactional(readOnly = true)
@@ -134,7 +136,7 @@ public class OrderService {
         logger.info("Fetching orders for distributor {}", distributorId);
         List<TransactionOrder> orders = transactionOrderRepository.findByDistributorId(distributorId);
         logger.info("Found {} orders for distributor {}", orders.size(), distributorId);
-        return orders;
+        return ensureSchemeSnapshot(orders);
     }
 
     /**
@@ -150,7 +152,7 @@ public class OrderService {
     public TransactionOrder getOrder(UUID orderId) {
         TransactionOrder order = transactionOrderRepository.findById(orderId)
                 .orElseThrow(() -> new EntityNotFoundException("Order not found"));
-        return syncLumpsumOrderFromProvider(order);
+        return ensureSchemeSnapshot(syncLumpsumOrderFromProvider(order));
     }
 
     /**
@@ -161,7 +163,7 @@ public class OrderService {
         TransactionOrder order = transactionOrderRepository.findById(orderId)
                 .orElseThrow(() -> new EntityNotFoundException("Order not found"));
         assertOrderOwnership(order.getDistributorId(), principal);
-        return syncLumpsumOrderFromProvider(order);
+        return ensureSchemeSnapshot(syncLumpsumOrderFromProvider(order));
     }
 
     @Transactional
@@ -360,6 +362,7 @@ public class OrderService {
         order.setUnits(request.units());
         order.setPaymentMode(request.paymentMode());
         order.setMandateMode(request.mandateMode());
+        applyProductSchemeSnapshot(order, productScheme);
         order.setSipFrequency(normalizeSipFrequency(request.sipFrequency()));
         order.setSipStartDate(request.sipStartDate());
         order.setSipInstalments(request.sipInstalments());
@@ -631,7 +634,12 @@ public class OrderService {
     public RedemptionRecord createRedemption(UUID orderId, UUID actorId) {
         TransactionOrder order = transactionOrderRepository.findById(orderId)
                 .orElseThrow(() -> new EntityNotFoundException("Order not found"));
+        logger.info(
+                "redemption_create status='started' order_id='{}' order_status='{}' transaction_type='{}' external_order_id='{}'",
+                orderId, order.getOrderStatus(), order.getTransactionType(), order.getExternalOrderId());
         if (!StringUtils.hasText(order.getExternalOrderId())) {
+            logger.warn(
+                    "redemption_create status='rejected' order_id='{}' reason='missing_external_order_id'", orderId);
             throw new IllegalStateException(
                     "This holding has no Fintech Primitives purchase id. Redemption requires a purchase that was "
                             + "submitted through Cybrilla POA (not demo-only local rows).");
@@ -648,6 +656,9 @@ public class OrderService {
         record.setExternalRedemptionId(cybrillaClient.createRedemption(order, investor, productScheme));
 
         RedemptionRecord saved = redemptionRecordRepository.save(record);
+        logger.info(
+                "redemption_create status='completed' order_id='{}' redemption_id='{}' external_redemption_id='{}'",
+                orderId, saved.getId(), saved.getExternalRedemptionId());
         auditService.log("REDEMPTION", saved.getId(), "REDEMPTION_CREATED", actorId, "{}");
         notificationService.createForDistributor(order.getDistributorId(), order.getInvestorId(), NotificationType.REDEMPTION_SUBMITTED, "Redemption submitted", "Redemption flow has started.");
         return saved;
@@ -787,6 +798,81 @@ public class OrderService {
     }
 
     /**
+     * Edits an established SIP via FP "Update a Purchase Plan" ({@code PATCH /v2/mf_purchase_plans}):
+     * changes the {@code amount} and/or {@code installment_day} for the remaining installments. Mirrors the
+     * cancel guards (ownership, SIP-only, live {@code mfpp_} plan id required). FP applies its own
+     * "at least 2 days before the next installment" rule and will reject otherwise (surfaced as 502).
+     */
+    @Transactional
+    public TransactionOrder updateSipPlan(UUID orderId, com.platizio.wealthtech.dto.SipUpdateRequest request, UUID actorId) {
+        TransactionOrder order = transactionOrderRepository.findById(orderId)
+                .orElseThrow(() -> new EntityNotFoundException("Order not found"));
+        if (!actorId.equals(order.getDistributorId())) {
+            throw new AccessDeniedException("Cannot edit SIP for another distributor");
+        }
+        if (order.getTransactionType() != TransactionType.SIP) {
+            throw new IllegalArgumentException("Only SIP orders can be edited through this endpoint");
+        }
+        if (request == null || (request.amount() == null && request.installmentDay() == null)) {
+            throw new IllegalArgumentException("Provide a new amount and/or installment day to edit the SIP");
+        }
+        if (request.amount() != null && request.amount().signum() <= 0) {
+            throw new IllegalArgumentException("SIP amount must be greater than 0");
+        }
+        if (request.installmentDay() != null && (request.installmentDay() < 1 || request.installmentDay() > 28)) {
+            throw new IllegalArgumentException("SIP installment day must be between 1 and 28");
+        }
+        if (!CANCELLABLE_SIP_STATUSES.contains(order.getOrderStatus())) {
+            throw new IllegalStateException(
+                    "SIP cannot be edited in status " + order.getOrderStatus()
+                            + ". Only active or in-progress SIPs can be edited.");
+        }
+        if (!StringUtils.hasText(order.getExternalOrderId()) || isLocalOnlyPurchasePlanId(order.getExternalOrderId())) {
+            throw new IllegalStateException(
+                    "This SIP has no Fintech Primitives purchase plan id yet and cannot be edited. "
+                            + "Wait until the plan is established with the provider.");
+        }
+
+        java.util.Map<String, Object> payload = new java.util.LinkedHashMap<>();
+        if (request.amount() != null) {
+            payload.put("amount", request.amount());
+        }
+        if (request.installmentDay() != null) {
+            payload.put("installment_day", request.installmentDay());
+        }
+
+        JsonNode providerResponse = cybrillaClient.updateMfPurchasePlan(order.getExternalOrderId(), payload);
+        String providerState = providerResponse == null ? null : providerResponse.path("state").asText(null);
+
+        if (request.amount() != null) {
+            order.setAmount(request.amount());
+        }
+        if (request.installmentDay() != null && order.getSipStartDate() != null) {
+            order.setSipStartDate(order.getSipStartDate().withDayOfMonth(request.installmentDay()));
+        }
+        TransactionOrder saved = transactionOrderRepository.save(order);
+        auditService.log(
+                "ORDER",
+                order.getId(),
+                "SIP_UPDATED",
+                actorId,
+                "{\"externalOrderId\":\"" + order.getExternalOrderId() + "\""
+                        + ",\"amount\":\"" + (request.amount() == null ? "" : request.amount()) + "\""
+                        + ",\"installmentDay\":\"" + (request.installmentDay() == null ? "" : request.installmentDay()) + "\""
+                        + ",\"providerState\":\"" + (providerState == null ? "" : providerState) + "\""
+                        + ",\"provider\":\"PATCH /v2/mf_purchase_plans\"}"
+        );
+        notificationService.createForDistributor(
+                order.getDistributorId(),
+                order.getInvestorId(),
+                NotificationType.RECURRING_PLAN_EVENT,
+                "SIP updated",
+                "SIP purchase plan updated with Fintech Primitives."
+        );
+        return saved;
+    }
+
+    /**
      * Demo seeders and early local-only SIP rows use stub ids (e.g. {@code fp_sip_demo_001}) that are not
      * real FP {@code mfpp_} purchase plans. Skip live cancel calls for those to avoid 502s in dev.
      */
@@ -867,13 +953,82 @@ public class OrderService {
     }
 
     private java.util.Optional<ProductScheme> resolveProductSchemeByExternalReference(OrderCreateRequest request) {
+        if (org.springframework.util.StringUtils.hasText(request.externalIsin())) {
+            java.util.Optional<ProductScheme> byIsin =
+                    productSchemeRepository.findFirstByExternalIsinIgnoreCase(request.externalIsin().trim());
+            if (byIsin.isPresent()) {
+                return byIsin;
+            }
+        }
         if (org.springframework.util.StringUtils.hasText(request.externalSchemeCode())) {
             return productSchemeRepository.findFirstByExternalSchemeCodeIgnoreCase(request.externalSchemeCode().trim());
         }
-        if (org.springframework.util.StringUtils.hasText(request.externalIsin())) {
-            return productSchemeRepository.findFirstByExternalIsinIgnoreCase(request.externalIsin().trim());
-        }
         return java.util.Optional.empty();
+    }
+
+    private void applyProductSchemeSnapshot(TransactionOrder order, ProductScheme productScheme) {
+        if (order == null || productScheme == null) {
+            return;
+        }
+        order.setProductSchemeName(trimToNull(productScheme.getSchemeName()));
+        order.setProductSchemeExternalCode(trimToNull(productScheme.getExternalSchemeCode()));
+        order.setProductSchemeIsin(trimToNull(productScheme.getExternalIsin()));
+        order.setProductSchemeAmcName(trimToNull(productScheme.getAmcName()));
+        order.setProductCategory(productScheme.getCategory());
+    }
+
+    /**
+     * Read-time safety net for the "Unknown Fund" class of bug. Order creation already snapshots the
+     * scheme name/ISIN/AMC onto the order ({@link #applyProductSchemeSnapshot}), but legacy/demo orders
+     * created before that column existed (or whose snapshot was never written) would otherwise render
+     * as "Unknown fund" in the UI. This resolves the scheme by its primary key — {@code findById}, so no
+     * paging cap and no {@code active} filter is applied, meaning a deactivated-but-present scheme still
+     * resolves — and fills any blank snapshot fields on the returned object. The value is computed on
+     * read; order creation remains the source of truth for what is persisted.
+     */
+    private TransactionOrder ensureSchemeSnapshot(TransactionOrder order) {
+        if (order == null
+                || order.getProductSchemeId() == null
+                || productSchemeRepository == null
+                || StringUtils.hasText(order.getProductSchemeName())) {
+            return order;
+        }
+        productSchemeRepository.findById(order.getProductSchemeId()).ifPresentOrElse(scheme -> {
+            order.setProductSchemeName(trimToNull(scheme.getSchemeName()));
+            if (!StringUtils.hasText(order.getProductSchemeExternalCode())) {
+                order.setProductSchemeExternalCode(trimToNull(scheme.getExternalSchemeCode()));
+            }
+            if (!StringUtils.hasText(order.getProductSchemeIsin())) {
+                order.setProductSchemeIsin(trimToNull(scheme.getExternalIsin()));
+            }
+            if (!StringUtils.hasText(order.getProductSchemeAmcName())) {
+                order.setProductSchemeAmcName(trimToNull(scheme.getAmcName()));
+            }
+            if (order.getProductCategory() == null) {
+                order.setProductCategory(scheme.getCategory());
+            }
+            logger.info(
+                    "order_scheme_backfill status='resolved_from_db' order_id='{}' product_scheme_id='{}' scheme_name='{}'",
+                    order.getId(), order.getProductSchemeId(), order.getProductSchemeName());
+        }, () -> logger.warn(
+                "order_scheme_backfill status='scheme_not_found' order_id='{}' product_scheme_id='{}' "
+                        + "note='order will display Unknown fund until the fund catalogue is re-synced from Cybrilla'",
+                order.getId(), order.getProductSchemeId()));
+        return order;
+    }
+
+    private List<TransactionOrder> ensureSchemeSnapshot(List<TransactionOrder> orders) {
+        if (orders != null) {
+            orders.forEach(this::ensureSchemeSnapshot);
+        }
+        return orders;
+    }
+
+    private String trimToNull(String value) {
+        if (!org.springframework.util.StringUtils.hasText(value)) {
+            return null;
+        }
+        return value.trim();
     }
 
     private Sort.Direction resolveSortDirection(String direction) {

@@ -140,6 +140,16 @@ external-auth:
     enabled: ${EXTERNAL_AUTH_DEBUG_ENABLED:false}
     log-raw-tokens: ${EXTERNAL_AUTH_LOG_RAW_TOKENS:false}
 
+# Know-Your-Distributor (ARN/KYD) validation provider. When real-client-enabled is false (default),
+# a deterministic mock placeholder validates ARNs so distributor signup works before a real provider
+# is configured. Set real-client-enabled=true + base-url (+ api-key) to plug in the real AMFI/KYD API.
+arn-validation:
+  real-client-enabled: ${ARN_VALIDATION_REAL_CLIENT_ENABLED:false}
+  base-url: ${ARN_VALIDATION_BASE_URL:}
+  lookup-path: ${ARN_VALIDATION_LOOKUP_PATH:/arn/{arn}}
+  api-key: ${ARN_VALIDATION_API_KEY:}
+  source: ${ARN_VALIDATION_SOURCE:AMFI}
+
 jwt:
   secret: ${JWT_SECRET}
   expiration-ms: 900000  # 15 minutes

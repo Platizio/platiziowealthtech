@@ -37,6 +37,10 @@ public class TransactionOrder extends BaseEntity {
     private BigDecimal units;
     private String paymentMode;
     private String mandateMode;
+    private String productSchemeName;
+    private String productSchemeExternalCode;
+    private String productSchemeIsin;
+    private String productSchemeAmcName;
     private String externalOrderId;
     private Integer externalMandateId;
     private String mandateStatus;
@@ -70,6 +74,14 @@ public class TransactionOrder extends BaseEntity {
     public void setPaymentMode(String paymentMode) { this.paymentMode = paymentMode; }
     public String getMandateMode() { return mandateMode; }
     public void setMandateMode(String mandateMode) { this.mandateMode = mandateMode; }
+    public String getProductSchemeName() { return productSchemeName; }
+    public void setProductSchemeName(String productSchemeName) { this.productSchemeName = productSchemeName; }
+    public String getProductSchemeExternalCode() { return productSchemeExternalCode; }
+    public void setProductSchemeExternalCode(String productSchemeExternalCode) { this.productSchemeExternalCode = productSchemeExternalCode; }
+    public String getProductSchemeIsin() { return productSchemeIsin; }
+    public void setProductSchemeIsin(String productSchemeIsin) { this.productSchemeIsin = productSchemeIsin; }
+    public String getProductSchemeAmcName() { return productSchemeAmcName; }
+    public void setProductSchemeAmcName(String productSchemeAmcName) { this.productSchemeAmcName = productSchemeAmcName; }
     public String getExternalOrderId() { return externalOrderId; }
     public void setExternalOrderId(String externalOrderId) { this.externalOrderId = externalOrderId; }
     public Integer getExternalMandateId() { return externalMandateId; }

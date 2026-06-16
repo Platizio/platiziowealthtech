@@ -91,28 +91,30 @@ class InvestorActionServiceTest {
         when(cybrillaClient.confirmMfPurchase("mfp_123")).thenReturn(json("""
                 {"object":"mf_purchase","id":"mfp_123","old_id":9123,"state":"confirmed"}
                 """));
-        when(cybrillaClient.createNetbankingPayment(
+        when(cybrillaClient.createUpiUriPayment(
                 eq(List.of(9123)),
                 eq("http://localhost/investor-actions/action-token/payment-complete"),
-                eq("NETBANKING"),
                 eq(906),
                 eq("ONDC")
         )).thenReturn(json("""
-                {"id":1,"token_url":"https://payments.fp/token"}
+                {"id":1,"token_url":null,"upi":{"type":"uri","uri":null}}
+                """));
+        when(cybrillaClient.fetchPayment(1)).thenReturn(json("""
+                {"id":1,"token_url":null,"method":"UPI","upi":{"type":"uri","uri":"upi://pay?pa=billdesk@hdfcbank&am=25000.00&cu=INR"}}
                 """));
 
         InvestorActionService.InvestorActionPage page = service.confirmPurchase("action-token");
 
         assertThat(order.getOrderStatus()).isEqualTo(OrderStatus.PAYMENT_PENDING);
-        assertThat(order.getInvestorActionUrl()).isEqualTo("https://payments.fp/token");
+        assertThat(order.getPaymentMode()).isEqualTo("UPI");
+        assertThat(order.getInvestorActionUrl()).startsWith("upi://pay");
         assertThat(page.confirmationAllowed()).isFalse();
-        assertThat(page.paymentRedirectUrl()).isEqualTo("https://payments.fp/token");
-        assertThat(page.message()).contains("Continue to the payment page");
+        assertThat(page.paymentRedirectUrl()).startsWith("upi://pay");
+        assertThat(page.message()).contains("Open your UPI app");
         verify(cybrillaClient).updateMfPurchaseConsent(eq("mfp_123"), any());
-        verify(cybrillaClient).createNetbankingPayment(
+        verify(cybrillaClient).createUpiUriPayment(
                 eq(List.of(9123)),
                 eq("http://localhost/investor-actions/action-token/payment-complete"),
-                eq("NETBANKING"),
                 eq(906),
                 eq("ONDC")
         );
@@ -162,6 +164,42 @@ class InvestorActionServiceTest {
         assertThat(page.paymentRedirectUrl()).isEqualTo("https://payments.fp/existing-token");
         verify(cybrillaClient, org.mockito.Mockito.times(1)).fetchMfPurchase("mfp_123");
         verify(cybrillaClient, org.mockito.Mockito.never()).updateMfPurchaseConsent(org.mockito.ArgumentMatchers.anyString(), any());
+    }
+
+    @Test
+    void getPageUsesOrderSchemeSnapshotWhenSchemeRowIsMissing() {
+        TransactionOrderRepository orderRepository = mock(TransactionOrderRepository.class);
+        InvestorRepository investorRepository = mock(InvestorRepository.class);
+        ProductSchemeRepository schemeRepository = mock(ProductSchemeRepository.class);
+        TransactionOrder order = pendingOrder();
+        order.setExternalOrderId(null);
+        order.setProductSchemeName("HDFC Balanced Advantage Fund");
+        order.setProductSchemeAmcName("HDFC Mutual Fund");
+        Investor investor = investor(order.getInvestorId());
+        InvestorActionService service = new InvestorActionService(
+                orderRepository,
+                investorRepository,
+                mock(InvestorBankAccountRepository.class),
+                schemeRepository,
+                new RecordingAuditService(),
+                mock(InvestorService.class),
+                passthroughOrderService(),
+                mock(CybrillaClient.class),
+                "http://localhost/investor-actions/{token}/payment-complete",
+                "sandbox",
+                "CYBRILLAPOA",
+                true,
+                true
+        );
+
+        when(orderRepository.findByInvestorActionToken("action-token")).thenReturn(Optional.of(order));
+        when(investorRepository.findById(order.getInvestorId())).thenReturn(Optional.of(investor));
+        when(schemeRepository.findById(order.getProductSchemeId())).thenReturn(Optional.empty());
+
+        InvestorActionService.InvestorActionPage page = service.getPage("action-token");
+
+        assertThat(page.schemeName()).isEqualTo("HDFC Balanced Advantage Fund");
+        assertThat(page.amcName()).isEqualTo("HDFC Mutual Fund");
     }
 
     @Test
@@ -314,7 +352,7 @@ class InvestorActionServiceTest {
         order.setProductSchemeId(UUID.randomUUID());
         order.setTransactionType(TransactionType.LUMPSUM_PURCHASE);
         order.setAmount(new BigDecimal("25000.00"));
-        order.setPaymentMode("NET_BANKING");
+        order.setPaymentMode("BANK_TRANSFER");
         order.setExternalOrderId("mfp_123");
         order.setOrderStatus(OrderStatus.PENDING_INVESTOR_ACTION);
         return order;

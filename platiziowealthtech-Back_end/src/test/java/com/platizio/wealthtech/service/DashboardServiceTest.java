@@ -131,6 +131,48 @@ class DashboardServiceTest {
     }
 
     @Test
+    void getSipDashboardUsesOrderSchemeSnapshotWhenSchemeRowIsMissing() {
+        UUID distributorId = UUID.randomUUID();
+        TransactionOrder order = order(OrderStatus.ACTIVE);
+        order.setDistributorId(distributorId);
+        order.setProductSchemeId(UUID.randomUUID());
+        order.setProductSchemeName("Snapshot Balanced Advantage Fund");
+        order.setProductSchemeIsin("INF000000123");
+
+        InvestorRepository investorRepository = mock(InvestorRepository.class);
+        TransactionOrderRepository orderRepository = mock(TransactionOrderRepository.class);
+        ProductSchemeRepository schemeRepository = mock(ProductSchemeRepository.class);
+        DashboardService dashboardService = new DashboardService(
+                investorRepository,
+                orderRepository,
+                schemeRepository
+        );
+
+        when(orderRepository.findByDistributorIdAndTransactionType(
+                eq(distributorId),
+                eq(TransactionType.SIP)))
+                .thenReturn(List.of(order));
+        when(investorRepository.findAllById(any())).thenReturn(List.of());
+        when(schemeRepository.findAllById(any())).thenReturn(List.of());
+        when(orderRepository.findByDistributorIdAndTransactionTypeAndCreatedAtAfter(
+                eq(distributorId),
+                eq(TransactionType.SIP),
+                any(OffsetDateTime.class)))
+                .thenReturn(List.of());
+        when(orderRepository.countByDistributorIdAndTransactionTypeGroupedByOrderStatus(
+                distributorId,
+                TransactionType.SIP))
+                .thenReturn(List.of());
+
+        SipDashboardDto dashboard = dashboardService.getSipDashboard(distributorId);
+
+        assertThat(dashboard.getSips())
+                .singleElement()
+                .extracting(SipItemDto::getFund)
+                .isEqualTo("Snapshot Balanced Advantage Fund");
+    }
+
+    @Test
     void getActionCenterUsesBoundedStatusQueriesInsteadOfDistributorScans() {
         UUID distributorId = UUID.randomUUID();
         InvestorRepository investorRepository = mock(InvestorRepository.class);

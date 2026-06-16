@@ -3,6 +3,7 @@ package com.platizio.wealthtech.service;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.platizio.wealthtech.domain.ProductScheme;
+import com.platizio.wealthtech.domain.TransactionOrder;
 import org.springframework.util.StringUtils;
 
 final class ProductSchemeOrderSupport {
@@ -85,6 +86,36 @@ final class ProductSchemeOrderSupport {
             return scheme.getExternalSchemeCode().trim();
         }
         return "Unknown fund";
+    }
+
+    static String displayName(TransactionOrder order, ProductScheme scheme) {
+        String schemeName = displayName(scheme);
+        if (!"Unknown fund".equals(schemeName)) {
+            return schemeName;
+        }
+        if (order == null) {
+            return "Unknown fund";
+        }
+        if (StringUtils.hasText(order.getProductSchemeName())) {
+            return order.getProductSchemeName().trim();
+        }
+        if (StringUtils.hasText(order.getProductSchemeIsin())) {
+            return order.getProductSchemeIsin().trim();
+        }
+        if (StringUtils.hasText(order.getProductSchemeExternalCode())) {
+            return order.getProductSchemeExternalCode().trim();
+        }
+        return "Unknown fund";
+    }
+
+    static String amcName(TransactionOrder order, ProductScheme scheme) {
+        if (scheme != null && StringUtils.hasText(scheme.getAmcName())) {
+            return scheme.getAmcName().trim();
+        }
+        if (order != null && StringUtils.hasText(order.getProductSchemeAmcName())) {
+            return order.getProductSchemeAmcName().trim();
+        }
+        return "-";
     }
 
     private static boolean isOmsFundScheme(ProductScheme scheme) {

@@ -222,7 +222,7 @@ public class DashboardService {
         ProductScheme scheme = schemeMap.get(order.getProductSchemeId());
         String status = sipItemStatus(order.getOrderStatus());
 
-        String rawCat = "OTHER";
+        String rawCat = "MF";
         if (order.getProductCategory() != null) {
             rawCat = order.getProductCategory().toString();
         } else if (scheme != null && scheme.getCategory() != null) {
@@ -234,7 +234,7 @@ public class DashboardService {
         return new SipItemDto(
                 order.getId().toString(),
                 inv != null ? inv.getFullName() : "Unknown",
-                ProductSchemeOrderSupport.displayName(scheme),
+                ProductSchemeOrderSupport.displayName(order, scheme),
                 "₹" + (order.getAmount() != null ? order.getAmount().toString() : "0"),
                 status,
                 "N/A",

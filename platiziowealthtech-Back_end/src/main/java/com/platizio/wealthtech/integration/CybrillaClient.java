@@ -119,6 +119,12 @@ public interface CybrillaClient {
             Integer bankAccountOldId,
             String providerName
     );
+    JsonNode createUpiUriPayment(
+            List<Integer> amcOrderIds,
+            String paymentPostbackUrl,
+            Integer bankAccountOldId,
+            String providerName
+    );
     JsonNode fetchPayment(int paymentId);
     JsonNode simulatePayment(int paymentId, String status);
     JsonNode confirmMfPurchase(String mfPurchaseId);

@@ -42,8 +42,7 @@ class ProductServiceTest {
                 .thenReturn(CybrillaClient.SchemeFetchResult.complete(List.of(fetched)));
         when(repository.findFirstByExternalSchemeCodeIgnoreCase("INF001")).thenReturn(java.util.Optional.empty());
         when(repository.save(any(ProductScheme.class))).thenAnswer(invocation -> invocation.getArgument(0));
-        when(repository.deactivateActiveSchemesNotIn(anyList(), anyList())).thenReturn(2);
-        when(repository.deleteByExternalFetchRequestJsonIsNull()).thenReturn(0);
+        when(repository.deleteStalePurchaseSchemesNotIn(anyList(), anyList())).thenReturn(2);
         when(repository.searchSchemes(eq(null), eq(Boolean.TRUE), eq(null), eq(null), eq(null), any(Pageable.class)))
                 .thenReturn(localPage);
 
@@ -62,8 +61,7 @@ class ProductServiceTest {
         ordered.verify(cybrillaClient).fetchProductSchemes();
         ordered.verify(repository).findFirstByExternalSchemeCodeIgnoreCase("INF001");
         ordered.verify(repository).save(any(ProductScheme.class));
-        ordered.verify(repository).deactivateActiveSchemesNotIn(anyList(), anyList());
-        ordered.verify(repository).deleteByExternalFetchRequestJsonIsNull();
+        ordered.verify(repository).deleteStalePurchaseSchemesNotIn(anyList(), anyList());
         ordered.verify(repository).searchSchemes(eq(null), eq(Boolean.TRUE), eq(null), eq(null), eq(null), any(Pageable.class));
         verify(repository, never()).deleteSchemesByCategoryIn(any());
         verify(repository, never()).saveAll(anyList());

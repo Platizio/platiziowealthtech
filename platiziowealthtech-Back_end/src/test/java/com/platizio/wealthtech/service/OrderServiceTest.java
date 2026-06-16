@@ -24,9 +24,11 @@ import com.platizio.wealthtech.repository.RedemptionRecordRepository;
 import com.platizio.wealthtech.repository.TransactionOrderRepository;
 import java.math.BigDecimal;
 import java.lang.reflect.Proxy;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -35,6 +37,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import org.hibernate.annotations.SQLRestriction;
 import org.junit.jupiter.api.Test;
 import org.springframework.security.access.AccessDeniedException;
+import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.TransactionException;
 import org.springframework.transaction.support.AbstractPlatformTransactionManager;
@@ -125,6 +128,46 @@ class OrderServiceTest {
 
         assertThat(order.getInvestorActionToken()).isNotBlank();
         assertThat(order.getInvestorActionUrl()).isEqualTo("/investor-actions/" + order.getInvestorActionToken());
+    }
+
+    @Test
+    void createOrderResolvesSchemeByExternalIsinWhenUuidIsMissing() {
+        UUID distributorId = UUID.randomUUID();
+        UUID schemeId = UUID.randomUUID();
+        ProductScheme scheme = productScheme(schemeId, "Resolved Cybrilla Fund", "INF000000999");
+        List<TransactionOrder> savedOrders = new ArrayList<>();
+        OrderService orderService = new OrderService(
+                savingOrderRepository(savedOrders),
+                null,
+                new FixedInvestorService(verifiedInvestor(distributorId)),
+                new CountingAuditService(new AtomicInteger()),
+                new CountingNotificationService(new AtomicInteger()),
+                actionUrlCybrillaClient(),
+                null,
+                productSchemeRepositoryByExternal(scheme)
+        );
+        OrderCreateRequest request = new OrderCreateRequest(
+                UUID.randomUUID(),
+                null,
+                null,
+                TransactionType.LUMPSUM_PURCHASE,
+                BigDecimal.TEN,
+                null,
+                "NET_BANKING",
+                null,
+                null,
+                null,
+                null,
+                null,
+                "INF000000999"
+        );
+
+        TransactionOrder order = orderService.createOrder(request, distributorId);
+
+        assertThat(order.getProductSchemeId()).isEqualTo(schemeId);
+        assertThat(order.getProductSchemeName()).isEqualTo("Resolved Cybrilla Fund");
+        assertThat(order.getProductSchemeIsin()).isEqualTo("INF000000999");
+        assertThat(savedOrders.get(0).getProductSchemeId()).isEqualTo(schemeId);
     }
 
     @Test
@@ -317,6 +360,81 @@ class OrderServiceTest {
         assertThat(notificationCalls.get()).isEqualTo(2);
     }
 
+    @Test
+    void updateSipPlanEditsAmountAndInstallmentDayThroughProvider() {
+        UUID distributorId = UUID.randomUUID();
+        UUID orderId = UUID.randomUUID();
+        TransactionOrder order = new TransactionOrder();
+        order.setDistributorId(distributorId);
+        order.setInvestorId(UUID.randomUUID());
+        order.setTransactionType(TransactionType.SIP);
+        order.setOrderStatus(OrderStatus.ACTIVE);
+        order.setExternalOrderId("mfpp_12345");
+        order.setAmount(new BigDecimal("5000"));
+        order.setSipStartDate(LocalDate.of(2026, 6, 5));
+
+        List<TransactionOrder> savedOrders = new ArrayList<>();
+        AtomicReference<String> capturedPlanId = new AtomicReference<>();
+        AtomicReference<Map<String, Object>> capturedPayload = new AtomicReference<>();
+        AtomicInteger auditCalls = new AtomicInteger();
+        AtomicInteger notificationCalls = new AtomicInteger();
+
+        OrderService orderService = new OrderService(
+                sipOrderRepository(order, savedOrders),
+                null,
+                null,
+                new CountingAuditService(auditCalls),
+                new CountingNotificationService(notificationCalls),
+                updatePlanCybrillaClient(capturedPlanId, capturedPayload),
+                null,
+                null
+        );
+
+        TransactionOrder updated = orderService.updateSipPlan(
+                orderId,
+                new com.platizio.wealthtech.dto.SipUpdateRequest(new BigDecimal("8000"), 12),
+                distributorId
+        );
+
+        assertThat(capturedPlanId.get()).isEqualTo("mfpp_12345");
+        assertThat(capturedPayload.get()).containsEntry("amount", new BigDecimal("8000"));
+        assertThat(capturedPayload.get()).containsEntry("installment_day", 12);
+        assertThat(updated.getAmount()).isEqualByComparingTo("8000");
+        assertThat(updated.getSipStartDate().getDayOfMonth()).isEqualTo(12);
+        assertThat(savedOrders).hasSize(1);
+        assertThat(auditCalls.get()).isEqualTo(1);
+        assertThat(notificationCalls.get()).isEqualTo(1);
+    }
+
+    @Test
+    void updateSipPlanRejectsNonSipOrder() {
+        UUID distributorId = UUID.randomUUID();
+        TransactionOrder order = new TransactionOrder();
+        order.setDistributorId(distributorId);
+        order.setTransactionType(TransactionType.LUMPSUM_PURCHASE);
+        order.setOrderStatus(OrderStatus.ACTIVE);
+        order.setExternalOrderId("mfpp_999");
+
+        OrderService orderService = new OrderService(
+                sipOrderRepository(order, new ArrayList<>()),
+                null,
+                null,
+                new CountingAuditService(new AtomicInteger()),
+                new CountingNotificationService(new AtomicInteger()),
+                updatePlanCybrillaClient(new AtomicReference<>(), new AtomicReference<>()),
+                null,
+                null
+        );
+
+        assertThatThrownBy(() -> orderService.updateSipPlan(
+                UUID.randomUUID(),
+                new com.platizio.wealthtech.dto.SipUpdateRequest(new BigDecimal("100"), null),
+                distributorId
+        ))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Only SIP orders");
+    }
+
     private static class FixedInvestorService extends InvestorService {
 
         private final Investor investor;
@@ -483,6 +601,41 @@ class OrderServiceTest {
         );
     }
 
+    private TransactionOrderRepository sipOrderRepository(TransactionOrder order, List<TransactionOrder> savedOrders) {
+        return (TransactionOrderRepository) Proxy.newProxyInstance(
+                TransactionOrderRepository.class.getClassLoader(),
+                new Class<?>[]{TransactionOrderRepository.class},
+                (proxy, method, args) -> switch (method.getName()) {
+                    case "findById" -> Optional.of(order);
+                    case "save" -> {
+                        savedOrders.add((TransactionOrder) args[0]);
+                        yield args[0];
+                    }
+                    default -> defaultValue(method.getReturnType());
+                }
+        );
+    }
+
+    @SuppressWarnings("unchecked")
+    private CybrillaClient updatePlanCybrillaClient(
+            AtomicReference<String> capturedPlanId,
+            AtomicReference<Map<String, Object>> capturedPayload
+    ) {
+        return (CybrillaClient) Proxy.newProxyInstance(
+                CybrillaClient.class.getClassLoader(),
+                new Class<?>[]{CybrillaClient.class},
+                (proxy, method, args) -> switch (method.getName()) {
+                    case "updateMfPurchasePlan" -> {
+                        capturedPlanId.set((String) args[0]);
+                        capturedPayload.set((Map<String, Object>) args[1]);
+                        yield new com.fasterxml.jackson.databind.ObjectMapper()
+                                .readTree("{\"object\":\"mf_purchase_plan\",\"id\":\"mfpp_12345\",\"state\":\"active\"}");
+                    }
+                    default -> defaultValue(method.getReturnType());
+                }
+        );
+    }
+
     private ProductSchemeRepository productSchemeRepository() {
         return (ProductSchemeRepository) Proxy.newProxyInstance(
                 ProductSchemeRepository.class.getClassLoader(),
@@ -494,13 +647,31 @@ class OrderServiceTest {
         );
     }
 
+    private ProductSchemeRepository productSchemeRepositoryByExternal(ProductScheme scheme) {
+        return (ProductSchemeRepository) Proxy.newProxyInstance(
+                ProductSchemeRepository.class.getClassLoader(),
+                new Class<?>[]{ProductSchemeRepository.class},
+                (proxy, method, args) -> switch (method.getName()) {
+                    case "findById" -> Optional.empty();
+                    case "findFirstByExternalIsinIgnoreCase" -> Optional.of(scheme);
+                    case "findFirstByExternalSchemeCodeIgnoreCase" -> Optional.of(scheme);
+                    default -> defaultValue(method.getReturnType());
+                }
+        );
+    }
+
     private ProductScheme productScheme() {
+        return productScheme(UUID.randomUUID(), "Test Scheme", "INF000000001");
+    }
+
+    private ProductScheme productScheme(UUID id, String name, String isin) {
         ProductScheme productScheme = new ProductScheme();
-        productScheme.setSchemeName("Test Scheme");
+        ReflectionTestUtils.setField(productScheme, "id", id);
+        productScheme.setSchemeName(name);
         productScheme.setAmcName("Test AMC");
         productScheme.setCategory(ProductCategory.MF);
-        productScheme.setExternalSchemeCode("INF000000001");
-        productScheme.setExternalIsin("INF000000001");
+        productScheme.setExternalSchemeCode(isin);
+        productScheme.setExternalIsin(isin);
         return productScheme;
     }
 

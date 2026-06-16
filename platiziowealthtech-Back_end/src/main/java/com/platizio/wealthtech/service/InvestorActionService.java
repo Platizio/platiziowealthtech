@@ -122,7 +122,9 @@ public class InvestorActionService {
                             order.getDistributorId(),
                             "{\"status\":\"PAYMENT_PENDING\",\"paymentRedirect\":\"provider\"}"
                     );
-                    message = "Purchase confirmed. Continue to the payment page to complete your investment.";
+                    message = isUpiUri(paymentRedirectUrl)
+                            ? "Purchase confirmed. Open your UPI app to complete your investment."
+                            : "Purchase confirmed. Continue to the payment page to complete your investment.";
                 }
             } catch (CybrillaUnavailableException ex) {
                 logger.warn(
@@ -528,7 +530,7 @@ public class InvestorActionService {
 
         if ("pending".equalsIgnoreCase(state)) {
             // Cybrillapoa / ONDC gateway (FP Create MF Purchase + custom-checkout docs):
-            // consent → create payment → confirm → submitted → redirect token_url.
+            // consent -> create payment -> confirm -> submitted -> UPI URI or hosted token_url.
             cybrillaClient.updateMfPurchaseConsent(order.getExternalOrderId(), consentPayload(investor));
             purchase = cybrillaClient.fetchMfPurchase(order.getExternalOrderId());
             JsonNode payment = createLumpsumPayment(order, investor, purchase);
@@ -558,13 +560,24 @@ public class InvestorActionService {
             throw new CybrillaApiException("Fintech Primitives purchase response did not include an AMC order id");
         }
         int bankAccountOldId = resolveFpBankAccountOldId(investor);
-        JsonNode payment = cybrillaClient.createNetbankingPayment(
-                List.of(amcOrderId),
-                paymentPostbackUrlFor(order.getInvestorActionToken()),
-                paymentMethod(order.getPaymentMode()),
-                bankAccountOldId,
-                "ONDC"
-        );
+        String method = paymentMethod(order.getPaymentMode());
+        if (!method.equals(order.getPaymentMode())) {
+            order.setPaymentMode(method);
+        }
+        JsonNode payment = "UPI".equals(method)
+                ? cybrillaClient.createUpiUriPayment(
+                        List.of(amcOrderId),
+                        paymentPostbackUrlFor(order.getInvestorActionToken()),
+                        bankAccountOldId,
+                        "ONDC"
+                )
+                : cybrillaClient.createNetbankingPayment(
+                        List.of(amcOrderId),
+                        paymentPostbackUrlFor(order.getInvestorActionToken()),
+                        method,
+                        bankAccountOldId,
+                        "ONDC"
+                );
         int paymentRecordId = payment.path("id").asInt(0);
         if (paymentRecordId > 0) {
             order.setExternalPaymentId(paymentRecordId);
@@ -573,12 +586,20 @@ public class InvestorActionService {
     }
 
     private String resolvePaymentRedirectUrl(JsonNode payment, Integer paymentId) {
+        String upiUri = upiUri(payment);
+        if (StringUtils.hasText(upiUri)) {
+            return upiUri;
+        }
         String tokenUrl = payment == null ? null : payment.path("token_url").asText(null);
         if (StringUtils.hasText(tokenUrl)) {
             return tokenUrl;
         }
         if (paymentId != null && paymentId > 0) {
             JsonNode latest = cybrillaClient.fetchPayment(paymentId);
+            upiUri = upiUri(latest);
+            if (StringUtils.hasText(upiUri)) {
+                return upiUri;
+            }
             tokenUrl = latest.path("token_url").asText(null);
             if (StringUtils.hasText(tokenUrl)) {
                 return tokenUrl;
@@ -587,7 +608,15 @@ public class InvestorActionService {
         if (sandboxPaymentSimulationEnabled()) {
             return null;
         }
-        throw new CybrillaApiException("Fintech Primitives payment response did not include a token_url");
+        throw new CybrillaApiException("Fintech Primitives payment response did not include a token_url or UPI URI");
+    }
+
+    private String upiUri(JsonNode payment) {
+        if (payment == null || payment.isMissingNode() || payment.isNull()) {
+            return null;
+        }
+        String uri = payment.path("upi").path("uri").asText(null);
+        return StringUtils.hasText(uri) ? uri : null;
     }
 
     /**
@@ -613,7 +642,7 @@ public class InvestorActionService {
             return null;
         }
         String actionUrl = order.getInvestorActionUrl();
-        if (StringUtils.hasText(actionUrl) && actionUrl.startsWith("http")) {
+        if (StringUtils.hasText(actionUrl) && (actionUrl.startsWith("http") || isUpiUri(actionUrl))) {
             return actionUrl;
         }
         return null;
@@ -843,6 +872,7 @@ public class InvestorActionService {
             return "NETBANKING";
         }
         return switch (paymentMode.trim().toUpperCase()) {
+            case "BANK_TRANSFER" -> "UPI";
             case "UPI" -> "UPI";
             default -> "NETBANKING";
         };
@@ -878,14 +908,16 @@ public class InvestorActionService {
         Investor investor = investorRepository.findById(order.getInvestorId()).orElse(null);
         ProductScheme scheme = schemeRepository.findById(order.getProductSchemeId()).orElse(null);
         String paymentRedirectUrl = paymentRedirectUrl(order);
+        String schemeName = ProductSchemeOrderSupport.displayName(order, scheme);
+        String amcName = ProductSchemeOrderSupport.amcName(order, scheme);
         return new InvestorActionPage(
                 order.getInvestorActionToken(),
                 order.getId(),
                 order.getExternalOrderId(),
                 investor == null ? "Investor" : investor.getFullName(),
                 investor == null ? null : investor.getEmail(),
-                scheme == null ? "Selected scheme" : scheme.getSchemeName(),
-                scheme == null ? null : scheme.getAmcName(),
+                schemeName,
+                amcName,
                 order.getAmount(),
                 order.getUnits(),
                 order.getTransactionType() == null ? null : order.getTransactionType().name(),
@@ -928,6 +960,12 @@ public class InvestorActionService {
         debug.put("failureReason", order.getFailureReason());
         debug.put("investorActionUrlStored", order.getInvestorActionUrl());
         debug.put("paymentRedirectResolved", paymentRedirectUrl);
+        debug.put("schemeDisplayName", ProductSchemeOrderSupport.displayName(order, scheme));
+        debug.put("schemeAmcName", ProductSchemeOrderSupport.amcName(order, scheme));
+        debug.put("orderSchemeNameSnapshot", order.getProductSchemeName());
+        debug.put("orderSchemeIsinSnapshot", order.getProductSchemeIsin());
+        debug.put("orderSchemeCodeSnapshot", order.getProductSchemeExternalCode());
+        debug.put("orderSchemeAmcSnapshot", order.getProductSchemeAmcName());
         debug.put("paymentPostbackTemplate", paymentPostbackUrl);
         debug.put("confirmationAllowed", order.getOrderStatus() == OrderStatus.PENDING_INVESTOR_ACTION
                 || order.getOrderStatus() == OrderStatus.PROCESSING);
@@ -938,7 +976,7 @@ public class InvestorActionService {
                 List.of(
                         "POST /v2/mf_purchases → under_review → pending (FP review)",
                         "consent → POST /api/pg/payments/netbanking → PATCH confirm → submitted",
-                        "redirect token_url or sandbox simulate payment",
+                        "UPI URI, hosted token_url, or sandbox simulate payment",
                         "postback → poll until successful"
                 )
         );
@@ -1002,7 +1040,8 @@ public class InvestorActionService {
         String actionUrl = order.getInvestorActionUrl();
         return !StringUtils.hasText(actionUrl)
                 || isSandboxPaymentTokenUrl(actionUrl)
-                || actionUrl.startsWith("http");
+                || actionUrl.startsWith("http")
+                || isUpiUri(actionUrl);
     }
 
     private boolean sandboxMandateSimulationAllowed(TransactionOrder order) {
@@ -1025,6 +1064,9 @@ public class InvestorActionService {
             return null;
         }
         if (actionUrl.startsWith("http")) {
+            return actionUrl;
+        }
+        if (isUpiUri(actionUrl)) {
             return actionUrl;
         }
         if (sandboxPaymentSimulationEnabled() && isSandboxPaymentTokenUrl(actionUrl)) {
@@ -1069,6 +1111,10 @@ public class InvestorActionService {
         return lower.startsWith("sandbox://") || lower.contains("payments.mock");
     }
 
+    private static boolean isUpiUri(String actionUrl) {
+        return StringUtils.hasText(actionUrl) && actionUrl.toLowerCase(Locale.ROOT).startsWith("upi://");
+    }
+
     private void requireSandboxPaymentSimulation() {
         if (!sandboxPaymentSimulationEnabled()) {
             throw new IllegalStateException(
@@ -1092,6 +1138,9 @@ public class InvestorActionService {
             if (isSipMandateOrder(order) && !MANDATE_STATUS_APPROVED.equalsIgnoreCase(order.getMandateStatus())) {
                 return "Authorize your SIP mandate on the secure page, then return here to finish setup.";
             }
+            if (isUpiUri(paymentRedirectUrl(order))) {
+                return "UPI payment is ready. Open your UPI app to complete your purchase.";
+            }
             return "Payment is ready. Continue to the secure payment page to complete your purchase.";
         }
         return switch (order.getOrderStatus()) {
@@ -1103,7 +1152,9 @@ public class InvestorActionService {
                     yield "Authorize your SIP mandate on the secure page, or simulate mandate approval below (sandbox).";
                 }
                 if (sandboxPaymentSimulationAllowed(order)) {
-                    yield "Payment is ready. Simulate payment below (sandbox) or continue to the FP payment page.";
+                    yield isUpiUri(paymentRedirectUrl(order))
+                            ? "UPI payment is ready. Simulate payment below (sandbox) or open your UPI app."
+                            : "Payment is ready. Simulate payment below (sandbox) or continue to the FP payment page.";
                 }
                 yield "Payment is pending provider confirmation.";
             }

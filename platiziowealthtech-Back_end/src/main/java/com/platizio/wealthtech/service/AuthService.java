@@ -8,11 +8,16 @@ import com.platizio.wealthtech.domain.OtpPurpose;
 import com.platizio.wealthtech.dto.AuthLoginRequest;
 import com.platizio.wealthtech.dto.AuthResponse;
 import com.platizio.wealthtech.dto.AuthSignupRequest;
+import com.platizio.wealthtech.dto.DistributorVerificationStatusResponse;
+import com.platizio.wealthtech.integration.arn.ArnValidationClient.ArnValidationResult;
 import com.platizio.wealthtech.repository.DistributorRepository;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import java.time.LocalDateTime;
 import java.util.Locale;
 import java.util.UUID;
 
@@ -21,6 +26,8 @@ public class AuthService {
 
     public record RefreshResult(AuthResponse authResponse, UUID refreshToken) {}
 
+    private static final Logger logger = LoggerFactory.getLogger(AuthService.class);
+
     private final DistributorRepository distributorRepository;
     private final DistributorService distributorService;
     private final JwtService jwtService;
@@ -28,6 +35,7 @@ public class AuthService {
     private final AuditService auditService;
     private final RefreshTokenService refreshTokenService;
     private final BlockedTokenService blockedTokenService;
+    private final ArnValidationService arnValidationService;
 
     public AuthService(
             DistributorRepository distributorRepository,
@@ -36,7 +44,8 @@ public class AuthService {
             PasswordEncoder passwordEncoder,
             AuditService auditService,
             RefreshTokenService refreshTokenService,
-            BlockedTokenService blockedTokenService
+            BlockedTokenService blockedTokenService,
+            ArnValidationService arnValidationService
     ) {
         this.distributorRepository = distributorRepository;
         this.distributorService = distributorService;
@@ -45,16 +54,25 @@ public class AuthService {
         this.auditService = auditService;
         this.refreshTokenService = refreshTokenService;
         this.blockedTokenService = blockedTokenService;
+        this.arnValidationService = arnValidationService;
     }
 
     @Transactional
     public AuthResponse signup(AuthSignupRequest request) {
         if (distributorRepository.existsByArnNumber(request.arnNumber())) {
+            // Prevent duplicate signup for the same ARN. Kept as a 400 field error (existing behavior
+            // the signup form maps to the ARN field) rather than a 409 to avoid changing the FE contract.
             throw new IllegalArgumentException("Distributor with same ARN already exists");
         }
         if (distributorRepository.findByEmail(request.email()).isPresent()) {
             throw new IllegalArgumentException("Email already registered");
         }
+
+        // Know-Your-Distributor: validate the ARN with the configured provider BEFORE creating the
+        // account. Only a VERIFIED ARN may proceed; expired / KYD-incomplete / unrecognised ARNs are
+        // rejected with a clear message. Provider-unreachable surfaces as 503 from the client.
+        ArnValidationResult arn = arnValidationService.validate(request.arnNumber());
+        requireVerifiedArn(arn);
 
         DistributorRole role = request.role() == null ? DistributorRole.SUB_DISTRIBUTOR : request.role();
 
@@ -62,7 +80,7 @@ public class AuthService {
         distributor.setFullName(request.fullName());
         distributor.setMobileNumber(request.mobileNumber());
         distributor.setEmail(request.email());
-        distributor.setArnNumber(request.arnNumber());
+        distributor.setArnNumber(arn.arnNumber() != null ? arn.arnNumber() : request.arnNumber());
         distributor.setNismCertificateNumber(request.nismCertificateNumber());
         distributor.setNismExpiryDate(request.nismExpiryDate());
         distributor.seteUinNumber(request.eUinNumber());
@@ -75,9 +93,11 @@ public class AuthService {
         distributor.setStatus(DistributorStatus.PENDING_APPROVAL);
         distributor.setProfileCompletionPercent(85);
         distributor.setPasswordHash(passwordEncoder.encode(request.password()));
+        applyArnValidation(distributor, arn);
 
         Distributor saved = distributorRepository.save(distributor);
-        auditService.log("DISTRIBUTOR", saved.getId(), "SIGNUP_SUBMITTED", saved.getId(), "{\"status\":\"PENDING_APPROVAL\"}");
+        auditService.log("DISTRIBUTOR", saved.getId(), "SIGNUP_SUBMITTED", saved.getId(),
+                "{\"status\":\"PENDING_APPROVAL\",\"arnValidationStatus\":\"" + arn.status() + "\"}");
 
         return new AuthResponse(
                 null,
@@ -87,6 +107,61 @@ public class AuthService {
                 saved.getRole(),
                 saved.getStatus(),
                 "Approval remaining. Your account is pending admin approval."
+        );
+    }
+
+    /** Rejects signup unless the ARN validation verdict is VERIFIED, with a clear, status-specific message. */
+    private void requireVerifiedArn(ArnValidationResult arn) {
+        switch (arn.status()) {
+            case VERIFIED -> { /* allowed to proceed */ }
+            case EXPIRED -> throw new IllegalArgumentException(arn.message() != null
+                    ? arn.message()
+                    : "Your ARN registration has expired. Please renew it with AMFI and try again.");
+            case KYD_INCOMPLETE -> throw new IllegalArgumentException(arn.message() != null
+                    ? arn.message()
+                    : "Your ARN is valid but KYD is incomplete. Complete KYD before signing up.");
+            case REJECTED, PENDING_VERIFICATION -> throw new IllegalArgumentException(arn.message() != null
+                    ? arn.message()
+                    : "ARN could not be verified. Please check the ARN and try again.");
+        }
+    }
+
+    /** Persists the ARN/KYD validation outcome on the distributor record at signup time. */
+    private void applyArnValidation(Distributor distributor, ArnValidationResult arn) {
+        distributor.setArnValidationStatus(arn.status());
+        distributor.setArnValidatedAt(LocalDateTime.now());
+        distributor.setArnValidationSource(arn.source());
+        distributor.setKydStatus(arn.kydStatus());
+        if (arn.distributorName() != null) {
+            distributor.setArnHolderName(arn.distributorName());
+        }
+        if (arn.firmName() != null) {
+            distributor.setFirmName(arn.firmName());
+        }
+        if (arn.arnExpiryDate() != null) {
+            distributor.setArnExpiryDate(arn.arnExpiryDate());
+        }
+        logger.info(
+                "distributor_signup status='arn_validation_applied' arn='{}' arn_status='{}' source='{}'",
+                distributor.getArnNumber(), arn.status(), arn.source());
+    }
+
+    /** ARN/KYD verdict + account approval state for the authenticated distributor (by email). */
+    @Transactional(readOnly = true)
+    public DistributorVerificationStatusResponse verificationStatus(String email) {
+        Distributor distributor = distributorRepository.findByEmail(email)
+                .orElseThrow(() -> new BadCredentialsException("Not authenticated"));
+        return new DistributorVerificationStatusResponse(
+                distributor.getId(),
+                distributor.getArnNumber(),
+                distributor.getArnValidationStatus(),
+                distributor.getStatus(),
+                distributor.getArnExpiryDate(),
+                distributor.getKydStatus(),
+                distributor.getFirmName(),
+                distributor.getArnHolderName(),
+                distributor.getArnValidationSource(),
+                distributor.getArnValidatedAt()
         );
     }
 

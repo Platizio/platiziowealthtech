@@ -1196,6 +1196,36 @@ public class RealCybrillaClient implements CybrillaClient {
             Integer bankAccountOldId,
             String providerName
     ) {
+        return createPayment(amcOrderIds, paymentPostbackUrl, paymentMethod, bankAccountOldId, providerName, null);
+    }
+
+    @Override
+    public JsonNode createUpiUriPayment(
+            List<Integer> amcOrderIds,
+            String paymentPostbackUrl,
+            Integer bankAccountOldId,
+            String providerName
+    ) {
+        return createPayment(
+                amcOrderIds,
+                paymentPostbackUrl,
+                "UPI",
+                bankAccountOldId,
+                providerName,
+                // FP /api/pg/payments requires upi.type to be lowercase "uri" (intent/QR/redirect) or "collect".
+                // "URI" was rejected: 'upi.type Should be either uri or collect'.
+                Map.of("type", "uri")
+        );
+    }
+
+    private JsonNode createPayment(
+            List<Integer> amcOrderIds,
+            String paymentPostbackUrl,
+            String paymentMethod,
+            Integer bankAccountOldId,
+            String providerName,
+            Map<String, Object> upi
+    ) {
         if (amcOrderIds == null || amcOrderIds.isEmpty()) {
             throw new CybrillaApiException("At least one AMC order id is required to create a payment");
         }
@@ -1210,10 +1240,44 @@ public class RealCybrillaClient implements CybrillaClient {
         if (bankAccountOldId != null && bankAccountOldId > 0) {
             payload.put("bank_account_id", bankAccountOldId);
         }
+        if (upi != null && !upi.isEmpty()) {
+            payload.put("upi", normalizeUpiPayload(upi));
+        }
         String resolvedProvider = StringUtils.hasText(providerName) ? providerName.trim() : CYBRILLAPOA_PAYMENT_PROVIDER;
         payload.put("provider_name", resolvedProvider);
-        return executeWithTenantTokenRetry("create netbanking payment", () ->
-                post("create_netbanking_payment", NETBANKING_PAYMENT_PATH, payload));
+        logger.info(
+                "cybrilla_workflow operation='create_payment' status='request' method='{}' amc_order_ids='{}' "
+                        + "upi_type='{}' bank_account_old_id='{}' provider='{}'",
+                paymentMethod, amcOrderIds,
+                upi == null ? null : payload.get("upi") instanceof Map<?, ?> m ? m.get("type") : null,
+                bankAccountOldId, resolvedProvider);
+        return executeWithTenantTokenRetry("create netbanking payment", () -> {
+            JsonNode response = post("create_netbanking_payment", NETBANKING_PAYMENT_PATH, payload);
+            logger.info(
+                    "cybrilla_workflow operation='create_payment' status='response' payment_id='{}' upi_present='{}'",
+                    response == null ? null : response.path("id").asInt(0),
+                    response != null && response.has("upi"));
+            return response;
+        });
+    }
+
+    private static final java.util.Set<String> VALID_UPI_TYPES = java.util.Set.of("uri", "collect");
+
+    /**
+     * FP /api/pg/payments rejects any upi.type other than the lowercase literals "uri" (intent/QR/
+     * redirect) or "collect". Normalize case and fail fast in our own backend with a clear message
+     * rather than letting FP return a generic 400 'upi.type Should be either uri or collect'.
+     */
+    private Map<String, Object> normalizeUpiPayload(Map<String, Object> upi) {
+        Object rawType = upi.get("type");
+        String type = rawType == null ? null : rawType.toString().trim().toLowerCase(Locale.ROOT);
+        if (type == null || !VALID_UPI_TYPES.contains(type)) {
+            throw new CybrillaApiException(
+                    "Invalid UPI payment type '" + rawType + "'. Fintech Primitives accepts only 'uri' (intent/QR/redirect) or 'collect'.");
+        }
+        Map<String, Object> normalized = new LinkedHashMap<>(upi);
+        normalized.put("type", type);
+        return normalized;
     }
 
     @Override
@@ -1354,14 +1418,24 @@ public class RealCybrillaClient implements CybrillaClient {
         if (mandateId <= 0) {
             throw new CybrillaApiException("Approved mandate id is required before SIP plan creation");
         }
+        Map<String, Object> payload = mfPurchasePlanWithMandatePayload(order, investor, productScheme, mandateId);
+        logger.info(
+                "cybrilla_workflow operation='create_mf_purchase_plan' status='request' order_id='{}' mandate_id='{}' "
+                        + "frequency='{}' installment_day='{}' number_of_installments='{}' amount='{}' payment_method='{}'",
+                order.getId(), mandateId, payload.get("frequency"), payload.get("installment_day"),
+                payload.get("number_of_installments"), payload.get("amount"), payload.get("payment_method"));
         return executeWithTenantTokenRetry("create sip order with mandate", () -> {
             JsonNode response = post(
                     "create_mf_purchase_plan",
                     MF_PURCHASE_PLANS_PATH,
-                    mfPurchasePlanWithMandatePayload(order, investor, productScheme, mandateId),
+                    payload,
                     idempotencyKey("order", order.getId())
             );
-            return extractId(response, "order");
+            String planId = extractId(response, "order");
+            logger.info(
+                    "cybrilla_workflow operation='create_mf_purchase_plan' status='response' order_id='{}' plan_id='{}' fp_state='{}'",
+                    order.getId(), planId, response == null ? null : response.path("state").asText(null));
+            return planId;
         });
     }
 
@@ -2919,9 +2993,12 @@ public class RealCybrillaClient implements CybrillaClient {
         put(payload, "amount", order.getAmount());
         put(payload, "systematic", true);
         put(payload, "frequency", externalFrequency(order.getSipFrequency()));
-        put(payload, "start_date", order.getSipStartDate() == null ? null : order.getSipStartDate().toString());
+        // FP /v2/mf_purchase_plans expects installment_day (day-of-month 1-28), NOT start_date.
+        // Sending start_date is rejected as an unrecognized field. The chosen SIP start date is
+        // still kept locally on the order (order.sipStartDate); FP derives the schedule from
+        // installment_day + frequency + number_of_installments.
+        put(payload, "installment_day", sipInstallmentDay(order));
         put(payload, "number_of_installments", order.getSipInstalments());
-        put(payload, "auto_generate_installments", true);
         put(payload, "user_ip", "127.0.0.1");
         put(payload, "gateway", MF_PURCHASE_GATEWAY);
         put(payload, "initiated_via", "web");
@@ -2931,6 +3008,17 @@ public class RealCybrillaClient implements CybrillaClient {
             put(payload, "generate_first_installment_now", true);
         }
         return payload;
+    }
+
+    /**
+     * FP mf_purchase_plans schedule by installment_day (day-of-month 1-28), not a start_date.
+     * Derived from the order's chosen SIP start date and clamped to 28 because FP rejects 29-31
+     * (months that lack those days). Falls back to today's day-of-month when no start date was captured.
+     */
+    private int sipInstallmentDay(TransactionOrder order) {
+        LocalDate startDate = order == null ? null : order.getSipStartDate();
+        int day = startDate != null ? startDate.getDayOfMonth() : LocalDate.now().getDayOfMonth();
+        return Math.min(Math.max(day, 1), 28);
     }
 
     private Map<String, Object> redemptionPayload(TransactionOrder order, Investor investor, ProductScheme productScheme) {

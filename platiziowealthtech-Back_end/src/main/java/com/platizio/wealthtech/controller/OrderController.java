@@ -9,6 +9,7 @@ import com.platizio.wealthtech.dto.BulkOrderCreateRequest;
 import com.platizio.wealthtech.dto.BulkOrderUploadResponse;
 import com.platizio.wealthtech.dto.OrderCreateRequest;
 import com.platizio.wealthtech.dto.SipCancelRequest;
+import com.platizio.wealthtech.dto.SipUpdateRequest;
 import com.platizio.wealthtech.security.AuthenticatedDistributorPrincipal;
 import com.platizio.wealthtech.security.JwtAuthPrincipal;
 import com.platizio.wealthtech.service.BulkOrderUploadService;
@@ -143,6 +144,15 @@ public class OrderController {
             Authentication auth
     ) {
         return orderService.cancelSipOrder(orderId, actorId(auth), request);
+    }
+
+    @PatchMapping("/{orderId}/sip")
+    public TransactionOrder updateSip(
+            @PathVariable UUID orderId,
+            @Valid @RequestBody SipUpdateRequest request,
+            Authentication auth
+    ) {
+        return orderService.updateSipPlan(orderId, request, actorId(auth));
     }
 
     /**

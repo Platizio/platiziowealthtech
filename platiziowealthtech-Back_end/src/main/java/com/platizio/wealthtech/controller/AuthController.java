@@ -1,15 +1,19 @@
 package com.platizio.wealthtech.controller;
 
 import com.platizio.wealthtech.domain.OtpPurpose;
+import com.platizio.wealthtech.dto.ArnValidationRequest;
+import com.platizio.wealthtech.dto.ArnValidationResponse;
 import com.platizio.wealthtech.dto.AuthLoginRequest;
 import com.platizio.wealthtech.dto.AuthResponse;
 import com.platizio.wealthtech.dto.AuthSignupRequest;
+import com.platizio.wealthtech.dto.DistributorVerificationStatusResponse;
 import com.platizio.wealthtech.dto.ForgotPasswordRequest;
 import com.platizio.wealthtech.dto.ForgotPasswordResponse;
 import com.platizio.wealthtech.dto.OtpRequest;
 import com.platizio.wealthtech.dto.OtpRequestResponse;
 import com.platizio.wealthtech.dto.OtpVerifyRequest;
 import com.platizio.wealthtech.dto.ResetPasswordRequest;
+import com.platizio.wealthtech.service.ArnValidationService;
 import com.platizio.wealthtech.service.AuthCookieService;
 import com.platizio.wealthtech.service.AuthService;
 import com.platizio.wealthtech.service.OtpService;
@@ -37,17 +41,38 @@ public class AuthController {
     private final AuthCookieService authCookieService;
     private final PasswordResetService passwordResetService;
     private final OtpService otpService;
+    private final ArnValidationService arnValidationService;
 
     public AuthController(
             AuthService authService,
             AuthCookieService authCookieService,
             PasswordResetService passwordResetService,
-            OtpService otpService
+            OtpService otpService,
+            ArnValidationService arnValidationService
     ) {
         this.authService = authService;
         this.authCookieService = authCookieService;
         this.passwordResetService = passwordResetService;
         this.otpService = otpService;
+        this.arnValidationService = arnValidationService;
+    }
+
+    @Operation(summary = "Validate a distributor ARN",
+            description = "Validates an AMFI Registration Number (ARN) / KYD status with the configured provider "
+                    + "before signup. Public — used by the distributor signup form.")
+    @PostMapping("/arn-validation")
+    public ArnValidationResponse validateArn(@Valid @RequestBody ArnValidationRequest request) {
+        return arnValidationService.toResponse(arnValidationService.validate(request.arnNumber()));
+    }
+
+    @Operation(summary = "Distributor verification status",
+            description = "Returns the authenticated distributor's ARN/KYD verdict and account approval state.")
+    @GetMapping("/verification-status")
+    public DistributorVerificationStatusResponse verificationStatus(Principal principal) {
+        if (principal == null) {
+            throw new BadCredentialsException("Not authenticated");
+        }
+        return authService.verificationStatus(principal.getName());
     }
 
     @Operation(summary = "Register a new distributor", description = "Creates a new distributor account and sets an HttpOnly JWT cookie.")
