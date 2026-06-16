@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useNavigate } from 'react-router-dom';
-import { Search, Filter, ChevronLeft, CheckCircle2, Clock, XCircle, AlertCircle, RefreshCw, ArrowDown, ArrowUp, ArrowUpDown, Inbox } from 'lucide-react';
+import { Search, Filter, ChevronLeft, CheckCircle2, Clock, XCircle, AlertCircle, RefreshCw, ArrowDown, ArrowUp, ArrowUpDown, Inbox, Pencil, TrendingDown } from 'lucide-react';
 import { apiFetch } from '../config/api';
 import InvestorActionLink from '../components/InvestorActionLink';
 import Pagination from '../components/Pagination';
@@ -10,6 +10,7 @@ import { formatDateTime } from '../utils/formatDate';
 import { buildInvestorActionUrl, formatOrderStatusLabel, normalizeOrderStatus } from '../utils/investorAction';
 import { isPersistedSchemeId } from '../utils/productSchemeKey';
 import { isSipCancellable } from '../utils/sipCancel';
+import { isRedeemableHolding, submitRedemption } from '../utils/redeemOrder';
 import type { TransactionListItem } from '../types/order';
 import EmptyState from '../components/EmptyState';
 
@@ -249,7 +250,17 @@ export default function Transactions({ userData }: { userData?: any }) {
         const formatted: TransactionListItem[] = orders.map((o: any) => {
           const inv = investorMap.get(o.investorId) as any;
           const scm = schemeMap.get(o.productSchemeId) as any;
-          const schemeKnown = Boolean(o.productSchemeId && scm && isPersistedSchemeId(o.productSchemeId));
+          // Fund-name precedence (mirrors backend ProductSchemeOrderSupport.displayName):
+          //   1. o.productSchemeName — the snapshot the backend writes onto every order at
+          //      creation time. It is always correct and immune to the /products/schemes
+          //      page-size cap (server caps size to 100), which is what previously made the
+          //      scheme-map lookup miss and render "Unknown fund" + a false "Payment Failed".
+          //   2. the live scheme map — only a fallback for legacy orders placed before the
+          //      snapshot columns existed.
+          const snapshotName = typeof o.productSchemeName === 'string' ? o.productSchemeName.trim() : '';
+          const mappedName = scm && typeof scm.schemeName === 'string' ? scm.schemeName.trim() : '';
+          const resolvedFund = snapshotName || mappedName;
+          const schemeKnown = Boolean(resolvedFund) || Boolean(scm && isPersistedSchemeId(o.productSchemeId));
           const rawStatus = !schemeKnown && normalizeOrderStatus(o.orderStatus) !== 'CANCELLED'
             ? 'FAILED'
             : (o.orderStatus || 'Draft');
@@ -259,7 +270,7 @@ export default function Transactions({ userData }: { userData?: any }) {
             investorId: o.investorId,
             productSchemeId: o.productSchemeId,
             investor: inv ? inv.fullName || 'Unknown Investor' : 'Unknown Investor',
-            fund: schemeKnown ? (scm.schemeName || 'Unknown Scheme') : 'Unknown fund',
+            fund: resolvedFund || 'Unknown fund',
             type: o.transactionType || 'Lumpsum',
             amount: o.amount ? `₹${o.amount.toLocaleString()}` : '—',
             rawAmount: o.amount || 0,
@@ -480,6 +491,18 @@ function TransactionDetail({
   const [cancelling, setCancelling] = useState(false);
   const [cancelError, setCancelError] = useState('');
   const [linkCopied, setLinkCopied] = useState(false);
+  // Edit an active SIP in place via FP "Update a Purchase Plan"
+  // (PATCH /orders/{id}/sip → PATCH /v2/mf_purchase_plans). Mirrors the SIP Dashboard modal.
+  const [editingSip, setEditingSip] = useState(false);
+  const [editAmount, setEditAmount] = useState('');
+  const [editDay, setEditDay] = useState('');
+  const [savingEdit, setSavingEdit] = useState(false);
+  const [editError, setEditError] = useState('');
+  // Redeem a completed one-time purchase (POST /orders/{id}/redemption).
+  const [redeeming, setRedeeming] = useState(false);
+  const [redeemed, setRedeemed] = useState(false);
+  const [redeemMsg, setRedeemMsg] = useState('');
+  const [redeemError, setRedeemError] = useState('');
   const isSipOrder = String(liveTx.type || '').toUpperCase() === 'SIP';
   const actionUrl = buildInvestorActionUrl(liveTx.investorActionUrl);
   const awaitingAction =
@@ -554,6 +577,73 @@ function TransactionDetail({
     }
   };
 
+  const openEditSip = () => {
+    setEditError('');
+    const numeric = Number(String(liveTx.amount).replace(/[^0-9.]/g, ''));
+    setEditAmount(Number.isFinite(numeric) && numeric > 0 ? String(numeric) : '');
+    setEditDay('');
+    setEditingSip(true);
+  };
+
+  const submitEditSip = async () => {
+    const amountNum = editAmount.trim() === '' ? undefined : Number(editAmount);
+    const dayNum = editDay.trim() === '' ? undefined : Number(editDay);
+    if (amountNum === undefined && dayNum === undefined) {
+      setEditError('Enter a new amount and/or installment day.');
+      return;
+    }
+    if (amountNum !== undefined && (!Number.isFinite(amountNum) || amountNum <= 0)) {
+      setEditError('Amount must be greater than 0.');
+      return;
+    }
+    if (dayNum !== undefined && (!Number.isInteger(dayNum) || dayNum < 1 || dayNum > 28)) {
+      setEditError('Installment day must be a whole number between 1 and 28.');
+      return;
+    }
+    setSavingEdit(true);
+    setEditError('');
+    try {
+      const body: Record<string, unknown> = {};
+      if (amountNum !== undefined) body.amount = amountNum;
+      if (dayNum !== undefined) body.installmentDay = dayNum;
+      const response = await apiFetch(`/orders/${liveTx.id}/sip`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (!response.ok) {
+        const errorBody = await response.json().catch(() => null);
+        throw new Error(errorBody?.message || `Edit SIP failed (${response.status})`);
+      }
+      if (amountNum !== undefined) {
+        setLiveTx(prev => ({ ...prev, amount: `₹${amountNum.toLocaleString('en-IN')}`, rawAmount: amountNum }));
+      }
+      setEditingSip(false);
+    } catch (err: any) {
+      setEditError(err?.message || 'Failed to update SIP. Please try again.');
+    } finally {
+      setSavingEdit(false);
+    }
+  };
+
+  const redeemHolding = async () => {
+    if (redeeming || redeemed) return;
+    if (!window.confirm(`Redeem the full holding in "${liveTx.fund}" (${liveTx.amount})? This sells the units back to the AMC.`)) {
+      return;
+    }
+    setRedeeming(true);
+    setRedeemMsg('');
+    setRedeemError('');
+    const result = await submitRedemption(liveTx.id);
+    if (result.ok) {
+      setRedeemed(true);
+      setRedeemMsg(`Redemption submitted for "${liveTx.fund}". Track its progress under Transactions.`);
+    } else {
+      setRedeemError(result.message);
+    }
+    setRedeeming(false);
+  };
+
   return (
     <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} className="p-8 max-w-5xl">
       {confirmCancel && (
@@ -565,6 +655,59 @@ function TransactionDetail({
           onCancel={() => setConfirmCancel(false)}
           onConfirm={cancelSip}
         />
+      )}
+      {editingSip && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">
+          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl">
+            <h2 className="text-lg font-semibold text-slate-800">Edit SIP</h2>
+            <p className="mt-1 text-sm text-slate-500">{liveTx.investor} · {liveTx.fund}</p>
+            <p className="mt-2 text-xs text-slate-400">
+              Updates the active plan with Fintech Primitives (PATCH /v2/mf_purchase_plans). Changes apply to the
+              remaining installments and must be made at least 2 days before the next installment.
+            </p>
+            {editError && (
+              <div className="mt-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-700">{editError}</div>
+            )}
+            <div className="mt-5 space-y-4">
+              <div>
+                <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 mb-1">New amount (₹)</label>
+                <input
+                  type="number" min="1" inputMode="numeric"
+                  value={editAmount}
+                  onChange={e => setEditAmount(e.target.value)}
+                  placeholder="Leave blank to keep current amount"
+                  className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm outline-none focus:border-blue-500 focus:bg-white focus:ring-2 focus:ring-blue-100"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 mb-1">Installment day (1–28)</label>
+                <input
+                  type="number" min="1" max="28" inputMode="numeric"
+                  value={editDay}
+                  onChange={e => setEditDay(e.target.value)}
+                  placeholder="Leave blank to keep current day"
+                  className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm outline-none focus:border-blue-500 focus:bg-white focus:ring-2 focus:ring-blue-100"
+                />
+              </div>
+            </div>
+            <div className="mt-6 flex justify-end gap-3">
+              <button
+                onClick={() => setEditingSip(false)}
+                disabled={savingEdit}
+                className="rounded-lg border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={submitEditSip}
+                disabled={savingEdit}
+                className="rounded-lg bg-[#0B1B3E] px-4 py-2 text-sm font-semibold text-white hover:bg-[#1A3066] disabled:opacity-50"
+              >
+                {savingEdit ? 'Saving...' : 'Save changes'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
       <button onClick={onBack} className="flex items-center gap-2 text-sm font-medium text-slate-500 hover:text-slate-800 mb-6 transition-colors">
         <ChevronLeft className="w-4 h-4" /> Back to Transactions
@@ -583,6 +726,14 @@ function TransactionDetail({
         <div className="flex gap-2">
         {isSipOrder && isSipCancellable(liveTx.rawOrderStatus) && (
           <button
+            onClick={openEditSip}
+            className="flex items-center gap-2 px-4 py-2 text-sm font-medium bg-white border border-slate-200 text-slate-700 rounded-lg hover:bg-slate-50 transition-colors"
+          >
+            <Pencil className="w-4 h-4" /> Edit SIP
+          </button>
+        )}
+        {isSipOrder && isSipCancellable(liveTx.rawOrderStatus) && (
+          <button
             onClick={() => setConfirmCancel(true)}
             className="flex items-center gap-2 px-4 py-2 text-sm font-medium bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors"
           >
@@ -598,9 +749,26 @@ function TransactionDetail({
             <RefreshCw className="w-4 h-4" /> Place New Order
           </button>
         )}
+        {!isSipOrder && !redeemed && isRedeemableHolding(liveTx.rawOrderStatus, liveTx.type) && (
+          <button
+            type="button"
+            onClick={redeemHolding}
+            disabled={redeeming}
+            className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-amber-700 border border-amber-200 bg-white rounded-lg hover:bg-amber-50 transition-colors disabled:opacity-50"
+          >
+            <TrendingDown className="w-4 h-4" /> {redeeming ? 'Redeeming…' : 'Redeem'}
+          </button>
+        )}
+        {redeemed && (
+          <span className="flex items-center gap-1.5 text-sm font-semibold text-slate-400 px-2">
+            <CheckCircle2 className="w-4 h-4" /> Redemption submitted
+          </span>
+        )}
         </div>
       </div>
       {cancelError && <div className="mb-5 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-700">{cancelError}</div>}
+      {redeemMsg && <div className="mb-5 flex items-start gap-2 rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-sm font-medium text-green-700"><CheckCircle2 className="w-4 h-4 mt-0.5 flex-shrink-0" />{redeemMsg}</div>}
+      {redeemError && <div className="mb-5 flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-700"><AlertCircle className="w-4 h-4 mt-0.5 flex-shrink-0" />{redeemError}</div>}
 
       <div className="grid grid-cols-3 gap-6">
         <div className="col-span-2 space-y-6">

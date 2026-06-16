@@ -278,6 +278,12 @@ export default function Onboarding({ onComplete, onBack }: { onComplete: () => v
   const [showConfPwd,  setShowConfPwd]  = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError,  setSubmitError]  = useState<string | null>(null);
+  // Know-Your-Distributor: ARN validation result (from POST /auth/arn-validation) gating step 2.
+  const [arnValidating, setArnValidating] = useState(false);
+  const [arnValidation, setArnValidation] = useState<{
+    valid: boolean; status: string; message: string;
+    source?: string; arnExpiryDate?: string | null; distributorName?: string | null; firmName?: string | null;
+  } | null>(null);
 
   // ── Updaters ───────────────────────────────────────────────────────────────
   const set = <K extends keyof FormData>(k: K, v: FormData[K]) => {
@@ -335,6 +341,50 @@ export default function Onboarding({ onComplete, onBack }: { onComplete: () => v
     }));
 
   // ── Validation ─────────────────────────────────────────────────────────────
+  // Validate the ARN with the backend KYD provider (POST /auth/arn-validation) before allowing
+  // the distributor to proceed. On success, auto-fills the ARN expiry from the provider.
+  const validateArn = async () => {
+    const arn = data.arn.trim();
+    if (!/^ARN-\d+$/i.test(arn)) {
+      setErrors(prev => ({ ...prev, arn: 'Enter a valid ARN (e.g. ARN-102943)' }));
+      return;
+    }
+    setArnValidating(true);
+    setArnValidation(null);
+    setErrors(prev => { const e = { ...prev }; delete e.arn; return e; });
+    try {
+      const res = await apiFetch('/auth/arn-validation', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ arnNumber: arn }),
+      });
+      const body = await res.json().catch(() => null);
+      if (!res.ok) {
+        throw new Error(body?.message || `ARN validation failed (HTTP ${res.status}).`);
+      }
+      setArnValidation({
+        valid: !!body?.valid,
+        status: body?.status || (body?.valid ? 'VERIFIED' : 'REJECTED'),
+        message: body?.message || (body?.valid ? 'ARN verified.' : 'ARN could not be verified.'),
+        source: body?.source,
+        arnExpiryDate: body?.arnExpiryDate,
+        distributorName: body?.distributorName,
+        firmName: body?.firmName,
+      });
+      if (body?.valid && body?.arnExpiryDate) {
+        set('arnExpiryDate', body.arnExpiryDate);
+      }
+    } catch (err) {
+      setArnValidation({
+        valid: false,
+        status: 'ERROR',
+        message: err instanceof Error ? err.message : 'ARN validation failed. Please try again.',
+      });
+    } finally {
+      setArnValidating(false);
+    }
+  };
+
   const validate = (s: number) => {
     const e: Record<string, string> = {};
     if (s === 1) {
@@ -355,6 +405,10 @@ export default function Onboarding({ onComplete, onBack }: { onComplete: () => v
     if (s === 2) {
       if (!/^ARN-\d+$/i.test(data.arn.trim()))
         e.arn = 'Enter a valid ARN (e.g. ARN-102943)';
+      else if (!arnValidation || !arnValidation.valid)
+        e.arn = arnValidation && !arnValidation.valid && arnValidation.message
+          ? arnValidation.message
+          : 'Please validate your ARN before continuing';
       if (!data.arnExpiryDate)
         e.arnExpiryDate = 'Required';
       else if (data.arnExpiryDate <= new Date().toISOString().split('T')[0])
@@ -741,12 +795,24 @@ export default function Onboarding({ onComplete, onBack }: { onComplete: () => v
                   <div className="grid grid-cols-2 gap-4">
                     <div>
                       <label className={CLS_LABEL}>ARN Number <span className="text-red-400">*</span></label>
-                      <input type="text" value={data.arn} placeholder="e.g. ARN-102943"
-                        onChange={e => set('arn', e.target.value)}
-                        className={CLS_INPUT + (errors.arn ? ' border-red-300 ring-1 ring-red-200' : '')} />
+                      <div className="flex gap-2">
+                        <input type="text" value={data.arn} placeholder="e.g. ARN-102943"
+                          onChange={e => { set('arn', e.target.value); setArnValidation(null); }}
+                          className={CLS_INPUT + (errors.arn ? ' border-red-300 ring-1 ring-red-200'
+                            : arnValidation?.valid ? ' border-green-300 ring-1 ring-green-200' : '')} />
+                        <button type="button" onClick={validateArn}
+                          disabled={arnValidating || !data.arn.trim()}
+                          className="whitespace-nowrap px-3 py-2 text-xs font-semibold rounded-xl bg-[#0B1B3E] text-white hover:bg-[#1A3066] transition-colors disabled:opacity-50">
+                          {arnValidating ? 'Validating…' : arnValidation?.valid ? 'Re-validate' : 'Validate ARN'}
+                        </button>
+                      </div>
                       {errors.arn
                         ? <p className={CLS_ERR}><AlertCircle className="w-3 h-3" />{errors.arn}</p>
-                        : <p className="text-[11px] text-slate-400 mt-1">Format: ARN- followed by digits</p>}
+                        : arnValidation
+                          ? (arnValidation.valid
+                              ? <p className="text-[11px] text-green-600 mt-1 flex items-center gap-1"><Check className="w-3 h-3" /> {arnValidation.message}{arnValidation.source ? ` · ${arnValidation.source}` : ''}</p>
+                              : <p className={CLS_ERR}><AlertCircle className="w-3 h-3" />{arnValidation.message}</p>)
+                          : <p className="text-[11px] text-slate-400 mt-1">Validate your ARN with AMFI/KYD before continuing</p>}
                     </div>
                     <div>
                       <label className={CLS_LABEL}>ARN Expiry Date <span className="text-red-400">*</span></label>

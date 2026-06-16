@@ -48,6 +48,7 @@ const InvestorOnboarding  = lazy(() => import('./views/InvestorOnboarding'));
 const InvestorTransaction = lazy(() => import('./views/InvestorTransaction'));
 const InvestorKycModify   = lazy(() => import('./views/InvestorKycModify'));
 const InvestorRedeem      = lazy(() => import('./views/InvestorRedeem'));
+const Redemptions         = lazy(() => import('./views/Redemptions'));
 const Portfolio           = lazy(() => import('./views/Portfolio'));
 const Reports             = lazy(() => import('./views/Reports'));
 const BulkOrderUpload     = lazy(() => import('./views/BulkOrderUpload'));
@@ -179,6 +180,7 @@ export default function App() {
           <Route path="/distributor/sip-dashboard"   element={<SipDashboard onBack={() => navigate('/distributor/dashboard')} userData={userData} />} />
           <Route path="/distributor/action-center"   element={<ActionCenter onBack={() => navigate('/distributor/dashboard')} userData={userData} />} />
           <Route path="/distributor/portfolio"       element={<Portfolio userData={userData} />} />
+          <Route path="/distributor/redemptions"     element={<Redemptions userData={userData} />} />
           <Route path="/distributor/reports"         element={<Reports userData={userData} />} />
           <Route path="/distributor/tools"           element={<BulkOrderUpload userData={userData} />} />
           <Route path="/distributor/communications"  element={<Communications userData={userData} />} />

@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from 'recharts';
-import { DollarSign, BarChart2, TrendingUp, Users, AlertTriangle } from 'lucide-react';
+import { DollarSign, BarChart2, TrendingUp, TrendingDown, Users, AlertTriangle, CheckCircle2 } from 'lucide-react';
 import { apiFetch } from '../config/api';
+import { isRedeemableHolding, submitRedemption } from '../utils/redeemOrder';
 
 function fmt(n: number) {
   if (n >= 10_000_000) return `₹${(n / 10_000_000).toFixed(2)}Cr`;
@@ -86,6 +87,10 @@ export default function Portfolio({ userData }: { userData?: any }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [catFilter, setCatFilter] = useState<'ALL' | 'MF' | 'SIF'>('ALL');
+  const [redeemingId, setRedeemingId] = useState('');
+  const [redeemedIds, setRedeemedIds] = useState<Set<string>>(new Set());
+  const [redeemMsg, setRedeemMsg] = useState('');
+  const [redeemErr, setRedeemErr] = useState('');
 
   const loadPortfolio = useCallback(async () => {
     if (!userData?.id) {
@@ -114,6 +119,28 @@ export default function Portfolio({ userData }: { userData?: any }) {
   useEffect(() => {
     void loadPortfolio();
   }, [loadPortfolio]);
+
+  const redeemHolding = async (orderId: string, schemeName: string, amount: number) => {
+    if (!orderId || redeemingId) return;
+    if (
+      !window.confirm(
+        `Redeem the full holding in "${schemeName}" (${fmt(num(amount))})? This sells the units back to the AMC.`,
+      )
+    ) {
+      return;
+    }
+    setRedeemingId(orderId);
+    setRedeemMsg('');
+    setRedeemErr('');
+    const result = await submitRedemption(orderId);
+    if (result.ok) {
+      setRedeemedIds(prev => new Set(prev).add(orderId));
+      setRedeemMsg(`Redemption submitted for "${schemeName}". Track it under Transactions.`);
+    } else {
+      setRedeemErr(result.message);
+    }
+    setRedeemingId('');
+  };
 
   const summary = data?.summary;
   const holdings = data?.holdings || [];
@@ -290,6 +317,18 @@ export default function Portfolio({ userData }: { userData?: any }) {
 
       <div className="bg-white rounded-2xl p-5 border border-slate-100 shadow-sm">
         <h2 className="text-sm font-semibold text-slate-700 mb-4">Holdings</h2>
+        {redeemMsg && (
+          <div className="mb-4 flex items-start gap-2 rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-700">
+            <CheckCircle2 className="w-4 h-4 mt-0.5 flex-shrink-0" />
+            <span>{redeemMsg}</span>
+          </div>
+        )}
+        {redeemErr && (
+          <div className="mb-4 flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+            <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+            <span>{redeemErr}</span>
+          </div>
+        )}
         {holdings.length === 0 ? (
           <div className="h-20 flex items-center justify-center text-sm text-slate-400">
             No completed holdings yet. Lumpsum and active SIP orders appear here after payment.
@@ -304,6 +343,7 @@ export default function Portfolio({ userData }: { userData?: any }) {
                   <th className="text-left pb-3">Type</th>
                   <th className="text-right pb-3">Amount</th>
                   <th className="text-left pb-3">Status</th>
+                  <th className="text-right pb-3">Action</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-50">
@@ -329,6 +369,24 @@ export default function Portfolio({ userData }: { userData?: any }) {
                         <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${statusClass(row.displayStatus)}`}>
                           {row.displayStatus}
                         </span>
+                      </td>
+                      <td className="py-3 text-right">
+                        {redeemedIds.has(row.orderId) ? (
+                          <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-slate-400">
+                            <CheckCircle2 className="w-3 h-3" /> Redemption submitted
+                          </span>
+                        ) : isRedeemableHolding(row.orderStatus, row.transactionType) ? (
+                          <button
+                            onClick={() => redeemHolding(row.orderId, row.schemeName, num(row.amount))}
+                            disabled={redeemingId === row.orderId}
+                            className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold text-amber-700 border border-amber-200 rounded-lg hover:bg-amber-50 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                          >
+                            <TrendingDown className="w-3 h-3" />
+                            {redeemingId === row.orderId ? 'Redeeming…' : 'Redeem'}
+                          </button>
+                        ) : (
+                          <span className="text-[11px] text-slate-300">—</span>
+                        )}
                       </td>
                     </tr>
                   );

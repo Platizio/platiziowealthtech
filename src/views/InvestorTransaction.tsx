@@ -69,6 +69,9 @@ interface Props {
 type ProductColor = 'blue' | 'violet' | 'indigo' | 'rose' | 'emerald';
 type Product = {
   id: string;
+  productSchemeId?: string;
+  externalSchemeCode?: string;
+  externalIsin?: string;
   name: string;
   category: string;
   risk: string;
@@ -122,7 +125,10 @@ const mapSchemeToProduct = (scheme: any, index: number): Product | null => {
   const fundCategory = readText(meta.category, meta.fund_category, scheme.category, scheme.productType) || 'Mutual Fund';
 
   return {
-    id: scheme.id,
+    id: scheme.id || scheme.externalSchemeCode || scheme.externalIsin || `scheme-${index}`,
+    productSchemeId: isPersistedSchemeId(scheme.id) ? scheme.id : undefined,
+    externalSchemeCode: readText(scheme.externalSchemeCode, scheme.external_scheme_code),
+    externalIsin: readText(scheme.externalIsin, scheme.external_isin),
     name: formatSchemeDisplayName(scheme),
     category: fundCategory,
     risk: scheme.riskLevel || 'Moderate',
@@ -370,7 +376,7 @@ export default function InvestorTransaction({ investor, onComplete, onBack }: Pr
 
   const handleConfirm = async () => {
     const validSipForm = !isSip || await trigger();
-    if (!product || !isPersistedSchemeId(product.id)) {
+    if (!product || (!product.productSchemeId && !product.externalSchemeCode && !product.externalIsin)) {
       setSubmitError('Select a synced fund from the catalogue before placing an order.');
       return;
     }
@@ -390,19 +396,23 @@ export default function InvestorTransaction({ investor, onComplete, onBack }: Pr
       console.group('[Platizio] lumpsum_order_create');
       console.log('request', {
         investorId: investor.id,
-        productSchemeId: product.id,
+        productSchemeId: product.productSchemeId,
+        externalSchemeCode: product.externalSchemeCode,
+        externalIsin: product.externalIsin,
         amount: amountNum,
-        paymentMode: isSip ? 'MANDATE' : 'BANK_TRANSFER',
+        paymentMode: isSip ? 'MANDATE' : 'UPI',
         transactionType: isSip ? 'SIP' : 'LUMPSUM_PURCHASE',
       });
       const payload = {
         investorId: investor.id,
-        productSchemeId: product.id,
+        productSchemeId: product.productSchemeId,
+        externalSchemeCode: product.externalSchemeCode || undefined,
+        externalIsin: product.externalIsin || undefined,
         type: isSip ? 'SIP' : 'LUMPSUM',
         transactionType: isSip ? 'SIP' : 'LUMPSUM_PURCHASE',
         amount: amountNum,
-        paymentMode: isSip ? 'MANDATE' : 'BANK_TRANSFER',
-        mandateMode: isSip ? 'AUTO_DEBIT' : bank.bankName,
+        paymentMode: isSip ? 'MANDATE' : 'UPI',
+        mandateMode: isSip ? 'AUTO_DEBIT' : undefined,
         sipFrequency: isSip ? frequency : undefined,
         sipStartDate: isSip ? startDate : undefined,
         sipInstalments: isSip && instalments ? instalments : undefined,

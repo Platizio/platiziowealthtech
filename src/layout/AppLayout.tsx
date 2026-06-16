@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard, Users, BookOpen, Search, Bell, Menu,
-  ArrowLeftRight, UserCircle2, TrendingUp, Target,
+  ArrowLeftRight, UserCircle2, TrendingUp, TrendingDown, Target,
   BarChart3, Network, Layers, UserCheck, ShieldCheck, X, AlertTriangle,
   PieChart, RefreshCw, FileBarChart2, MessageSquare, ClipboardList, Calculator, Wrench
 } from 'lucide-react';
@@ -19,6 +19,7 @@ const DIST_NAV_PRIMARY = [
   { id: '/distributor/ledger',         icon: <BookOpen className="w-4 h-4" />,        label: 'Products' },
   { id: '/distributor/transactions',   icon: <ArrowLeftRight className="w-4 h-4" />,  label: 'Transactions' },
   { id: '/distributor/portfolio',      icon: <PieChart className="w-4 h-4" />,      label: 'Portfolio' },
+  { id: '/distributor/redemptions',    icon: <TrendingDown className="w-4 h-4" />,  label: 'Redemptions' },
   { id: '/distributor/sip-dashboard',  icon: <RefreshCw className="w-4 h-4" />,      label: 'SIP / Mandates' },
   { id: '/distributor/reports',        icon: <FileBarChart2 className="w-4 h-4" />,  label: 'Reports' },
   { id: '/distributor/tools',          icon: <Wrench className="w-4 h-4" />,         label: 'Tools' },

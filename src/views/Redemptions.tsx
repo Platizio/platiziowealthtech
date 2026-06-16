@@ -1,21 +1,22 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { useNavigate, useParams, useLocation } from 'react-router-dom';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { motion } from 'motion/react';
-import { ArrowLeft, TrendingDown, AlertCircle, CheckCircle2, Layers, RefreshCw } from 'lucide-react';
+import { TrendingDown, AlertCircle, CheckCircle2, Layers, RefreshCw, Search } from 'lucide-react';
 import { apiFetch } from '../config/api';
-import { getPageContent } from '../utils/pagination';
 
-// Order statuses that represent a settled holding the investor actually owns
-// and can therefore redeem (sell). Draft / failed / pending orders are not
-// redeemable.
+// Order statuses that represent a settled holding the investor actually owns and
+// can therefore redeem (sell). Draft / failed / pending orders are not redeemable.
 const REDEEMABLE_STATUSES = new Set(['SUCCESSFUL', 'COMPLETED']);
-// SIPs are managed (paused / cancelled) from the SIP Dashboard, so the redeem
-// screen only surfaces one-time purchase holdings.
+// SIPs are managed (paused / cancelled) from the SIP Dashboard, so the redemption
+// surface only lists one-time purchase holdings.
 const REDEEMABLE_TYPES = new Set(['PURCHASE', 'LUMPSUM_PURCHASE']);
 
-interface Holding {
+interface RedeemableHolding {
   id: string;
+  investorId: string;
+  investorName: string;
   fund: string;
+  amc: string;
   type: string;
   amount: number;
   units?: number;
@@ -32,41 +33,55 @@ const formatCurrency = (value?: number) =>
 const formatDate = (value?: string) => {
   if (!value) return '—';
   const d = new Date(value);
-  return Number.isNaN(d.getTime()) ? '—' : d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+  return Number.isNaN(d.getTime())
+    ? '—'
+    : d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
 };
 
-export default function InvestorRedeem({ userData: _userData }: { userData?: any }) {
-  const { investorId = '' } = useParams();
+/**
+ * Distributor-wide redemption surface. Lists every redeemable (completed, one-time
+ * purchase) holding across the distributor's investors and submits a full redemption
+ * against the chosen holding via POST /api/v1/orders/{orderId}/redemption.
+ *
+ * Fund names come from the snapshot the backend writes onto each order at creation
+ * time (o.productSchemeName / o.productSchemeAmcName), so this view never needs the
+ * bulk /products/schemes lookup and is immune to the scheme page-size cap that caused
+ * "Unknown fund" elsewhere.
+ */
+export default function Redemptions({ userData }: { userData?: any }) {
   const navigate = useNavigate();
-  const location = useLocation();
-  const investorFromState = (location.state as any)?.investor;
+  const distributorId = userData?.id ? String(userData.id) : '';
 
-  const [investorName, setInvestorName] = useState<string>(investorFromState?.fullName || '');
-  const [holdings, setHoldings] = useState<Holding[]>([]);
+  const [holdings, setHoldings] = useState<RedeemableHolding[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
   const [redeemingId, setRedeemingId] = useState('');
   const [actionError, setActionError] = useState('');
   const [actionMessage, setActionMessage] = useState('');
+  const [search, setSearch] = useState('');
 
-  const loadHoldings = async () => {
-    if (!investorId) return;
+  const loadHoldings = useCallback(async () => {
+    if (!distributorId) {
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     setLoadError('');
     try {
-      const [ordersRes, schemesRes] = await Promise.all([
-        apiFetch(`/orders/by-investor/${investorId}`),
-        apiFetch('/products/schemes?size=200'),
+      const [ordersRes, investorsRes] = await Promise.all([
+        apiFetch(`/orders/by-distributor/${distributorId}`),
+        apiFetch(`/investors/by-distributor/${distributorId}`),
       ]);
 
       if (!ordersRes.ok) {
-        throw new Error(`Could not load this investor's orders (HTTP ${ordersRes.status}).`);
+        throw new Error(`Could not load orders (HTTP ${ordersRes.status}).`);
       }
 
       const orders = await ordersRes.json().catch(() => []);
-      const schemesPayload = schemesRes.ok ? await schemesRes.json() : [];
-      const schemes = getPageContent(schemesPayload);
-      const schemeMap = new Map<string, any>(schemes.map((s: any) => [s.id, s]));
+      const investors = investorsRes.ok ? await investorsRes.json().catch(() => []) : [];
+      const investorMap = new Map<string, any>(
+        (Array.isArray(investors) ? investors : []).map((i: any) => [i.id, i]),
+      );
 
       const redeemable = (Array.isArray(orders) ? orders : []).filter(
         (o: any) =>
@@ -74,9 +89,9 @@ export default function InvestorRedeem({ userData: _userData }: { userData?: any
           REDEEMABLE_TYPES.has(String(o.transactionType || '').toUpperCase()),
       );
 
-      // Mark holdings that already have a redemption in flight/done so we don't
-      // submit a duplicate redemption against the same order.
-      const withRedemptionFlags = await Promise.all(
+      // Mark holdings that already have a redemption in flight/done so we don't submit
+      // a duplicate redemption against the same order (best-effort; backend also guards).
+      const withFlags = await Promise.all(
         redeemable.map(async (o: any) => {
           let alreadyRedeemed = false;
           try {
@@ -86,45 +101,49 @@ export default function InvestorRedeem({ userData: _userData }: { userData?: any
               alreadyRedeemed = Array.isArray(records) && records.length > 0;
             }
           } catch {
-            // Non-fatal — treat as not redeemed; the backend still guards duplicates.
+            // Non-fatal — treat as not redeemed.
           }
-          const scm = schemeMap.get(o.productSchemeId);
-          // Prefer the fund name the backend snapshots onto the order at creation time
-          // (immune to the /products/schemes page-size cap of 100 that makes the bulk
-          // scheme-map lookup miss for holdings beyond the first 100 schemes). Fall back to
-          // the live scheme map, then to a neutral placeholder — never block Redeem on it.
-          const snapshotName = typeof o.productSchemeName === 'string' ? o.productSchemeName.trim() : '';
-          const fund = snapshotName || scm?.schemeName || 'Scheme (name unavailable)';
+          const inv = investorMap.get(o.investorId);
+          const snapshotName =
+            typeof o.productSchemeName === 'string' ? o.productSchemeName.trim() : '';
           return {
             id: o.id,
-            fund,
+            investorId: o.investorId,
+            investorName: inv?.fullName || inv?.full_name || 'Unknown Investor',
+            fund: snapshotName || 'Scheme (name unavailable)',
+            amc: typeof o.productSchemeAmcName === 'string' ? o.productSchemeAmcName.trim() : '',
             type: o.transactionType || 'PURCHASE',
             amount: Number(o.amount) || 0,
             units: o.units != null ? Number(o.units) : undefined,
             status: o.orderStatus || '—',
             createdAt: o.createdAt,
             alreadyRedeemed,
-          } as Holding;
+          } as RedeemableHolding;
         }),
       );
 
-      setHoldings(withRedemptionFlags);
+      setHoldings(withFlags);
     } catch (err) {
       console.error('Failed to load redeemable holdings', err);
       setLoadError(err instanceof Error ? err.message : 'Unable to load holdings.');
     } finally {
       setLoading(false);
     }
-  };
+  }, [distributorId]);
 
   useEffect(() => {
-    loadHoldings();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [investorId]);
+    void loadHoldings();
+  }, [loadHoldings]);
 
-  const redeem = async (holding: Holding) => {
+  const redeem = async (holding: RedeemableHolding) => {
     if (holding.alreadyRedeemed || redeemingId) return;
-    if (!window.confirm(`Redeem the full holding in "${holding.fund}" (${formatCurrency(holding.amount)})? This sells the units back to the AMC.`)) {
+    if (
+      !window.confirm(
+        `Redeem the full holding in "${holding.fund}" for ${holding.investorName} (${formatCurrency(
+          holding.amount,
+        )})? This sells the units back to the AMC.`,
+      )
+    ) {
       return;
     }
     setRedeemingId(holding.id);
@@ -135,7 +154,9 @@ export default function InvestorRedeem({ userData: _userData }: { userData?: any
       if (!response.ok) {
         const body = await response.json().catch(() => null);
         if (response.status === 502 || response.status === 503) {
-          throw new Error('Cybrilla is temporarily unavailable. Your request was not submitted — please try again in a few minutes.');
+          throw new Error(
+            'Cybrilla is temporarily unavailable. Your request was not submitted — please try again in a few minutes.',
+          );
         }
         const message = body?.message || `Redemption failed (HTTP ${response.status}).`;
         if (/mf investment account|investor profile|occupation/i.test(message)) {
@@ -143,15 +164,19 @@ export default function InvestorRedeem({ userData: _userData }: { userData?: any
             `${message} Redemption uses the same investor FP profile setup as purchases — restart the backend if you recently deployed a fix, then retry.`,
           );
         }
-        if (/fintech primitives purchase id|externalorderid/i.test(message)) {
+        if (/fintech primitives purchase id|externalorderid|demo-only/i.test(message)) {
           throw new Error(
             'This holding was not purchased through live Cybrilla POA (demo-only order). Place a real purchase first, then redeem that order.',
           );
         }
         throw new Error(message);
       }
-      setHoldings(prev => prev.map(h => (h.id === holding.id ? { ...h, alreadyRedeemed: true } : h)));
-      setActionMessage(`Redemption submitted for "${holding.fund}". Track its progress under Transactions.`);
+      setHoldings(prev =>
+        prev.map(h => (h.id === holding.id ? { ...h, alreadyRedeemed: true } : h)),
+      );
+      setActionMessage(
+        `Redemption submitted for "${holding.fund}" (${holding.investorName}). Track its progress under Transactions.`,
+      );
     } catch (err) {
       setActionError(err instanceof Error ? err.message : 'Redemption failed. Please try again.');
     } finally {
@@ -159,29 +184,38 @@ export default function InvestorRedeem({ userData: _userData }: { userData?: any
     }
   };
 
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return holdings;
+    return holdings.filter(
+      h =>
+        h.fund.toLowerCase().includes(q) ||
+        h.amc.toLowerCase().includes(q) ||
+        h.investorName.toLowerCase().includes(q),
+    );
+  }, [holdings, search]);
+
   const totalInvested = useMemo(
-    () => holdings.reduce((sum, h) => sum + (h.amount || 0), 0),
-    [holdings],
+    () => filtered.reduce((sum, h) => sum + (h.amount || 0), 0),
+    [filtered],
   );
 
   return (
-    <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="p-8 space-y-6">
-      <button
-        onClick={() => navigate('/distributor/investors')}
-        className="flex items-center gap-2 text-slate-500 hover:text-slate-800 text-sm font-medium transition-colors"
-      >
-        <ArrowLeft className="w-4 h-4" /> Back to Investors
-      </button>
-
+    <motion.div
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      className="p-8 space-y-6"
+    >
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight text-slate-800">Redeem Holdings</h1>
+          <h1 className="text-2xl font-semibold tracking-tight text-slate-800">Redemptions</h1>
           <p className="text-slate-500 text-sm mt-1">
-            {investorName ? `Sell mutual-fund holdings for ${investorName}` : 'Sell an investor\u2019s mutual-fund holdings'} via Cybrilla.
+            Sell completed mutual-fund holdings back to the AMC via Cybrilla POA. Lists every
+            redeemable holding across your investors.
           </p>
         </div>
         <button
-          onClick={loadHoldings}
+          onClick={() => void loadHoldings()}
           disabled={loading}
           className="flex items-center gap-2 px-4 py-2 text-sm font-medium bg-white border border-slate-200 text-slate-700 rounded-lg shadow-sm hover:bg-slate-50 transition-colors disabled:opacity-50"
         >
@@ -192,8 +226,15 @@ export default function InvestorRedeem({ userData: _userData }: { userData?: any
       <div className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
         <AlertCircle className="w-4 h-4 mt-0.5 flex-shrink-0" />
         <span>
-          Redemption here is a <strong>full</strong> redemption of the selected holding. SIPs are paused or cancelled from the
-          {' '}<button onClick={() => navigate('/distributor/sip-dashboard')} className="underline font-semibold">SIP Dashboard</button>.
+          Redemption here is a <strong>full</strong> redemption of the selected holding. SIPs are
+          paused or cancelled from the{' '}
+          <button
+            onClick={() => navigate('/distributor/sip-dashboard')}
+            className="underline font-semibold"
+          >
+            SIP Dashboard
+          </button>
+          .
         </span>
       </div>
 
@@ -211,13 +252,27 @@ export default function InvestorRedeem({ userData: _userData }: { userData?: any
       )}
 
       <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
-        <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
+        <div className="px-5 py-4 border-b border-slate-100 flex flex-wrap items-center justify-between gap-3">
           <h2 className="font-semibold text-slate-800">
-            Redeemable Holdings <span className="ml-2 text-xs font-normal text-slate-400">({holdings.length})</span>
+            Redeemable Holdings{' '}
+            <span className="ml-2 text-xs font-normal text-slate-400">({filtered.length})</span>
           </h2>
-          {holdings.length > 0 && (
-            <span className="text-xs font-medium text-slate-500">Total invested: {formatCurrency(totalInvested)}</span>
-          )}
+          <div className="flex items-center gap-3">
+            <div className="relative">
+              <Search className="w-4 h-4 absolute left-3 top-2.5 text-slate-400" />
+              <input
+                value={search}
+                onChange={e => setSearch(e.target.value)}
+                placeholder="Search fund, AMC, investor…"
+                className="w-64 pl-9 pr-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg outline-none focus:bg-white focus:ring-2 focus:ring-blue-100 focus:border-blue-500"
+              />
+            </div>
+            {filtered.length > 0 && (
+              <span className="text-xs font-medium text-slate-500">
+                Total invested: {formatCurrency(totalInvested)}
+              </span>
+            )}
+          </div>
         </div>
 
         {loading ? (
@@ -231,12 +286,12 @@ export default function InvestorRedeem({ userData: _userData }: { userData?: any
             <p className="text-sm font-semibold text-slate-700">Couldn&rsquo;t load holdings</p>
             <p className="text-xs text-slate-400 mt-1">{loadError}</p>
           </div>
-        ) : holdings.length === 0 ? (
+        ) : filtered.length === 0 ? (
           <div className="py-16 text-center">
             <Layers className="w-7 h-7 text-slate-300 mx-auto mb-2" />
             <p className="text-sm font-semibold text-slate-600">No redeemable holdings</p>
             <p className="text-xs text-slate-400 mt-1">
-              This investor has no completed purchase orders to redeem yet.
+              Completed one-time purchase orders appear here once payment succeeds.
             </p>
           </div>
         ) : (
@@ -244,8 +299,8 @@ export default function InvestorRedeem({ userData: _userData }: { userData?: any
             <table className="w-full text-left">
               <thead className="bg-slate-50 text-[10px] uppercase tracking-wider text-slate-500 font-semibold">
                 <tr>
+                  <th className="px-6 py-4">Investor</th>
                   <th className="px-6 py-4">Fund</th>
-                  <th className="px-6 py-4">Type</th>
                   <th className="px-6 py-4 text-right">Invested</th>
                   <th className="px-6 py-4 text-right">Units</th>
                   <th className="px-6 py-4">Purchased</th>
@@ -253,16 +308,33 @@ export default function InvestorRedeem({ userData: _userData }: { userData?: any
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {holdings.map(h => (
+                {filtered.map(h => (
                   <tr key={h.id} className="hover:bg-slate-50 transition-colors">
                     <td className="px-6 py-4">
-                      <div className="font-semibold text-slate-800 max-w-[260px] truncate">{h.fund}</div>
-                      <div className="text-xs text-slate-400 mt-0.5">{h.status}</div>
+                      <button
+                        onClick={() =>
+                          navigate(`/distributor/investors/${h.investorId}/redeem`, {
+                            state: { investor: { id: h.investorId, fullName: h.investorName } },
+                          })
+                        }
+                        className="font-semibold text-slate-800 hover:text-blue-600 transition-colors text-left"
+                      >
+                        {h.investorName}
+                      </button>
                     </td>
-                    <td className="px-6 py-4 text-sm text-slate-600">{String(h.type).replace(/_/g, ' ')}</td>
-                    <td className="px-6 py-4 text-sm text-right font-mono font-semibold text-slate-800">{formatCurrency(h.amount)}</td>
+                    <td className="px-6 py-4">
+                      <div className="font-medium text-slate-800 max-w-[260px] truncate">{h.fund}</div>
+                      <div className="text-xs text-slate-400 mt-0.5">
+                        {h.amc || String(h.type).replace(/_/g, ' ')}
+                      </div>
+                    </td>
+                    <td className="px-6 py-4 text-sm text-right font-mono font-semibold text-slate-800">
+                      {formatCurrency(h.amount)}
+                    </td>
                     <td className="px-6 py-4 text-sm text-right font-mono text-slate-600">
-                      {h.units != null ? h.units.toLocaleString('en-IN', { maximumFractionDigits: 3 }) : '—'}
+                      {h.units != null
+                        ? h.units.toLocaleString('en-IN', { maximumFractionDigits: 3 })
+                        : '—'}
                     </td>
                     <td className="px-6 py-4 text-sm text-slate-600">{formatDate(h.createdAt)}</td>
                     <td className="px-6 py-4 text-right">

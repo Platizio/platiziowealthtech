@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { motion } from 'motion/react';
-import { ArrowLeft, CheckCircle2, XCircle, Clock, RefreshCw } from 'lucide-react';
+import { ArrowLeft, CheckCircle2, XCircle, Clock, RefreshCw, Pencil } from 'lucide-react';
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer,
@@ -163,6 +163,11 @@ export default function SipDashboard({ onBack, userData }: { onBack: () => void;
   const [cancellingId, setCancellingId] = useState('');
   const [loadError, setLoadError] = useState(false);
   const [cancelError, setCancelError] = useState('');
+  const [editingSip, setEditingSip] = useState<Sip | null>(null);
+  const [editAmount, setEditAmount] = useState('');
+  const [editDay, setEditDay] = useState('');
+  const [savingEdit, setSavingEdit] = useState(false);
+  const [editError, setEditError] = useState('');
 
   React.useEffect(() => {
     if (!userData?.id) return;
@@ -261,6 +266,60 @@ export default function SipDashboard({ onBack, userData }: { onBack: () => void;
       setCancelError(err?.message || 'Cancel SIP failed. Please try again.');
     } finally {
       setCancellingId('');
+    }
+  };
+
+  // Edit an established SIP in place via FP "Update a Purchase Plan"
+  // (PATCH /orders/{id}/sip → PATCH /v2/mf_purchase_plans). Amount and/or
+  // installment day; both optional individually, at least one required.
+  const openEdit = (sip: Sip) => {
+    setEditError('');
+    const numeric = parseFloat(sip.amount.replace(/[^0-9.]/g, ''));
+    setEditAmount(Number.isFinite(numeric) && numeric > 0 ? String(numeric) : '');
+    setEditDay('');
+    setEditingSip(sip);
+  };
+
+  const submitEdit = async () => {
+    if (!editingSip) return;
+    const amountNum = editAmount.trim() === '' ? undefined : Number(editAmount);
+    const dayNum = editDay.trim() === '' ? undefined : Number(editDay);
+    if (amountNum === undefined && dayNum === undefined) {
+      setEditError('Enter a new amount and/or installment day.');
+      return;
+    }
+    if (amountNum !== undefined && (!Number.isFinite(amountNum) || amountNum <= 0)) {
+      setEditError('Amount must be greater than 0.');
+      return;
+    }
+    if (dayNum !== undefined && (!Number.isInteger(dayNum) || dayNum < 1 || dayNum > 28)) {
+      setEditError('Installment day must be a whole number between 1 and 28.');
+      return;
+    }
+    setSavingEdit(true);
+    setEditError('');
+    try {
+      const body: Record<string, unknown> = {};
+      if (amountNum !== undefined) body.amount = amountNum;
+      if (dayNum !== undefined) body.installmentDay = dayNum;
+      const response = await apiFetch(`/orders/${editingSip.id}/sip`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (!response.ok) {
+        throw new Error(await parseApiError(response));
+      }
+      if (userData?.id) sessionStorage.removeItem(`sip_dash_${userData.id}`);
+      if (amountNum !== undefined) {
+        const formatted = `₹${amountNum.toLocaleString('en-IN')}`;
+        setSips(prev => prev.map(item => item.id === editingSip.id ? { ...item, amount: formatted } : item));
+      }
+      setEditingSip(null);
+    } catch (err: any) {
+      setEditError(err?.message || 'Failed to update SIP. Please try again.');
+    } finally {
+      setSavingEdit(false);
     }
   };
 
@@ -450,13 +509,23 @@ export default function SipDashboard({ onBack, userData }: { onBack: () => void;
                     </span>
                   </td>
                   <td className="py-3.5 px-5 text-right">
-                    <button
-                      onClick={() => cancelSip(sip)}
-                      disabled={cancellingId === sip.id || sip.status === 'Cancelled' || sip.status === 'Failed'}
-                      className="rounded-lg border border-red-200 px-3 py-1.5 text-xs font-semibold text-red-600 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-40"
-                    >
-                      {cancellingId === sip.id ? 'Cancelling...' : 'Cancel SIP'}
-                    </button>
+                    <div className="flex items-center justify-end gap-2">
+                      <button
+                        onClick={() => openEdit(sip)}
+                        disabled={sip.status !== 'Active'}
+                        title={sip.status !== 'Active' ? 'Only active SIPs can be edited' : 'Edit amount or installment day'}
+                        className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                        <Pencil className="w-3.5 h-3.5" /> Edit
+                      </button>
+                      <button
+                        onClick={() => cancelSip(sip)}
+                        disabled={cancellingId === sip.id || sip.status === 'Cancelled' || sip.status === 'Failed'}
+                        className="rounded-lg border border-red-200 px-3 py-1.5 text-xs font-semibold text-red-600 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                        {cancellingId === sip.id ? 'Cancelling...' : 'Cancel SIP'}
+                      </button>
+                    </div>
                   </td>
                 </tr>
               );
@@ -510,6 +579,60 @@ export default function SipDashboard({ onBack, userData }: { onBack: () => void;
                   })}
               </tbody>
             </table>
+          </div>
+        </div>
+      )}
+
+      {editingSip && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">
+          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl">
+            <h2 className="text-lg font-semibold text-slate-800">Edit SIP</h2>
+            <p className="mt-1 text-sm text-slate-500">{editingSip.investor} · {editingSip.fund}</p>
+            <p className="mt-2 text-xs text-slate-400">
+              Updates the active plan with Fintech Primitives. Changes apply to the remaining installments and
+              must be made at least 2 days before the next installment.
+            </p>
+            {editError && (
+              <div className="mt-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-700">{editError}</div>
+            )}
+            <div className="mt-5 space-y-4">
+              <div>
+                <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 mb-1">New amount (₹)</label>
+                <input
+                  type="number" min="1" inputMode="numeric"
+                  value={editAmount}
+                  onChange={e => setEditAmount(e.target.value)}
+                  placeholder="Leave blank to keep current amount"
+                  className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm outline-none focus:border-blue-500 focus:bg-white focus:ring-2 focus:ring-blue-100"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 mb-1">Installment day (1–28)</label>
+                <input
+                  type="number" min="1" max="28" inputMode="numeric"
+                  value={editDay}
+                  onChange={e => setEditDay(e.target.value)}
+                  placeholder="Leave blank to keep current day"
+                  className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm outline-none focus:border-blue-500 focus:bg-white focus:ring-2 focus:ring-blue-100"
+                />
+              </div>
+            </div>
+            <div className="mt-6 flex justify-end gap-3">
+              <button
+                onClick={() => setEditingSip(null)}
+                disabled={savingEdit}
+                className="rounded-lg border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={submitEdit}
+                disabled={savingEdit}
+                className="rounded-lg bg-[#0B1B3E] px-4 py-2 text-sm font-semibold text-white hover:bg-[#1A3066] disabled:opacity-50"
+              >
+                {savingEdit ? 'Saving...' : 'Save changes'}
+              </button>
+            </div>
           </div>
         </div>
       )}
