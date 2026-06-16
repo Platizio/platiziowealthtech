@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion } from 'motion/react';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts';
@@ -7,8 +7,15 @@ import {
   TrendingUp, TrendingDown, ChevronRight,
   Briefcase, Activity, Target, Gift,
 } from 'lucide-react';
-import { apiFetch } from '../config/api';
-import { getPageContent } from '../utils/pagination';
+import {
+  useGetDashboardActionsQuery,
+  useGetDashboardOnboardingQuery,
+  useGetInvestorsByDistributorQuery,
+  useGetLeadsByDistributorQuery,
+  useGetOrdersByDistributorQuery,
+  useGetSchemesQuery,
+} from '../store/api/platizioApi';
+import { buildDashboardMetrics, emptyDashboardMetrics } from '../utils/dashboardMetrics';
 
 /* ── Props ──────────────────────────────────────────────────────────────── */
 interface DashboardProps {
@@ -42,219 +49,38 @@ interface DashboardAction {
 
 export default function Dashboard({ onNavigate, userData }: DashboardProps) {
   const navigate = useNavigate();
+  const distributorId = userData?.id ? String(userData.id) : undefined;
+  const queryOptions = { skip: !distributorId } as const;
 
-  // Opens the investor's detail page in the Investors view. The pipeline card
-  // id is the investor UUID (OnboardingCardDto.id), and Investors.tsx reads
-  // location.state.focusInvestorId to auto-open that investor.
+  const { data: orders = [] } = useGetOrdersByDistributorQuery(distributorId!, queryOptions);
+  const { data: investors = [] } = useGetInvestorsByDistributorQuery(distributorId!, queryOptions);
+  const { data: schemes = [] } = useGetSchemesQuery(undefined, queryOptions);
+  const { data: leads = [] } = useGetLeadsByDistributorQuery(distributorId!, queryOptions);
+  const { data: onboarding = emptyDashboardMetrics().onboarding } = useGetDashboardOnboardingQuery(
+    distributorId!,
+    queryOptions,
+  );
+  const { data: actions = [] } = useGetDashboardActionsQuery(distributorId!, queryOptions);
+
+  const metrics = useMemo(
+    () =>
+      distributorId
+        ? buildDashboardMetrics({
+            orders: orders as any[],
+            investors: investors as any[],
+            schemes: schemes as any[],
+            leads: leads as any[],
+            actions: actions as DashboardAction[],
+            onboarding: onboarding as OnboardingPipeline,
+          })
+        : emptyDashboardMetrics(),
+    [actions, distributorId, investors, leads, onboarding, orders, schemes],
+  );
+
   const openInvestor = (investorId: string) => {
     if (!investorId) return;
     navigate('/distributor/investors', { state: { focusInvestorId: investorId } });
   };
-
-  const [metrics, setMetrics] = React.useState({
-    totalAum: 0,
-    investorCount: 0,
-    newInvestors30d: 0,
-    sipAmount: 0,
-    sipCount: 0,
-    failedSips: 0,
-    todayOrders: 0,
-    aumSub: [] as any[],
-    pendingSub: [] as any[],
-    leadSub: [] as any[],
-    donutData: [] as any[],
-    recentActivity: [] as any[],
-    lifeEventReminders: [] as DashboardAction[],
-    onboarding: {
-      kycPending: [] as OnboardingCardItem[],
-      bankPending: [] as OnboardingCardItem[],
-      readyToInvest: [] as OnboardingCardItem[],
-    } as OnboardingPipeline
-  });
-
-  React.useEffect(() => {
-    if (!userData?.id) return;
-    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-
-    const fetchDashboard = async () => {
-      try {
-        const [ordersRes, investorsRes, schemesRes, leadsRes, onboardingRes, actionsRes] = await Promise.all([
-          apiFetch(`/orders/by-distributor/${userData.id}`, { headers }),
-          apiFetch(`/investors/by-distributor/${userData.id}`, { headers }),
-          apiFetch('/products/schemes', { headers }),
-          apiFetch(`/leads/distributor/${userData.id}`, { headers }),
-          apiFetch(`/dashboard/distributor/${userData.id}/onboarding`, { headers }),
-          apiFetch(`/dashboard/distributor/${userData.id}/actions`, { headers })
-        ]);
-
-        let orders: any[] = [], investors: any[] = [], schemes: any[] = [], leads: any[] = [];
-        let actions: DashboardAction[] = [];
-        let onboarding: OnboardingPipeline = { kycPending: [], bankPending: [], readyToInvest: [] };
-        if (ordersRes.ok) orders = await ordersRes.json();
-        if (investorsRes.ok) investors = await investorsRes.json();
-        if (schemesRes.ok) schemes = getPageContent(await schemesRes.json());
-        if (leadsRes.ok) leads = await leadsRes.json();
-        if (onboardingRes.ok) onboarding = await onboardingRes.json();
-        if (actionsRes.ok) actions = await actionsRes.json();
-
-        let totalAum = 0;
-        let sipAmount = 0;
-        let sipCount = 0;
-        let failedSips = 0;
-        let todayOrders = 0;
-
-        // All-time order-status tallies (consumed by Card 4 "Txn Failed").
-        let successfulOrders = 0;
-        let pendingOrders = 0;
-        let failedOrders = 0;
-
-        // F-17: separate TODAY-scoped tallies for the "Today's Transactions"
-        // donut. The donut's title + centre count are today-only, so its
-        // segments must be today-only too, otherwise centre != Σ(segments).
-        let todaySuccessful = 0;
-        let todayPending = 0;
-        let todayFailed = 0;
-
-        let mfAum = 0;
-        let sifAum = 0;
-        let othersAum = 0;
-
-        const schemeMap = new Map(schemes.map(s => [s.id, s]));
-        const today = new Date().toDateString();
-
-        // Activity feed builder
-        const activities: any[] = [];
-
-        orders.forEach((o: any) => {
-          if (o.orderStatus === 'COMPLETED') {
-            totalAum += o.amount || 0;
-            const s = schemeMap.get(o.productSchemeId);
-
-            const rawCat = (o.productCategory || o.category || o.product_category || s?.productCategory || s?.category || s?.product_category || s?.assetClass || 'OTHER').toString().toUpperCase();
-
-            let cat = 'SIF'; // Default to SIF instead of OTHER
-            if (rawCat.includes('MF') || rawCat.includes('MUTUAL')) cat = 'MF';
-
-            if (cat === 'MF') mfAum += o.amount || 0;
-            else sifAum += o.amount || 0; // Everything else goes to SIF
-          }
-
-          if (o.transactionType === 'SIP') {
-            sipCount++;
-            if (o.orderStatus === 'COMPLETED') sipAmount += o.amount || 0;
-            if (o.orderStatus === 'FAILED') failedSips++;
-          }
-          if (new Date(o.createdAt || Date.now()).toDateString() === today) {
-            todayOrders++;
-            // Bucket within today's orders so the donut segments sum exactly
-            // to todayOrders (the centre label). Same exhaustive
-            // success/failed/else partition used for the all-time tallies.
-            if (o.orderStatus === 'COMPLETED' || o.orderStatus === 'SUCCESSFUL') todaySuccessful++;
-            else if (o.orderStatus === 'FAILED') todayFailed++;
-            else todayPending++;
-          }
-
-          if (o.orderStatus === 'COMPLETED' || o.orderStatus === 'SUCCESSFUL') successfulOrders++;
-          else if (o.orderStatus === 'FAILED') failedOrders++;
-          else pendingOrders++;
-
-          // push to activities
-          activities.push({
-            date: new Date(o.createdAt || Date.now()),
-            action: `Order ${o.orderStatus}`,
-            name: `Order #${o.id.substring(0, 6)}`,
-            dot: o.orderStatus === 'COMPLETED' ? 'bg-blue-500' : o.orderStatus === 'FAILED' ? 'bg-red-500' : 'bg-amber-500'
-          });
-        });
-
-        let kycPending = 0;
-        let bankPending = 0;
-        investors.forEach((i: any) => {
-          if (i.kycStatus !== 'COMPLETED') kycPending++;
-          if (i.bankVerificationStatus !== 'VERIFIED') bankPending++;
-
-          activities.push({
-            date: new Date(i.createdAt || Date.now()),
-            action: `Investor Added`,
-            name: i.fullName || 'Unknown',
-            dot: 'bg-green-500'
-          });
-        });
-
-        let newLeads = 0;
-        let inProgressLeads = 0;
-        let convertedLeads = 0;
-        leads.forEach((l: any) => {
-          if (l.status === 'NEW') newLeads++;
-          else if (l.status === 'CONVERTED_TO_INVESTOR' || l.status === 'INVESTMENT_COMPLETED') convertedLeads++;
-          else inProgressLeads++;
-        });
-
-        // Time formatter
-        const formatTime = (d: Date) => {
-          const diff = Math.floor((Date.now() - d.getTime()) / 60000); // mins
-          if (diff < 60) return `${diff} min ago`;
-          if (diff < 1440) return `${Math.floor(diff / 60)} hrs ago`;
-          return `${Math.floor(diff / 1440)} days ago`;
-        };
-        activities.sort((a, b) => b.date.getTime() - a.date.getTime());
-        const recentActivity = activities.slice(0, 5).map(a => ({
-          ...a, time: formatTime(a.date)
-        }));
-        const allLifeEventReminders = actions
-          .filter(a => a.category === 'Life Event' || a.category === 'Maturing');
-        const lifeEventReminders = allLifeEventReminders.slice(0, 5);
-
-        // MVP-B6: "New (30d)" count of investors created in the last 30 days.
-        // Replaces a hardcoded literal `12` that contradicted books with <12
-        // total investors.
-        const cutoffMs = Date.now() - 30 * 24 * 60 * 60 * 1000;
-        const newInvestors30d = investors.reduce((acc: number, inv: any) => {
-          const t = new Date(inv.createdAt ?? '').getTime();
-          return Number.isFinite(t) && t >= cutoffMs ? acc + 1 : acc;
-        }, 0);
-
-        setMetrics({
-          totalAum,
-          investorCount: investors.length,
-          newInvestors30d,
-          sipAmount,
-          sipCount,
-          failedSips,
-          todayOrders,
-          aumSub: [
-            { label: 'Mutual Funds', value: `₹${(mfAum / 100000).toFixed(2)} L`, change: '', up: true },
-            { label: 'Specialised Funds', value: `₹${(sifAum / 100000).toFixed(2)} L`, change: '', up: true },
-          ],
-          pendingSub: [
-            { label: 'KYC Pending', value: kycPending },
-            { label: 'Bank Link Pending', value: bankPending },
-            { label: 'Txn Failed', value: failedOrders },
-            { label: 'SIP Failed', value: failedSips },
-            { label: 'Life Events', value: allLifeEventReminders.length },
-          ],
-          leadSub: [
-            { label: 'New Leads', value: newLeads, color: 'bg-blue-400' },
-            { label: 'In Progress', value: inProgressLeads, color: 'bg-amber-400' },
-            { label: 'Converted', value: convertedLeads, color: 'bg-green-400' },
-          ],
-          // F-17: today-scoped so the donut is internally consistent with its
-          // "Today's Transactions" title and the centre {todayOrders} count.
-          donutData: [
-            { name: 'Successful', value: todaySuccessful, color: '#22c55e' },
-            { name: 'Pending', value: todayPending, color: '#eab308' },
-            { name: 'Failed', value: todayFailed, color: '#ef4444' },
-          ],
-          recentActivity,
-          lifeEventReminders,
-          onboarding
-        });
-      } catch (err) {
-        console.error('Failed to fetch dashboard metrics', err);
-      }
-    };
-    fetchDashboard();
-  }, [userData]);
 
   return (
     <motion.div

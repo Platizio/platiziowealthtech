@@ -5,16 +5,23 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import {
   ArrowLeft, ArrowRight, CheckCircle2, Building2,
-  CreditCard, TrendingUp, ShieldCheck, Clock, Wallet, AlertCircle,
+  CreditCard, TrendingUp, ShieldCheck, Clock, Wallet, AlertCircle, Search,
 } from 'lucide-react';
 import { apiFetch } from '../config/api';
-import { getPageContent } from '../utils/pagination';
+import InvestorActionLink from '../components/InvestorActionLink';
+import Pagination from '../components/Pagination';
+import { useDebounce } from '../hooks/useDebounce';
+import type { TransactionOrder } from '../types/order';
+import { formatOrderStatusLabel, normalizeOrderStatus } from '../utils/investorAction';
+import { getPageContent, getPageMeta } from '../utils/pagination';
 import { formatDate } from '../utils/formatDate';
-
-const parseSchemeMetadata = (metadataJson?: string): any => {
-  if (!metadataJson) return {};
-  try { return JSON.parse(metadataJson); } catch { return {}; }
-};
+import { isPersistedSchemeId } from '../utils/productSchemeKey';
+import {
+  formatSchemeDisplayName,
+  isTransactionReadyScheme,
+  parseSchemeMetadata,
+  readSchemeMinSip,
+} from '../utils/orderableScheme';
 
 const firstMetaValue = (meta: any, keys: string[]) => {
   for (const key of keys) {
@@ -36,6 +43,11 @@ const formatSchemeReturn = (rawReturn: unknown): string => {
   if (!Number.isFinite(num)) return '+0.0%';
   return `${num >= 0 ? '+' : ''}${num.toFixed(1)}%`;
 };
+
+/** FP sandbox: purchase review succeeds when amount ends in 0; ending in 1 simulates failure. */
+const sandboxAmountLastDigit = (amount: number) => Math.trunc(amount) % 10;
+
+const isSandboxLumpsumAmountValid = (amount: number) => sandboxAmountLastDigit(amount) === 0;
 
 // ── Types ────────────────────────────────────────────────────────────────────
 interface Investor {
@@ -100,39 +112,42 @@ const parseOptionalPositiveInt = (value: unknown) => {
   return Number.isFinite(parsed) ? parsed : undefined;
 };
 
-// ── Sample funds ─────────────────────────────────────────────────────────────
-const PRODUCTS: Product[] = [
-  {
-    id: '11111111-1111-4111-8111-111111111111', name: 'HDFC Large & Mid Cap Fund',
-    category: 'Equity – Large & Mid Cap', risk: 'Moderate',
-    nav: '₹198.45', returns: { '1Y': '+18.2%', '3Y': '+14.1%', '5Y': '+12.8%' },
-    minSip: 1000, minLumpsum: 5000, color: 'blue',
-  },
-  {
-    id: '22222222-2222-4222-8222-222222222222', name: 'Parag Parikh Flexi Cap Fund',
-    category: 'Equity – Flexi Cap', risk: 'Moderate',
-    nav: '₹89.12', returns: { '1Y': '+22.4%', '3Y': '+17.5%', '5Y': '+16.1%' },
-    minSip: 1000, minLumpsum: 1000, color: 'violet',
-  },
-  {
-    id: '33333333-3333-4333-8333-333333333333', name: 'ICICI Prudential Bluechip Fund',
-    category: 'Equity – Large Cap', risk: 'Moderately Low',
-    nav: '₹112.78', returns: { '1Y': '+15.3%', '3Y': '+12.8%', '5Y': '+11.4%' },
-    minSip: 1000, minLumpsum: 5000, color: 'indigo',
-  },
-  {
-    id: '44444444-4444-4444-8444-444444444444', name: 'SBI Small Cap Fund',
-    category: 'Equity – Small Cap', risk: 'High',
-    nav: '₹148.30', returns: { '1Y': '+28.7%', '3Y': '+21.2%', '5Y': '+20.5%' },
-    minSip: 500, minLumpsum: 5000, color: 'rose',
-  },
-  {
-    id: '55555555-5555-4555-8555-555555555555', name: 'HDFC Short Term Debt Fund',
-    category: 'Debt – Short Term', risk: 'Low',
-    nav: '₹28.14', returns: { '1Y': '+7.4%', '3Y': '+6.9%', '5Y': '+7.1%' },
-    minSip: 1000, minLumpsum: 5000, color: 'emerald',
-  },
-];
+const mapSchemeToProduct = (scheme: any, index: number): Product | null => {
+  if (!isTransactionReadyScheme(scheme)) return null;
+
+  const meta = parseSchemeMetadata(scheme.metadataJson);
+  const rawNav = firstMetaValue(meta, ['nav', 'current_nav', 'last_nav']);
+  const ret = (meta?.returns || {}) as Record<string, unknown>;
+  const colors: ProductColor[] = ['blue', 'violet', 'indigo', 'rose', 'emerald'];
+  const fundCategory = readText(meta.category, meta.fund_category, scheme.category, scheme.productType) || 'Mutual Fund';
+
+  return {
+    id: scheme.id,
+    name: formatSchemeDisplayName(scheme),
+    category: fundCategory,
+    risk: scheme.riskLevel || 'Moderate',
+    nav: formatSchemeNav(rawNav),
+    returns: {
+      '1Y': formatSchemeReturn(ret['1y'] ?? ret.one_year),
+      '3Y': formatSchemeReturn(ret['3y'] ?? ret.three_year),
+      '5Y': formatSchemeReturn(ret['5y'] ?? ret.five_year),
+    },
+    minSip: readSchemeMinSip(scheme, 500),
+    minLumpsum: Number(scheme.minInvestment || scheme.minLumpsum || 1000),
+    color: colors[index % colors.length],
+  };
+};
+
+const readText = (...values: unknown[]) => {
+  for (const value of values) {
+    if (value === undefined || value === null) continue;
+    const text = String(value).trim();
+    if (text) return text;
+  }
+  return '';
+};
+
+const FUND_PAGE_SIZE_DEFAULT = 12;
 
 const STEPS = [
   { id: 1, label: 'Select Fund' },
@@ -200,7 +215,15 @@ function StepBar({ current }: { current: number }) {
 // ── Main component ────────────────────────────────────────────────────────────
 export default function InvestorTransaction({ investor, onComplete, onBack }: Props) {
   const [step,     setStep]     = useState(1);
-  const [products, setProducts] = useState(PRODUCTS);
+  const [products, setProducts] = useState<Product[]>([]);
+  const [productsLoading, setProductsLoading] = useState(true);
+  const [productsError, setProductsError] = useState('');
+  const [fundSearch, setFundSearch] = useState('');
+  const debouncedFundSearch = useDebounce(fundSearch, 300);
+  const [fundPage, setFundPage] = useState(0);
+  const [fundPageSize, setFundPageSize] = useState(FUND_PAGE_SIZE_DEFAULT);
+  const [fundTotalPages, setFundTotalPages] = useState(1);
+  const [fundTotalElements, setFundTotalElements] = useState(0);
   const [product,  setProduct]  = useState<Product | null>(null);
   const [txType,   setTxType]   = useState<'sip' | 'lumpsum'>('sip');
   const [banks, setBanks] = useState<BankAccount[]>([]);
@@ -210,7 +233,7 @@ export default function InvestorTransaction({ investor, onComplete, onBack }: Pr
   const [submitting, setSubmitting] = useState(false);
   const [done,     setDone]     = useState(false);
   const [submitError, setSubmitError] = useState('');
-  const [refNo]                 = useState(`APX${Date.now().toString().slice(-8)}`);
+  const [createdOrder, setCreatedOrder] = useState<TransactionOrder | null>(null);
   const {
     register,
     watch,
@@ -231,7 +254,7 @@ export default function InvestorTransaction({ investor, onComplete, onBack }: Pr
   const frequency = watch('frequency') || 'MONTHLY';
   const startDate = watch('startDate') || '';
   const instalments = watch('instalments');
-  const minAmount = product ? (txType === 'sip' ? 500 : product.minLumpsum) : 0;
+  const minAmount = product ? (txType === 'sip' ? product.minSip : product.minLumpsum) : 0;
   const amountValid = amountNum >= minAmount;
   const investorName = investor.fullName || investor.name || 'Investor';
   const BANKS = banks.filter(isVerifiedBank).map(b => ({
@@ -249,40 +272,72 @@ export default function InvestorTransaction({ investor, onComplete, onBack }: Pr
   }).success;
 
   React.useEffect(() => {
+    setFundPage(0);
+  }, [debouncedFundSearch]);
+
+  React.useEffect(() => {
     let cancelled = false;
 
-    apiFetch('/products/schemes?page=0&size=50')
-      .then(res => res.ok ? res.json() : null)
-      .then(payload => {
-        if (cancelled || !payload) return;
-        const schemes = getPageContent(payload);
-        if (schemes.length === 0) return;
-        const colors: ProductColor[] = ['blue', 'violet', 'indigo', 'rose', 'emerald'];
-        setProducts(schemes.map((scheme: any, index: number) => {
-          const meta = parseSchemeMetadata(scheme.metadataJson);
-          const rawNav = firstMetaValue(meta, ['nav', 'current_nav', 'last_nav']);
-          const ret = meta?.returns || {};
-          return {
-            id: scheme.id,
-            name: scheme.schemeName || scheme.name || 'Unknown Scheme',
-            category: scheme.category || scheme.productType || 'Mutual Fund',
-            risk: scheme.riskLevel || 'Moderate',
-            nav: formatSchemeNav(rawNav),
-            returns: {
-              '1Y': formatSchemeReturn(ret['1y'] ?? ret.one_year),
-              '3Y': formatSchemeReturn(ret['3y'] ?? ret.three_year),
-              '5Y': formatSchemeReturn(ret['5y'] ?? ret.five_year),
-            },
-            minSip: Number(scheme.minSip || 500),
-            minLumpsum: Number(scheme.minInvestment || 1000),
-            color: colors[index % colors.length],
-          };
-        }));
-      })
-      .catch(err => console.error('Failed to load product schemes for transaction form', err));
+    const loadOrderableSchemes = async () => {
+      setProductsLoading(true);
+      setProductsError('');
 
+      const fetchOrderableSchemes = async () => {
+        // POA catalogue: GET /v2/mf_scheme_plans/cybrillapoa via Platizio backend (never browser → Cybrilla).
+        const params = new URLSearchParams({
+          page: String(fundPage),
+          size: String(fundPageSize),
+          active: 'true',
+        });
+        if (debouncedFundSearch.trim()) {
+          params.set('query', debouncedFundSearch.trim());
+        }
+        const response = await apiFetch(`/products/schemes/page?${params}`);
+        const payload = await response.json().catch(() => null);
+        if (!response.ok) {
+          throw new Error(payload?.message || `Unable to load funds (${response.status})`);
+        }
+        const content = getPageContent(payload);
+        const meta = getPageMeta(payload, content.length);
+        const colorOffset = fundPage * fundPageSize;
+        const mapped = content
+          .map((scheme: any, index: number) => mapSchemeToProduct(scheme, colorOffset + index))
+          .filter((entry): entry is Product => entry !== null);
+        return { mapped, meta };
+      };
+
+      try {
+        const { mapped, meta } = await fetchOrderableSchemes();
+
+        if (cancelled) return;
+        setProducts(mapped);
+        setFundTotalPages(meta.totalPages);
+        setFundTotalElements(meta.totalElements);
+        setProduct(prev => (prev && mapped.some(item => item.id === prev.id) ? prev : null));
+        if (mapped.length === 0) {
+          setProductsError(
+            debouncedFundSearch.trim()
+              ? 'No funds match your search. Try a different name, AMC, or scheme code.'
+              : 'No orderable funds found. Open Ledger and refresh the Cybrilla POA catalogue, then try again.',
+          );
+        }
+      } catch (err: any) {
+        console.error('Failed to load orderable product schemes for transaction form', err);
+        if (!cancelled) {
+          setProducts([]);
+          setFundTotalPages(1);
+          setFundTotalElements(0);
+          setProduct(null);
+          setProductsError(err?.message || 'Could not load funds for this transaction.');
+        }
+      } finally {
+        if (!cancelled) setProductsLoading(false);
+      }
+    };
+
+    loadOrderableSchemes();
     return () => { cancelled = true; };
-  }, []);
+  }, [debouncedFundSearch, fundPage, fundPageSize]);
 
   React.useEffect(() => {
     let cancelled = false;
@@ -315,11 +370,31 @@ export default function InvestorTransaction({ investor, onComplete, onBack }: Pr
 
   const handleConfirm = async () => {
     const validSipForm = !isSip || await trigger();
-    if (!product || !bank || !isVerifiedBank(bank) || !amountValid || !validSipForm) return;
+    if (!product || !isPersistedSchemeId(product.id)) {
+      setSubmitError('Select a synced fund from the catalogue before placing an order.');
+      return;
+    }
+    if (!bank || !isVerifiedBank(bank) || !amountValid || !validSipForm) return;
+
+    if (!isSip && !isSandboxLumpsumAmountValid(amountNum)) {
+      const lastDigit = sandboxAmountLastDigit(amountNum);
+      const message = `Cybrilla sandbox rejects lumpsum amounts ending in ${lastDigit}. Use ₹5000, ₹10000, etc. (last digit must be 0).`;
+      console.warn('[Platizio] lumpsum_order_blocked_sandbox_amount', { amount: amountNum, lastDigit });
+      setSubmitError(message);
+      return;
+    }
 
     setSubmitting(true);
     setSubmitError('');
     try {
+      console.group('[Platizio] lumpsum_order_create');
+      console.log('request', {
+        investorId: investor.id,
+        productSchemeId: product.id,
+        amount: amountNum,
+        paymentMode: isSip ? 'MANDATE' : 'BANK_TRANSFER',
+        transactionType: isSip ? 'SIP' : 'LUMPSUM_PURCHASE',
+      });
       const payload = {
         investorId: investor.id,
         productSchemeId: product.id,
@@ -340,8 +415,23 @@ export default function InvestorTransaction({ investor, onComplete, onBack }: Pr
       });
 
       const result = await response.json().catch(() => null);
+      console.log('response', {
+        ok: response.ok,
+        status: response.status,
+        orderId: result?.id,
+        orderStatus: result?.orderStatus,
+        externalOrderId: result?.externalOrderId,
+        failureReason: result?.failureReason,
+        investorActionUrl: result?.investorActionUrl,
+      });
+      console.groupEnd();
       if (!response.ok) {
         const baseMessage = result?.message || `Order creation failed (${response.status})`;
+        if (response.status === 404 && /product scheme not found/i.test(baseMessage)) {
+          throw new Error(
+            'Selected fund is not in the local catalogue. Go back, reload funds, pick a synced scheme, then place the order again.',
+          );
+        }
         // 503 = provider unreachable; the backend has saved the order for retry.
         // 502 = provider error/rate-limit. Both are retryable from the UI.
         if (response.status === 503 || response.status === 502) {
@@ -350,8 +440,20 @@ export default function InvestorTransaction({ investor, onComplete, onBack }: Pr
         throw new Error(baseMessage);
       }
 
+      const order = (result || null) as TransactionOrder;
+      if (!isSip && normalizeOrderStatus(order?.orderStatus) === 'FAILED') {
+        console.warn('[Platizio] lumpsum_order_fp_review_failed', {
+          orderId: order?.id,
+          externalOrderId: order?.externalOrderId,
+          failureReason: order?.failureReason,
+          tip: 'Use amount ending in 0 (e.g. ₹5000). Open investor-action on :8081 for live FP debug.',
+        });
+      }
+      setCreatedOrder(order);
       setDone(true);
     } catch (err: any) {
+      console.error('[Platizio] lumpsum_order_create_error', err);
+      console.groupEnd();
       setSubmitError(err?.message || 'Order creation failed. Please try again.');
     } finally {
       setSubmitting(false);
@@ -369,6 +471,7 @@ export default function InvestorTransaction({ investor, onComplete, onBack }: Pr
 
   // ── Success screen ─────────────────────────────────────────────────────────
   if (done) {
+    const orderFailed = normalizeOrderStatus(createdOrder?.orderStatus) === 'FAILED';
     return (
       <motion.div
         initial={{ opacity: 0, scale: 0.96 }}
@@ -376,16 +479,38 @@ export default function InvestorTransaction({ investor, onComplete, onBack }: Pr
         className="p-8 max-w-xl mx-auto text-center"
       >
         <div className="bg-white rounded-3xl shadow-sm border border-slate-200 p-10">
-          <div className="w-20 h-20 rounded-full bg-green-100 flex items-center justify-center mx-auto mb-6">
-            <CheckCircle2 className="w-10 h-10 text-green-500" />
+          <div className={`w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-6 ${orderFailed ? 'bg-red-100' : 'bg-green-100'}`}>
+            {orderFailed ? (
+              <AlertCircle className="w-10 h-10 text-red-500" />
+            ) : (
+              <CheckCircle2 className="w-10 h-10 text-green-500" />
+            )}
           </div>
-          <h1 className="text-2xl font-bold text-slate-800 mb-2">Transaction Submitted!</h1>
-          <p className="text-slate-500 text-sm mb-8">
-            Your {txType === 'sip' ? 'SIP mandate' : 'lumpsum investment'} has been placed successfully.
+          <h1 className="text-2xl font-bold text-slate-800 mb-2">
+            {orderFailed ? 'Order Rejected by Provider' : 'Order Created'}
+          </h1>
+          <p className="text-slate-500 text-sm mb-6">
+            {orderFailed ? (
+              <>
+                Cybrilla/Fintech Primitives rejected this purchase during review.
+                {createdOrder?.failureReason ? (
+                  <> {createdOrder.failureReason}</>
+                ) : (
+                  <> Use investor <span className="font-semibold text-slate-700">Anita Verma</span>, bank account ending in <span className="font-semibold text-slate-700">1193</span>, and amount ending in <span className="font-semibold text-slate-700">0</span> (e.g. ₹5000), then place a new order.</>
+                )}
+              </>
+            ) : (
+              <>
+                The {txType === 'sip' ? 'SIP' : 'lumpsum'} order was created. Share the investor link below so the investor can confirm and pay.
+                {txType === 'lumpsum' && (
+                  <> Sandbox tip: use amount ending in <span className="font-semibold text-slate-700">0</span> (e.g. ₹5000) for a successful payment, or <span className="font-semibold text-slate-700">1</span> (e.g. ₹5001) to simulate failure.</>
+                )}
+              </>
+            )}
           </p>
 
-          <div className="bg-slate-50 rounded-2xl p-5 text-left space-y-3 mb-8">
-            <Row label="Reference No."  value={refNo}                              mono />
+          <div className="bg-slate-50 rounded-2xl p-5 text-left space-y-3 mb-6">
+            <Row label="Order ID"       value={createdOrder?.id || '—'}              mono />
             <Row label="Investor"       value={investorName}                      />
             <Row label="Fund"           value={product?.name || ''}               />
             <Row label="Type"           value={txType === 'sip' ? `SIP · ${frequencyLabel(frequency)}` : 'Lumpsum'} />
@@ -393,10 +518,21 @@ export default function InvestorTransaction({ investor, onComplete, onBack }: Pr
             {txType === 'sip' && <Row label="Start Date" value={formatDate(startDate)} />}
             {txType === 'sip' && instalments && <Row label="Instalments" value={String(instalments)} />}
             <Row label="Bank"           value={bankLabel(bank)}  />
-            <Row label="Status"         value="Processing"
-              valueClass="inline-flex items-center gap-1.5 text-amber-700 font-semibold">
-              <Clock className="w-3.5 h-3.5" />
+            <Row label="Status"         value={formatOrderStatusLabel(createdOrder?.orderStatus)}
+              valueClass={`inline-flex items-center gap-1.5 font-semibold ${orderFailed ? 'text-red-700' : 'text-amber-700'}`}>
+              {orderFailed ? <AlertCircle className="w-3.5 h-3.5" /> : <Clock className="w-3.5 h-3.5" />}
             </Row>
+            {createdOrder?.failureReason && (
+              <Row label="Reason" value={createdOrder.failureReason} />
+            )}
+          </div>
+
+          <div className="mb-8 text-left">
+            <InvestorActionLink
+              orderId={createdOrder?.id}
+              orderStatus={createdOrder?.orderStatus}
+              investorActionUrl={createdOrder?.investorActionUrl}
+            />
           </div>
 
           <div className="grid grid-cols-3 gap-3 text-center text-xs mb-8">
@@ -461,10 +597,34 @@ export default function InvestorTransaction({ investor, onComplete, onBack }: Pr
         {step === 1 && (
           <motion.div key="s1" initial={{ x: 20 }} animate={{ x: 0 }} exit={{ x: -20 }} transition={{ duration: 0.22 }}>
             <h2 className="font-semibold text-slate-800 mb-4">Select a Fund</h2>
+            <p className="text-xs text-slate-500 mb-4">
+              Browse the Cybrilla POA catalogue — only synced, orderable schemes can be selected.
+            </p>
+
+            <div className="relative mb-4">
+              <Search className="w-4 h-4 absolute left-3 top-2.5 text-slate-400" />
+              <input
+                type="text"
+                value={fundSearch}
+                onChange={e => setFundSearch(e.target.value)}
+                placeholder="Search by fund name, AMC, or scheme code…"
+                className="w-full pl-9 pr-4 py-2.5 text-sm bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-100 focus:border-blue-500 transition-all outline-none"
+              />
+            </div>
+
+            {productsLoading && (
+              <p className="text-sm text-slate-500 mb-4">Loading orderable funds…</p>
+            )}
+            {!productsLoading && productsError && (
+              <div className="mb-4 flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0" />
+                <span>{productsError}</span>
+              </div>
+            )}
             <div className="space-y-3">
-              {products.map(p => (
+              {!productsLoading && products.map((p, index) => (
                 <button
-                  key={p.id}
+                  key={p.id || `${p.name}-${index}`}
                   onClick={() => setProduct(p)}
                   className={`w-full text-left rounded-2xl border-2 p-5 transition-all ${
                     product?.id === p.id
@@ -504,10 +664,26 @@ export default function InvestorTransaction({ investor, onComplete, onBack }: Pr
               ))}
             </div>
 
+            {!productsLoading && fundTotalElements > 0 && (
+              <div className="mt-4 rounded-2xl border border-slate-200 bg-white shadow-sm">
+                <Pagination
+                  page={fundPage}
+                  size={fundPageSize}
+                  totalPages={fundTotalPages}
+                  totalElements={fundTotalElements}
+                  onPageChange={setFundPage}
+                  onSizeChange={nextSize => {
+                    setFundPageSize(nextSize);
+                    setFundPage(0);
+                  }}
+                />
+              </div>
+            )}
+
             <div className="flex justify-end mt-6">
               <button
                 onClick={() => setStep(2)}
-                disabled={!product}
+                disabled={productsLoading || !product || products.length === 0}
                 className="flex items-center gap-2 px-6 py-3 bg-[#0B1B3E] text-white font-semibold text-sm rounded-xl hover:bg-[#1A3066] transition-colors disabled:opacity-50 disabled:cursor-not-allowed shadow-lg"
               >
                 Next <ArrowRight className="w-4 h-4" />
@@ -576,6 +752,11 @@ export default function InvestorTransaction({ investor, onComplete, onBack }: Pr
               </div>
               {isSip && errors.amount && (
                 <p className="text-xs text-red-500 mt-1">{errors.amount.message}</p>
+              )}
+              {!isSip && amountNum > 0 && amountValid && !isSandboxLumpsumAmountValid(amountNum) && (
+                <p className="text-xs text-amber-700 mt-2 font-medium">
+                  Sandbox tip: lumpsum amount must end in <span className="font-bold">0</span> (e.g. ₹5000). Ending in 1 forces FP review failure.
+                </p>
               )}
               {!isSip && amountNum > 0 && !amountValid && (
                 <p className="text-xs text-red-500 mt-1">

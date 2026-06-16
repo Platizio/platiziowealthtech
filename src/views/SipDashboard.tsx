@@ -6,27 +6,44 @@ import {
   Tooltip, ResponsiveContainer,
 } from 'recharts';
 import { apiFetch } from '../config/api';
+const parseApiError = async (response: Response) => {
+  const body = await response.json().catch(() => null);
+  return body?.message || body?.error || `Request failed (${response.status})`;
+};
 
 interface Sip {
   id: string; investor: string; fund: string;
-  amount: string; status: 'Active' | 'Failed' | 'Paused';
-  nextDue: string; mandate: string; category?: string;
+  amount: string; status: 'Active' | 'Failed' | 'Paused' | 'Cancelled' | 'Pending';
+  nextDue: string; mandate: string;
+  mandateStatus?: string; mandateId?: number; planId?: string;
+  category?: string;
 }
 
 interface SipTrend {
   month: string; value: number; count: number;
 }
 
-type StatusFilter = 'All' | 'Active' | 'Failed' | 'Paused';
+type StatusFilter = 'All' | 'Active' | 'Failed' | 'Paused' | 'Cancelled' | 'Pending';
 type CatFilter = 'ALL' | 'MF' | 'SIF';
 
 const statusCfg: Record<string, { icon: React.ReactNode; cls: string }> = {
   Active: { icon: <CheckCircle2 className="w-3.5 h-3.5" />, cls: 'bg-green-100 text-green-700' },
   Failed: { icon: <XCircle      className="w-3.5 h-3.5" />, cls: 'bg-red-100   text-red-700'   },
   Paused: { icon: <Clock        className="w-3.5 h-3.5" />, cls: 'bg-amber-100 text-amber-700' },
+  Cancelled: { icon: <XCircle className="w-3.5 h-3.5" />, cls: 'bg-slate-100 text-slate-600' },
+  Pending: { icon: <Clock className="w-3.5 h-3.5" />, cls: 'bg-sky-100 text-sky-700' },
 };
 
 const statusFallback = { icon: <Clock className="w-3.5 h-3.5" />, cls: 'bg-slate-100 text-slate-600' };
+
+const normalizeSipStatus = (status: string): Sip['status'] => {
+  const normalized = String(status || '').trim();
+  if (normalized === 'Active' || normalized === 'Active SIPs') return 'Active';
+  if (normalized === 'Failed' || normalized === 'Failed SIPs') return 'Failed';
+  if (normalized === 'Cancelled' || normalized === 'Cancelled SIPs') return 'Cancelled';
+  if (normalized === 'Pending') return 'Pending';
+  return 'Paused';
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Loading skeleton — shown while the first fetch is in-flight.
@@ -136,6 +153,7 @@ export default function SipDashboard({ onBack, userData }: { onBack: () => void;
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('All');
   const [catFilter, setCatFilter] = useState<CatFilter>('ALL');
   const [sips, setSips] = useState<Sip[]>([]);
+  const [pendingSetup, setPendingSetup] = useState<Sip[]>([]);
   // F-16: do NOT pre-populate with fabricated zero months. The dedicated
   // <SipDashboardSkeleton/> (rendered while `loading`) is the loading visual;
   // a non-null placeholder here only ever surfaced on the error path, where it
@@ -159,7 +177,8 @@ export default function SipDashboard({ onBack, userData }: { onBack: () => void;
       if (raw) {
         const { ts, payload } = JSON.parse(raw) as { ts: number; payload: any };
         if (Date.now() - ts < CACHE_TTL_MS) {
-          setSips(payload.sips || []);
+          setSips((payload.sips || []).map((sip: Sip) => ({ ...sip, status: normalizeSipStatus(sip.status) })));
+          setPendingSetup((payload.pendingSetup || []).map((sip: Sip) => ({ ...sip, status: normalizeSipStatus(sip.status) })));
           setSipTrend(
             // MVP-B7: backend `amount` is rupees; the chart axis label is
             // "(₹ L)", so we convert rupees → lakhs once here. Without this,
@@ -192,7 +211,8 @@ export default function SipDashboard({ onBack, userData }: { onBack: () => void;
           // Quota exceeded or private-browsing restriction — silently skip
         }
 
-        setSips(data.sips || []);
+        setSips((data.sips || []).map((sip: Sip) => ({ ...sip, status: normalizeSipStatus(sip.status) })));
+        setPendingSetup((data.pendingSetup || []).map((sip: Sip) => ({ ...sip, status: normalizeSipStatus(sip.status) })));
         // Normalise backend {month, amount, count} → {month, value, count}.
         // Coerce amount to Number to handle BigDecimal serialised as string.
         // MVP-B7: divide by 1e5 once — backend amount is rupees, chart axis is
@@ -222,14 +242,21 @@ export default function SipDashboard({ onBack, userData }: { onBack: () => void;
     setCancellingId(sip.id);
     setCancelError('');
     try {
-      const response = await apiFetch(`/orders/${sip.id}`, { method: 'DELETE' });
+      const response = await apiFetch(`/orders/${sip.id}/cancel`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cancellationCode: 'invest_later' }),
+      });
       if (!response.ok) {
-        const errorBody = await response.json().catch(() => null);
-        throw new Error(errorBody?.message || `Cancel SIP failed (${response.status})`);
+        throw new Error(await parseApiError(response));
       }
+      const result = await response.json().catch(() => null);
 
       if (userData?.id) sessionStorage.removeItem(`sip_dash_${userData.id}`);
-      setSips(prev => prev.filter(item => item.id !== sip.id));
+      const cancelled = String(result?.orderStatus || '').toUpperCase() === 'CANCELLED';
+      setSips(prev => prev.map(item => item.id === sip.id
+        ? { ...item, status: cancelled ? 'Cancelled' as const : item.status }
+        : item));
     } catch (err: any) {
       setCancelError(err?.message || 'Cancel SIP failed. Please try again.');
     } finally {
@@ -243,13 +270,14 @@ export default function SipDashboard({ onBack, userData }: { onBack: () => void;
     return matchStatus && matchCat;
   });
 
-  const totalAmount = sips.reduce((sum, s) => {
+  const totalAmount = sips.filter(s => s.status === 'Active').reduce((sum, s) => {
     const val = parseFloat(s.amount.replace(/[^0-9.]/g, '')) || 0;
     return sum + val;
   }, 0);
   const activeSips = sips.filter(s => s.status === 'Active').length;
   const failedSips = sips.filter(s => s.status === 'Failed').length;
   const pausedSips = sips.filter(s => s.status === 'Paused').length;
+  const cancelledSips = sips.filter(s => s.status === 'Cancelled').length;
 
   // F-16 render guards — strict order so no fabricated/stale values ever show:
   //   loading → skeleton (never a zero-filled chart)
@@ -258,7 +286,7 @@ export default function SipDashboard({ onBack, userData }: { onBack: () => void;
   //   else    → real dashboard, with real resolved data only
   if (loading) return <SipDashboardSkeleton />;
   if (loadError) return <SipDashboardError onBack={onBack} />;
-  if (sips.length === 0) return <SipDashboardEmpty onBack={onBack} />;
+  if (sips.length === 0 && pendingSetup.length === 0) return <SipDashboardEmpty onBack={onBack} />;
 
   return (
     <motion.div
@@ -358,7 +386,7 @@ export default function SipDashboard({ onBack, userData }: { onBack: () => void;
           </h2>
           {/* Filter pill */}
           <div className="flex bg-slate-100 rounded-lg p-0.5 gap-0.5">
-            {(['All', 'Active', 'Failed', 'Paused'] as StatusFilter[]).map(f => (
+            {(['All', 'Active', 'Pending', 'Failed', 'Paused', 'Cancelled'] as StatusFilter[]).map(f => (
               <button
                 key={f}
                 onClick={() => setStatusFilter(f)}
@@ -424,7 +452,7 @@ export default function SipDashboard({ onBack, userData }: { onBack: () => void;
                   <td className="py-3.5 px-5 text-right">
                     <button
                       onClick={() => cancelSip(sip)}
-                      disabled={cancellingId === sip.id || sip.status !== 'Active'}
+                      disabled={cancellingId === sip.id || sip.status === 'Cancelled' || sip.status === 'Failed'}
                       className="rounded-lg border border-red-200 px-3 py-1.5 text-xs font-semibold text-red-600 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-40"
                     >
                       {cancellingId === sip.id ? 'Cancelling...' : 'Cancel SIP'}
@@ -443,6 +471,48 @@ export default function SipDashboard({ onBack, userData }: { onBack: () => void;
           </div>
         )}
       </div>
+
+      {pendingSetup.filter(s => catFilter === 'ALL' || s.category === catFilter).length > 0 && (
+        <div className="bg-white rounded-2xl border border-sky-200 overflow-hidden">
+          <div className="px-5 py-4 border-b border-sky-100 bg-sky-50/60">
+            <h2 className="font-semibold text-slate-800">SIP Setup In Progress</h2>
+            <p className="text-xs text-slate-500 mt-1">
+              Mandate authorization and first installment pending — these appear as active SIPs only after completion.
+            </p>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead>
+                <tr className="bg-slate-50 border-b border-slate-100">
+                  {['Investor', 'Fund', 'Amount', 'Mandate', 'Status'].map(h => (
+                    <th key={h} className="py-3 px-5 text-xs font-bold text-slate-500 uppercase tracking-wider text-left">{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {pendingSetup
+                  .filter(s => catFilter === 'ALL' || s.category === catFilter)
+                  .map(sip => {
+                    const cfg = statusCfg[sip.status] ?? statusFallback;
+                    return (
+                      <tr key={sip.id} className="hover:bg-slate-50 transition-colors">
+                        <td className="py-3.5 px-5 text-sm font-semibold text-slate-800">{sip.investor}</td>
+                        <td className="py-3.5 px-5 text-sm text-slate-600 max-w-[220px]"><span className="truncate block">{sip.fund}</span></td>
+                        <td className="py-3.5 px-5 text-sm font-mono font-semibold text-slate-800">{sip.amount}</td>
+                        <td className="py-3.5 px-5 text-xs text-slate-500">{sip.mandate}</td>
+                        <td className="py-3.5 px-5">
+                          <span className={`inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full ${cfg.cls}`}>
+                            {cfg.icon} {sip.status}
+                          </span>
+                        </td>
+                      </tr>
+                    );
+                  })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
     </motion.div>
   );
 }

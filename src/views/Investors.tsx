@@ -1,10 +1,10 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   Search, Filter, ChevronLeft, Download, ShieldCheck, Users,
   TrendingUp, TrendingDown, AreaChart as AreaChartIcon, Activity,
-  CheckCircle2, Clock, XCircle, AlertCircle, Upload, RefreshCw, ExternalLink, Pencil,
+  CheckCircle2, Clock, XCircle, AlertCircle, Upload, RefreshCw, Pencil,
   Trash2, Plus, ArrowRight,
 } from 'lucide-react';
 import {
@@ -12,22 +12,62 @@ import {
 } from 'recharts';
 import { apiClient, apiFetch, apiUrl } from '../config/api';
 import Pagination from '../components/Pagination';
-import { getPageContent, getPageMeta } from '../utils/pagination';
 import { formatDate } from '../utils/formatDate';
+import { isTransactionEligible, transactionEligibilityMessage } from '../utils/investorEligibility';
+import {
+  inferWizardStepFromInvestor,
+  mapBackendNextStepToWizardStep,
+} from '../utils/onboardingResume';
 import { useDebounce } from '../hooks/useDebounce';
+import {
+  listArchivedInvestorsForDistributor,
+  rememberArchivedInvestor,
+  restoreArchivedInvestorRef,
+} from '../utils/archivedInvestorRestore';
 import EmptyState from '../components/EmptyState';
 import InvestorEditForm from '../components/InvestorEditForm';
+import CybrillaKycWarnings from '../components/CybrillaKycWarnings';
+import CybrillaKycReasonDialog, { type CybrillaKycReasonDialogContent } from '../components/CybrillaKycReasonDialog';
+import KycFlowPanel from '../components/KycFlowPanel';
+import KycProviderLink from '../components/KycProviderLink';
+import {
+  shouldLockAadhaarStart,
+  shouldLockEsignStart,
+  shouldLockKycRequestCreate,
+  shouldLockPoaRunButton,
+  isPoaPreVerificationComplete,
+} from '../utils/kycActionLocks';
 import {
   extractPreVerification,
+  resolvePreVerificationFromPayload,
+  extractCybrillaWarningsFromPayload,
+  isIdentityDocumentFetchComplete,
+  isPanAadhaarNotLinked,
+  normalizeAadhaarVerificationResponse,
+  readAadhaarVerificationFromInvestor,
   getPreVerificationDecision,
+  readCybrillaReadinessReason,
+  canCreateFreshKycRequest,
+  isReadinessFailureBlockingKycRequest,
   getPreVerificationRows,
+  buildKycReasonDialogContent,
+  type KycReasonDialogInput,
   parseStoredPreVerification,
   preVerificationStatusClasses,
   computeIdentityFingerprint,
   normalizePan,
   shouldForceNewKycCheck,
   validateInvestorIdentityForKyc,
+  isCybrillaSandboxMode,
+  type CybrillaKycWarning,
 } from '../utils/kycPreVerification';
+import {
+  buildKycPostbackUrl,
+  normalizeEsignVerificationResponse,
+  normalizeKycFlowStatus,
+  type KycFlowNextAction,
+  type KycFlowStatusView,
+} from '../utils/kycFlow';
 
 // ─── KYC status config ─────────────────────────────────────────────────────────
 const KYC_BADGE_CONFIG: Record<string, { label: string; bg: string; text: string }> = {
@@ -111,13 +151,7 @@ const shouldShowContinueOnboarding = (investor: any) => {
     || bankStatus === 'PENDING';
 };
 
-const getOnboardingResumeStep = (investor: any) => {
-  const kycStatus = normalizeWorkflowStatus(investor?.kycStatus);
-  const bankStatus = normalizeWorkflowStatus(investor?.bankVerificationStatus);
-  if (!isKycVerifiedStatus(kycStatus)) return 3;
-  if (!bankStatus || ['NOT_CAPTURED', 'VERIFICATION_PENDING', 'PENDING', 'FAILED'].includes(bankStatus)) return 5;
-  return 6;
-};
+const getOnboardingResumeStep = (investor: any) => inferWizardStepFromInvestor(investor);
 
 const maskAccountNumber = (value?: string) => {
   if (!value) return 'Account not captured';
@@ -515,12 +549,11 @@ export default function Investors({
   const [selectedInvestor, setSelectedInvestor] = useState<any | null>(null);
   const [page, setPage] = useState(0);
   const [size, setSize] = useState(20);
-  const [totalPages, setTotalPages] = useState(1);
-  const [totalElements, setTotalElements] = useState(0);
   const [kycRefreshingIds, setKycRefreshingIds] = useState<Record<string, boolean>>({});
   const [kycApplyingIds, setKycApplyingIds] = useState<Record<string, boolean>>({});
   const [deletingInvestorIds, setDeletingInvestorIds] = useState<Record<string, boolean>>({});
   const [bulkKycRefreshing, setBulkKycRefreshing] = useState(false);
+  const [investorSyncLoading, setInvestorSyncLoading] = useState(false);
   const [kycRefreshNotice, setKycRefreshNotice] = useState('');
   const [investorActionNotice, setInvestorActionNotice] = useState('');
   const [investorActionError, setInvestorActionError] = useState('');
@@ -529,81 +562,168 @@ export default function Investors({
   const listScrollRef = React.useRef(0);
   const distributorId = userData?.id;
 
-  useEffect(() => {
-    let cancelled = false;
+  const fetchInvestors = React.useCallback(async (options?: { forceSync?: boolean; syncFromCybrilla?: boolean }) => {
+    if (!hasLoadedRef.current) setLoading(true);
+    setError('');
+    try {
+      const query = debouncedSearch.trim();
+      // Backend list endpoints call Finprim GET /v2/investor_profiles when Cybrilla source is enabled.
+      const params = new URLSearchParams();
+      if (options?.forceSync) params.set('forceSync', 'true');
+      if (options?.syncFromCybrilla) params.set('syncFromCybrilla', 'true');
+      let url = distributorId
+        ? apiUrl(`/investors/by-distributor/${distributorId}`)
+        : apiUrl('/investors');
 
-    const fetchInvestors = async () => {
-      if (!hasLoadedRef.current) setLoading(true);
-      setError('');
-      try {
-        const query = debouncedSearch.trim();
-        const params = new URLSearchParams();
-        let url = distributorId
-          ? apiUrl(`/investors/by-distributor/${distributorId}`)
-          : apiUrl('/investors');
-
-        if (query.length === 1 && baseInvestorsRef.current.length > 0) {
-          console.log('[Investors] 1-char local search source:', {
-            query,
-            count: baseInvestorsRef.current.length,
-            data: baseInvestorsRef.current,
-          });
-          setInvestors(baseInvestorsRef.current);
-          hasLoadedRef.current = true;
-          setLoading(false);
-          return;
-        }
-
-        const shouldUseSearchApi = query.length >= 2;
-        if (shouldUseSearchApi) {
-          params.set('query', query);
-          params.set('limit', '50');
-          if (distributorId) {
-            params.set('distributorId', distributorId);
-          }
-          url = apiUrl(`/investors/search?${params.toString()}`);
-        }
-
-        const res = await apiFetch(url);
-        const data = await res.json().catch(() => null);
-        console.log('[Investors] API response:', {
-          url,
-          status: res.status,
-          ok: res.ok,
-          query,
-          data,
-        });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const nextInvestors = Array.isArray(data) ? data : [];
-        if (!shouldUseSearchApi) baseInvestorsRef.current = nextInvestors;
-        if (!cancelled) setInvestors(nextInvestors);
-      } catch (e: any) {
-        console.error('Error fetching investors:', e);
-        if (!cancelled && !hasLoadedRef.current) setError('Failed to load investors. Please try again.');
-      } finally {
-        if (!cancelled) {
-          hasLoadedRef.current = true;
-          setLoading(false);
-        }
+      if (query.length === 1 && baseInvestorsRef.current.length > 0) {
+        setInvestors(baseInvestorsRef.current);
+        hasLoadedRef.current = true;
+        setLoading(false);
+        return;
       }
-    };
 
-    fetchInvestors();
-    return () => {
-      cancelled = true;
-    };
+      const shouldUseSearchApi = query.length >= 2;
+      if (shouldUseSearchApi) {
+        params.set('query', query);
+        params.set('limit', '50');
+        if (distributorId) {
+          params.set('distributorId', distributorId);
+        }
+        url = apiUrl(`/investors/search?${params.toString()}`);
+      } else if (params.toString()) {
+        url += `?${params.toString()}`;
+      }
+
+      const res = await apiFetch(url);
+      const data = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(data?.message || `HTTP ${res.status}`);
+      const nextInvestors = (Array.isArray(data) ? data : []).filter((inv: any) => inv?.isDeleted !== true);
+      if (!shouldUseSearchApi) baseInvestorsRef.current = nextInvestors;
+      setInvestors(nextInvestors);
+    } catch (e: any) {
+      console.error('Error fetching investors:', e);
+      if (!hasLoadedRef.current) setError('Failed to load investors. Please try again.');
+      throw e;
+    } finally {
+      hasLoadedRef.current = true;
+      setLoading(false);
+    }
   }, [debouncedSearch, distributorId]);
+
+  useEffect(() => {
+    fetchInvestors().catch(() => undefined);
+  }, [fetchInvestors]);
+
+  const syncInvestorsFromCybrilla = async () => {
+    setInvestorSyncLoading(true);
+    setInvestorActionNotice('');
+    setInvestorActionError('');
+    try {
+      const params = new URLSearchParams();
+      if (distributorId) {
+        params.set('distributorId', distributorId);
+      }
+      const syncPath = params.size > 0
+        ? `/investors/sync-from-cybrilla?${params.toString()}`
+        : '/investors/sync-from-cybrilla';
+      const response = await apiFetch(syncPath, { method: 'POST' });
+      const result = await response.json().catch(() => null);
+      if (!response.ok) {
+        const detail = result?.message
+          || result?.error
+          || `Investor sync failed with HTTP ${response.status}. Restart the backend if you recently updated Java code.`;
+        throw new Error(detail);
+      }
+
+      const archivedRefs = listArchivedInvestorsForDistributor(distributorId);
+      const targetedRestoreResults = await Promise.all(
+        archivedRefs.map(entry => restoreArchivedInvestorRef(entry, apiFetch)),
+      );
+      const targetedRestored = targetedRestoreResults.filter(item => item.ok);
+      const targetedFailed = targetedRestoreResults.filter(item => !item.ok);
+
+      await fetchInvestors({ forceSync: true });
+
+      const restoredCount = Number(result?.restored ?? 0) + targetedRestored.length;
+      const baseMessage = result?.message
+        || `Finprim sync completed. Restored ${restoredCount}, updated ${Number(result?.updated ?? 0)}.`;
+
+      if (targetedRestored.length > 0) {
+        setInvestorActionNotice(
+          `${baseMessage} Also re-linked ${targetedRestored.map(item => item.name).join(', ')} from your archive list.`,
+        );
+      } else if (Number(result?.restored ?? 0) === 0 && Number(result?.skippedUnlinked ?? 0) > 0) {
+        setInvestorActionNotice(
+          `${baseMessage} Finprim has ${Number(result?.providerCount ?? 0)} profile(s) with no local link. `
+          + 'If you deleted a row from PostgreSQL directly, archive the investor in the UI first next time, '
+          + 'or restore by PAN via support — recently archived investors are re-linked automatically.',
+        );
+      } else {
+        setInvestorActionNotice(baseMessage);
+      }
+
+      if (targetedFailed.length > 0) {
+        setInvestorActionError(
+          targetedFailed.map(item => `${item.name}: ${item.error || 'restore failed'}`).join(' '),
+        );
+      }
+    } catch (err) {
+      console.error('Investor Cybrilla sync failed:', err);
+      setInvestorActionError(
+        err instanceof Error
+          ? err.message
+          : 'Could not sync investors from Cybrilla. Restart the backend (port 8081) and retry.',
+      );
+    } finally {
+      setInvestorSyncLoading(false);
+    }
+  };
 
   const KYC_OPTIONS = ['All', 'COMPLETED', 'PENDING', 'IN_PROGRESS', 'FAILED', 'RETRY_REQUIRED', 'NOT_STARTED'];
   const STATUS_OPTIONS = ['All', 'ACTIVE', 'READY_FOR_TRANSACTIONS', 'ONBOARDING', 'DRAFT', 'PENDING', 'BLOCKED', 'ARCHIVED'];
 
-  const filtered = investors.filter(inv => {
-    const matchSearch = matchesInvestorSearch(inv, search.trim());
-    const matchKyc = kycFilter === 'All' || inv.kycStatus === kycFilter;
-    const matchStatus = statusFilter === 'All' || inv.investorStatus === statusFilter;
-    return matchSearch && matchKyc && matchStatus;
-  });
-  const syncableVisibleInvestors = filtered.filter(inv => inv.externalKycCheckId || inv.externalKycRequestId);
+  const filtered = useMemo(
+    () => investors.filter(inv => {
+      const matchSearch = matchesInvestorSearch(inv, search.trim());
+      const matchKyc = kycFilter === 'All' || inv.kycStatus === kycFilter;
+      const matchStatus = statusFilter === 'All' || inv.investorStatus === statusFilter;
+      return matchSearch && matchKyc && matchStatus;
+    }),
+    [investors, search, kycFilter, statusFilter],
+  );
+
+  const resolvedTotalElements = filtered.length;
+  const resolvedTotalPages = Math.max(Math.ceil(resolvedTotalElements / size) || 0, 1);
+
+  useEffect(() => {
+    if (page > resolvedTotalPages - 1) {
+      setPage(Math.max(resolvedTotalPages - 1, 0));
+    }
+  }, [page, resolvedTotalPages]);
+
+  const paginatedInvestors = useMemo(
+    () => filtered.slice(page * size, page * size + size),
+    [filtered, page, size],
+  );
+
+  const syncableVisibleInvestors = paginatedInvestors.filter(
+    inv => inv.externalKycCheckId || inv.externalKycRequestId,
+  );
+
+  const handleSearchChange = (value: string) => {
+    setSearch(value);
+    setPage(0);
+  };
+
+  const handleKycFilterChange = (value: string) => {
+    setKycFilter(value);
+    setPage(0);
+  };
+
+  const handleStatusFilterChange = (value: string) => {
+    setStatusFilter(value);
+    setPage(0);
+  };
 
   const updateInvestorInState = (updatedInvestor: any) => {
     if (!updatedInvestor?.id) return;
@@ -653,17 +773,43 @@ export default function Investors({
     };
   }, [focusInvestorId, loading, investors]);
 
-  const continueInvestorOnboarding = (investor: any) => {
+  const continueInvestorOnboarding = async (investor: any) => {
     if (!investor?.id) return;
     listScrollRef.current = typeof window !== 'undefined' ? window.scrollY : 0;
+
+    let resumeInvestor = investor;
+    let resumeStep = getOnboardingResumeStep(investor);
+
+    try {
+      const response = await apiFetch(`/investors/${investor.id}/onboarding/resume`);
+      const data = await response.json().catch(() => null);
+      if (response.ok && data?.investor?.id) {
+        resumeInvestor = {
+          ...data.investor,
+          onboardingResumeNextStep: data.nextStep,
+          onboardingDocumentsComplete: data.documentsComplete,
+        };
+        resumeStep = mapBackendNextStepToWizardStep(data.nextStep, data.documentsComplete)
+          ?? getOnboardingResumeStep(data.investor);
+      }
+    } catch (error) {
+      console.warn('Investor onboarding resume lookup failed; using list snapshot', error);
+    }
+
     navigate('/distributor/investor-onboarding', {
       state: {
-        investor,
-        investorId: investor.id,
-        resumeStep: getOnboardingResumeStep(investor),
+        investor: resumeInvestor,
+        investorId: resumeInvestor.id,
+        resumeStep,
         returnTo: '/distributor/investors',
+        resetKey: `${resumeInvestor.id}-${Date.now()}`,
       },
     });
+  };
+
+  const openModifyKyc = (investor: any) => {
+    if (!investor?.id) return;
+    navigate(`/distributor/investors/${investor.id}/kyc-modify`);
   };
 
   const backToInvestorList = () => {
@@ -682,7 +828,10 @@ export default function Investors({
   const deleteInvestor = async (investor: any) => {
     if (!investor?.id) return false;
     const name = investor.fullName || 'this investor';
-    const confirmed = window.confirm(`Archive ${name}? This is a soft delete in your database and the investor will disappear from active lists.`);
+    const confirmed = window.confirm(
+      `Archive ${name}? This removes the investor from your local Platizio list only. `
+      + 'Their Finprim/Cybrilla profile is not deleted. Use "Restore from Cybrilla" to bring them back into your list.',
+    );
     if (!confirmed) return false;
 
     setDeletingInvestorIds(prev => ({ ...prev, [investor.id]: true }));
@@ -694,8 +843,19 @@ export default function Investors({
       if (!response.ok) {
         throw new Error(data?.message || `Investor delete failed with HTTP ${response.status}.`);
       }
+      if (distributorId) {
+        rememberArchivedInvestor({
+          distributorId,
+          pan: investor.pan,
+          cybrillaInvestorId: investor.cybrillaInvestorId,
+          fullName: investor.fullName,
+        });
+      }
       removeInvestorFromState(investor.id);
-      setInvestorActionNotice(`${name} archived successfully.`);
+      setInvestorActionNotice(
+        data?.message
+          || `${name} archived locally. Finprim cannot delete investor profiles via API — click "Restore from Cybrilla" to bring them back.`,
+      );
       return true;
     } catch (err) {
       console.error('Investor soft delete failed:', err);
@@ -810,6 +970,7 @@ export default function Investors({
         onInvestorUpdated={updateInvestorInState}
         onInvestorDeleted={deleteInvestor}
         onContinueOnboarding={continueInvestorOnboarding}
+        onModifyKyc={openModifyKyc}
         isDeleting={Boolean(deletingInvestorIds[selectedInvestor.id])}
       />
     );
@@ -823,18 +984,33 @@ export default function Investors({
         <div>
           <h1 className="text-2xl font-semibold tracking-tight text-slate-800">Investor Archive</h1>
           <p className="text-slate-500 text-sm mt-1">
-            {loading ? 'Loading…' : `${filtered.length} of ${investors.length} investors`}
+            {loading
+              ? 'Loading…'
+              : resolvedTotalElements === 0
+                ? '0 investors'
+                : `Showing ${page * size + 1}-${Math.min((page + 1) * size, resolvedTotalElements)} of ${resolvedTotalElements} investors`}
           </p>
         </div>
-        <button
-          onClick={refreshVisibleKycStatuses}
-          disabled={bulkKycRefreshing || syncableVisibleInvestors.length === 0}
-          className="inline-flex items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700 transition-colors hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50"
-          title="Fetch latest KYC status from Cybrilla for the currently visible investors"
-        >
-          <RefreshCw className={`h-4 w-4 ${bulkKycRefreshing ? 'animate-spin' : ''}`} />
-          Refresh visible KYC
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            onClick={syncInvestorsFromCybrilla}
+            disabled={investorSyncLoading}
+            className="inline-flex items-center gap-2 rounded-lg border border-violet-200 bg-violet-50 px-4 py-2 text-sm font-semibold text-violet-700 transition-colors hover:bg-violet-100 disabled:cursor-not-allowed disabled:opacity-50"
+            title="Investor list already refreshes from Finprim GET /v2/investor_profiles on load. Use this to restore investors you archived in the UI."
+          >
+            <RefreshCw className={`h-4 w-4 ${investorSyncLoading ? 'animate-spin' : ''}`} />
+            {investorSyncLoading ? 'Restoring…' : 'Restore from Cybrilla'}
+          </button>
+          <button
+            onClick={refreshVisibleKycStatuses}
+            disabled={bulkKycRefreshing || syncableVisibleInvestors.length === 0}
+            className="inline-flex items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700 transition-colors hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50"
+            title="Fetch latest KYC status from Cybrilla for the currently visible investors"
+          >
+            <RefreshCw className={`h-4 w-4 ${bulkKycRefreshing ? 'animate-spin' : ''}`} />
+            Refresh visible KYC
+          </button>
+        </div>
       </div>
 
       {kycRefreshNotice && (
@@ -861,7 +1037,7 @@ export default function Investors({
             <input
               type="text"
               value={search}
-              onChange={e => setSearch(e.target.value)}
+              onChange={e => handleSearchChange(e.target.value)}
               placeholder="Search by name, PAN, email, or mobile…"
               className="w-full pl-9 pr-4 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:bg-white focus:ring-2 focus:ring-blue-100 focus:border-blue-500 transition-all outline-none"
             />
@@ -871,14 +1047,14 @@ export default function Investors({
             <Filter className="w-4 h-4 text-slate-400" />
             <select
               value={kycFilter}
-              onChange={e => setKycFilter(e.target.value)}
+              onChange={e => handleKycFilterChange(e.target.value)}
               className="text-xs font-semibold bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 outline-none cursor-pointer"
             >
               {KYC_OPTIONS.map(o => <option key={o} value={o}>{o === 'All' ? 'All KYC' : (KYC_BADGE_CONFIG[o]?.label || o)}</option>)}
             </select>
             <select
               value={statusFilter}
-              onChange={e => setStatusFilter(e.target.value)}
+              onChange={e => handleStatusFilterChange(e.target.value)}
               className="text-xs font-semibold bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 outline-none cursor-pointer"
             >
               {STATUS_OPTIONS.map(o => <option key={o} value={o}>{o === 'All' ? 'All Status' : o.replace(/_/g, ' ')}</option>)}
@@ -918,12 +1094,14 @@ export default function Investors({
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {filtered.map(inv => {
+                {paginatedInvestors.map(inv => {
                   const kyc = KYC_BADGE_CONFIG[inv.kycStatus] || KYC_BADGE_CONFIG['NOT_STARTED'];
                   const stCls = statusConfig[inv.investorStatus] || 'bg-slate-100 text-slate-500';
                   const riskCls = riskConfig[inv.riskProfile] || 'bg-slate-50 text-slate-500';
                   const initials = (inv.fullName || 'IN').split(' ').map((n: string) => n[0]).join('').substring(0, 2).toUpperCase();
                   const isKycDone = isKycVerifiedStatus(inv.kycStatus);
+                  const canInvest = isTransactionEligible(inv);
+                  const investBlockedReason = canInvest ? '' : transactionEligibilityMessage(inv);
                   const canContinueOnboarding = shouldShowContinueOnboarding(inv);
 
                   return (
@@ -1017,17 +1195,31 @@ export default function Investors({
                           </button>
                           {isKycDone && (
                             <button
-                              onClick={() => navigate(`/distributor/investors/${inv.id}/kyc-modify`)}
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                openModifyKyc(inv);
+                              }}
                               className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-indigo-700 border border-indigo-200 rounded-lg hover:bg-indigo-50 transition-colors"
                               title="Modify this investor's verified KYC record via Cybrilla (Aadhaar + eSign)"
                             >
                               <Pencil className="w-3.5 h-3.5" /> Modify KYC
                             </button>
                           )}
-                          {isKycDone && onInvest && (
+                          {canInvest && onInvest && (
                             <button
                               onClick={() => onInvest(inv)}
                               className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+                            >
+                              <TrendingUp className="w-3.5 h-3.5" /> Invest
+                            </button>
+                          )}
+                          {isKycDone && !canInvest && onInvest && (
+                            <button
+                              type="button"
+                              disabled
+                              title={investBlockedReason}
+                              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-slate-100 text-slate-400 rounded-lg cursor-not-allowed"
                             >
                               <TrendingUp className="w-3.5 h-3.5" /> Invest
                             </button>
@@ -1050,6 +1242,19 @@ export default function Investors({
             </table>
           )}
         </div>
+        {!loading && !error && resolvedTotalElements > 0 && (
+          <Pagination
+            page={page}
+            size={size}
+            totalPages={resolvedTotalPages}
+            totalElements={resolvedTotalElements}
+            onPageChange={setPage}
+            onSizeChange={nextSize => {
+              setSize(nextSize);
+              setPage(0);
+            }}
+          />
+        )}
       </div>
     </motion.div>
   );
@@ -1063,6 +1268,7 @@ function InvestorDetail({
   onInvestorUpdated,
   onInvestorDeleted,
   onContinueOnboarding,
+  onModifyKyc,
   isDeleting,
 }: {
   investor: any;
@@ -1071,14 +1277,26 @@ function InvestorDetail({
   onInvestorUpdated?: (investor: any) => void;
   onInvestorDeleted?: (investor: any) => Promise<boolean>;
   onContinueOnboarding?: (investor: any) => void;
+  onModifyKyc?: (investor: any) => void;
   isDeleting?: boolean;
 }) {
-  const [activeTab, setActiveTab] = useState('overview');
+  const [activeTab, setActiveTab] = useState(() =>
+    isKycVerifiedStatus(investor?.kycStatus) ? 'overview' : 'compliance',
+  );
   const [currentInvestor, setCurrentInvestor] = useState(investor);
   const [kycActionLoading, setKycActionLoading] = useState('');
   const [kycActionError, setKycActionError] = useState('');
   const [kycActionMessage, setKycActionMessage] = useState('');
+  const [cybrillaApiWarnings, setCybrillaApiWarnings] = useState<CybrillaKycWarning[]>([]);
   const [identityRedirectUrl, setIdentityRedirectUrl] = useState('');
+  const [identityDocumentId, setIdentityDocumentId] = useState('');
+  const [identityFetchStatus, setIdentityFetchStatus] = useState('');
+  const [aadhaarProofsAttached, setAadhaarProofsAttached] = useState(false);
+  const [kycFlowStatus, setKycFlowStatus] = useState<KycFlowStatusView | null>(null);
+  const [kycFlowLoading, setKycFlowLoading] = useState(false);
+  const [kycFlowError, setKycFlowError] = useState('');
+  const [kycFlowActionLoading, setKycFlowActionLoading] = useState('');
+  const [esignRedirectUrl, setEsignRedirectUrl] = useState('');
   const [kycPreVerification, setKycPreVerification] = useState(() =>
     parseStoredPreVerification(investor.externalKycPayloadJson),
   );
@@ -1094,7 +1312,80 @@ function InvestorDetail({
       : '',
   );
   const kycCheckInFlightRef = React.useRef(false);
-  const kycDecision = getPreVerificationDecision(kycPreVerification);
+  const [kycReasonDialogOpen, setKycReasonDialogOpen] = useState(false);
+  const [kycReasonDialogContent, setKycReasonDialogContent] = useState<CybrillaKycReasonDialogContent | null>(null);
+  const kycReasonDialogSigRef = useRef('');
+
+  const kycDecision = getPreVerificationDecision(kycPreVerification, {
+    investor: currentInvestor as Record<string, unknown>,
+  });
+  const panAadhaarNotLinked = kycDecision.requiresPanAadhaarLink
+    || isPanAadhaarNotLinked(kycPreVerification, currentInvestor as Record<string, unknown>);
+  const aadhaarFetchComplete = isIdentityDocumentFetchComplete(identityFetchStatus) || aadhaarProofsAttached;
+  const anyKycApiBusy = Boolean(kycActionLoading || kycFlowActionLoading);
+  const poaPreVerificationComplete = isPoaPreVerificationComplete(kycDecision);
+  const poaRunLocked = shouldLockPoaRunButton({
+    anyBusy: anyKycApiBusy && kycActionLoading !== 'kyc-check',
+    kycPhase: kycActionLoading === 'kyc-check' ? 'checking' : kycDecision.state,
+    preVerificationComplete: poaPreVerificationComplete,
+  });
+  const aadhaarStartLocked = shouldLockAadhaarStart({
+    anyBusy: anyKycApiBusy,
+    documentId: identityDocumentId,
+    redirectUrl: identityRedirectUrl,
+    externalDocumentId: currentInvestor.externalIdentityDocumentId,
+  });
+  const freshKycRequestAllowed = canCreateFreshKycRequest(
+    kycPreVerification,
+    currentInvestor as Record<string, unknown>,
+  );
+  const kycRequestCreateLocked = shouldLockKycRequestCreate({
+    anyBusy: anyKycApiBusy,
+    kycRequestId: currentInvestor.externalKycRequestId,
+    readinessBlocksCreate: isReadinessFailureBlockingKycRequest(
+      kycPreVerification,
+      currentInvestor as Record<string, unknown>,
+    ),
+  });
+  const esignStartLocked = shouldLockEsignStart({
+    anyBusy: anyKycApiBusy,
+    esignId: currentInvestor.externalEsignId,
+    redirectUrl: esignRedirectUrl,
+  });
+  const aadhaarLinkLocked = anyKycApiBusy || aadhaarFetchComplete || aadhaarStartLocked;
+  const esignLinkLocked = anyKycApiBusy || esignStartLocked;
+  const cybrillaKycWarnings = useMemo(() => {
+    if (cybrillaApiWarnings.length > 0) return cybrillaApiWarnings;
+    return extractCybrillaWarningsFromPayload({
+      externalResponse: kycPreVerification,
+      investor: currentInvestor as Record<string, unknown>,
+    });
+  }, [kycPreVerification, currentInvestor, cybrillaApiWarnings]);
+
+  const presentKycReasonDialog = (
+    input: KycReasonDialogInput,
+    options?: { force?: boolean },
+  ) => {
+    const content = buildKycReasonDialogContent(input);
+    if (!content) return;
+    const signature = JSON.stringify(content);
+    if (!options?.force && signature === kycReasonDialogSigRef.current) return;
+    kycReasonDialogSigRef.current = signature;
+    setKycReasonDialogContent(content);
+    setKycReasonDialogOpen(true);
+  };
+
+  const reportKycIssue = (errorMessage: string, extra?: Partial<KycReasonDialogInput>) => {
+    setKycActionError(errorMessage);
+    presentKycReasonDialog({
+      errorMessage,
+      warnings: cybrillaKycWarnings,
+      preVerification: kycPreVerification,
+      decision: kycDecision,
+      flowMessage: kycFlowStatus?.message,
+      ...extra,
+    }, { force: true });
+  };
 
   // F-10: edit-form toggle for the Overview tab + a transient "Saved" pill
   // that auto-fades a few seconds after a successful PUT.
@@ -1103,7 +1394,18 @@ function InvestorDetail({
   const editScrollTopRef = React.useRef(0);
   useEffect(() => {
     setCurrentInvestor(investor);
-    setKycPreVerification(parseStoredPreVerification(investor.externalKycPayloadJson));
+    if (!isKycVerifiedStatus(investor?.kycStatus)) {
+      setActiveTab('compliance');
+    }
+    const storedExternal = parseStoredPreVerification(investor.externalKycPayloadJson);
+    setKycPreVerification(storedExternal);
+    setCybrillaApiWarnings(extractCybrillaWarningsFromPayload({
+      externalResponse: storedExternal,
+      investor,
+    }));
+    const storedAadhaar = readAadhaarVerificationFromInvestor(investor as Record<string, unknown>);
+    if (storedAadhaar?.identityDocumentId) setIdentityDocumentId(storedAadhaar.identityDocumentId);
+    if (storedAadhaar?.fetchStatus) setIdentityFetchStatus(storedAadhaar.fetchStatus);
     setLastKycIdentityFingerprint(
       investor.externalKycPayloadJson
         ? computeIdentityFingerprint({
@@ -1165,6 +1467,8 @@ function InvestorDetail({
   const kyc = KYC_BADGE_CONFIG[currentInvestor.kycStatus] || KYC_BADGE_CONFIG['NOT_STARTED'];
   const stCls = statusConfig[currentInvestor.investorStatus] || 'bg-slate-100 text-slate-500';
   const isKycDone = isKycVerifiedStatus(currentInvestor.kycStatus);
+  const canInvest = isTransactionEligible(currentInvestor);
+  const investBlockedReason = canInvest ? '' : transactionEligibilityMessage(currentInvestor);
   const canContinueOnboarding = shouldShowContinueOnboarding(currentInvestor);
   const initials = (currentInvestor.fullName || 'IN').split(' ').map((n: string) => n[0]).join('').substring(0, 2).toUpperCase();
 
@@ -1189,20 +1493,36 @@ function InvestorDetail({
     request: () => Promise<Response>,
     successMessage: string,
   ) => {
+    if (kycActionLoading) return;
+    if (key === 'identity-document' && aadhaarStartLocked) {
+      setKycActionMessage('Aadhaar fetch is already started. Use Refresh Aadhaar after the investor completes Digilocker.');
+      return;
+    }
+    if (key === 'kyc-request' && (kycRequestCreateLocked || !freshKycRequestAllowed)) return;
+    if (key === 'esign-start' && esignStartLocked) return;
     setKycActionLoading(key);
     setKycActionError('');
     setKycActionMessage('');
+    setCybrillaApiWarnings([]);
     try {
       const response = await request();
       const data = await response.json().catch(() => null);
       if (!response.ok) {
-        throw new Error(data?.message || `KYC action failed with HTTP ${response.status}.`);
+        const warnings = data ? extractCybrillaWarningsFromPayload(data) : [];
+        if (warnings.length > 0) {
+          setCybrillaApiWarnings(warnings);
+        }
+        const errorMessage = data?.message || `KYC action failed with HTTP ${response.status}.`;
+        reportKycIssue(errorMessage, { warnings, preVerification: resolvePreVerificationFromPayload(data) });
+        return;
       }
       applyKycActionData(data);
+      const warnings = extractCybrillaWarningsFromPayload(data);
+      setCybrillaApiWarnings(warnings);
       setKycActionMessage(successMessage);
     } catch (err) {
       console.error('KYC action failed:', err);
-      setKycActionError(err instanceof Error ? err.message : 'KYC action failed.');
+      reportKycIssue(err instanceof Error ? err.message : 'KYC action failed.');
     } finally {
       setKycActionLoading('');
     }
@@ -1213,9 +1533,22 @@ function InvestorDetail({
       setCurrentInvestor((prev: any) => ({ ...prev, ...data.investor }));
       onInvestorUpdated?.(data.investor);
     }
-    const preVerification = extractPreVerification(data);
+    const preVerification = resolvePreVerificationFromPayload(data);
     if (preVerification) {
       setKycPreVerification(preVerification);
+      const decision = getPreVerificationDecision(preVerification, {
+        investor: data?.investor || currentInvestor,
+        kyc: data?.kyc,
+      });
+      const warnings = extractCybrillaWarningsFromPayload(data);
+      if (decision.message) {
+        setKycActionMessage(decision.message);
+      }
+      presentKycReasonDialog({
+        decision,
+        warnings,
+        preVerification,
+      });
       setLastKycIdentityFingerprint(computeIdentityFingerprint({
         fullName: data?.investor?.fullName || currentInvestor.fullName,
         pan: data?.investor?.pan || currentInvestor.pan,
@@ -1224,10 +1557,185 @@ function InvestorDetail({
         email: data?.investor?.email || currentInvestor.email,
       }));
     }
-    const redirectUrl = data?.externalResponse?.fetch?.redirect_url;
-    if (redirectUrl) setIdentityRedirectUrl(redirectUrl);
+    const fetchMeta = normalizeAadhaarVerificationResponse(data);
+    if (fetchMeta?.redirectUrl) setIdentityRedirectUrl(fetchMeta.redirectUrl);
+    if (fetchMeta?.identityDocumentId) setIdentityDocumentId(fetchMeta.identityDocumentId);
+    if (fetchMeta?.fetchStatus) setIdentityFetchStatus(fetchMeta.fetchStatus);
+    if (fetchMeta?.proofsAttachedToKycRequest) setAadhaarProofsAttached(true);
     return data?.investor;
   };
+
+  const refreshAadhaarIdentityDocument = async () => {
+    if (!currentInvestor?.id) {
+      setKycActionError('Investor record is missing.');
+      return;
+    }
+    setKycActionLoading('identity-document-refresh');
+    setKycActionError('');
+    try {
+      const response = await apiFetch(
+        `/investors/${currentInvestor.id}/identity-documents/refresh`,
+        { method: 'POST' },
+      );
+      const data = await response.json().catch(() => null);
+      if (!response.ok) {
+        if (data) setCybrillaApiWarnings(extractCybrillaWarningsFromPayload(data));
+        throw new Error(data?.message || `Aadhaar status refresh failed with HTTP ${response.status}.`);
+      }
+      applyKycActionData(data);
+      await loadKycFlowStatus();
+      const view = normalizeAadhaarVerificationResponse(data);
+      if (view?.fetchComplete && view.proofsAttachedToKycRequest) {
+        setKycActionMessage('Aadhaar fetched from Digilocker and attached to the KYC request.');
+        setAadhaarProofsAttached(true);
+      } else if (view?.fetchComplete) {
+        setKycActionMessage('Aadhaar fetched successfully from Digilocker.');
+      } else {
+        setKycActionMessage('Digilocker fetch is still in progress.');
+      }
+    } catch (err) {
+      reportKycIssue(err instanceof Error ? err.message : 'Unable to refresh Aadhaar verification status.');
+    } finally {
+      setKycActionLoading('');
+    }
+  };
+
+  const loadKycFlowStatus = async () => {
+    if (!currentInvestor?.id) return null;
+    setKycFlowLoading(true);
+    setKycFlowError('');
+    try {
+      const response = await apiFetch(`/investors/${currentInvestor.id}/kyc-flow/status`);
+      const data = await response.json().catch(() => null);
+      if (!response.ok) {
+        throw new Error(data?.message || `KYC flow status failed with HTTP ${response.status}.`);
+      }
+      const flow = normalizeKycFlowStatus(data);
+      setKycFlowStatus(flow);
+      if (flow?.investor) {
+        setCurrentInvestor((prev: any) => ({ ...prev, ...flow.investor }));
+        onInvestorUpdated?.(flow.investor);
+        const storedAadhaar = readAadhaarVerificationFromInvestor(flow.investor);
+        if (storedAadhaar?.redirectUrl) setIdentityRedirectUrl(storedAadhaar.redirectUrl);
+        if (storedAadhaar?.fetchStatus) setIdentityFetchStatus(storedAadhaar.fetchStatus);
+        if (storedAadhaar?.proofsAttachedToKycRequest) setAadhaarProofsAttached(true);
+      }
+      return flow;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unable to load KYC flow status.';
+      console.warn('kyc_flow_status_error=', err);
+      setKycFlowError(message);
+      reportKycIssue(message);
+      return null;
+    } finally {
+      setKycFlowLoading(false);
+    }
+  };
+
+  const startEsign = async () => {
+    if (!currentInvestor?.id) return;
+    if (esignStartLocked) {
+      setKycActionMessage('eSign is already started. Use Refresh eSign after the investor completes signing.');
+      return;
+    }
+    setKycFlowActionLoading('START_ESIGN');
+    setKycActionError('');
+    try {
+      const response = await apiFetch(`/investors/${currentInvestor.id}/esign/start`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          postbackUrl: buildKycPostbackUrl(currentInvestor.id, 'esign'),
+        }),
+      });
+      const data = await response.json().catch(() => null);
+      if (!response.ok) {
+        throw new Error(data?.message || `eSign start failed with HTTP ${response.status}.`);
+      }
+      const esign = normalizeEsignVerificationResponse(data);
+      if (esign?.redirectUrl) setEsignRedirectUrl(esign.redirectUrl);
+      if (esign?.investor) {
+        setCurrentInvestor((prev: any) => ({ ...prev, ...esign.investor }));
+        onInvestorUpdated?.(esign.investor);
+      }
+      setKycActionMessage('eSign started. Open the link for the investor to sign the KYC application.');
+    } catch (err) {
+      reportKycIssue(err instanceof Error ? err.message : 'Unable to start eSign.');
+    } finally {
+      setKycFlowActionLoading('');
+    }
+  };
+
+  const refreshEsign = async () => {
+    if (!currentInvestor?.id) return;
+    setKycFlowActionLoading('REFRESH_ESIGN');
+    setKycActionError('');
+    try {
+      const response = await apiFetch(`/investors/${currentInvestor.id}/esign/refresh`, { method: 'POST' });
+      const data = await response.json().catch(() => null);
+      if (!response.ok) {
+        throw new Error(data?.message || `eSign refresh failed with HTTP ${response.status}.`);
+      }
+      const esign = normalizeEsignVerificationResponse(data);
+      if (esign?.redirectUrl) setEsignRedirectUrl(esign.redirectUrl);
+      if (esign?.investor) {
+        setCurrentInvestor((prev: any) => ({ ...prev, ...esign.investor }));
+        onInvestorUpdated?.(esign.investor);
+      }
+      await loadKycFlowStatus();
+      setKycActionMessage(
+        esign?.completed
+          ? 'eSign completed. Cybrilla KYC application has been submitted.'
+          : 'eSign is still pending. Ask the investor to complete signing.',
+      );
+    } catch (err) {
+      reportKycIssue(err instanceof Error ? err.message : 'Unable to refresh eSign status.');
+    } finally {
+      setKycFlowActionLoading('');
+    }
+  };
+
+  const runKycFlowNextAction = async (requestedAction: KycFlowNextAction) => {
+    if (!requestedAction || requestedAction === 'WAIT' || requestedAction === 'COMPLETE') return;
+    if (kycFlowActionLoading) return;
+    if (requestedAction === 'RUN_PRE_VERIFICATION' && poaRunLocked) return;
+    if (requestedAction === 'START_AADHAAR' && aadhaarStartLocked) return;
+    if (requestedAction === 'CREATE_KYC_REQUEST' && kycRequestCreateLocked) return;
+    if (requestedAction === 'START_ESIGN' && esignStartLocked) return;
+    setKycFlowActionLoading(requestedAction);
+    try {
+      switch (requestedAction) {
+        case 'RUN_PRE_VERIFICATION':
+          await createKycCheck();
+          break;
+        case 'CREATE_KYC_REQUEST':
+          await createKycRequest();
+          break;
+        case 'START_AADHAAR':
+          await createIdentityDocument();
+          break;
+        case 'REFRESH_AADHAAR':
+          await refreshAadhaarIdentityDocument();
+          break;
+        case 'START_ESIGN':
+          await startEsign();
+          break;
+        case 'REFRESH_ESIGN':
+          await refreshEsign();
+          break;
+        default:
+          break;
+      }
+      await loadKycFlowStatus();
+    } finally {
+      setKycFlowActionLoading('');
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab !== 'compliance') return;
+    void loadKycFlowStatus();
+  }, [activeTab, currentInvestor.id]);
 
   const shouldCreateFreshKycRequest = (data: any, updatedInvestor: any) => {
     const preVerification = extractPreVerification(data);
@@ -1238,6 +1746,7 @@ function InvestorDetail({
   };
 
   const createKycCheck = async () => {
+    if (poaRunLocked) return;
     const errors = validateInvestorIdentityForKyc({
       fullName: currentInvestor.fullName,
       pan: currentInvestor.pan,
@@ -1257,6 +1766,7 @@ function InvestorDetail({
     setKycActionLoading('kyc-check');
     setKycActionError('');
     setKycActionMessage('');
+    setCybrillaApiWarnings([]);
     try {
       const currentFingerprint = computeIdentityFingerprint({
         fullName: currentInvestor.fullName,
@@ -1298,10 +1808,14 @@ function InvestorDetail({
         body: checkData,
       });
       if (!checkResponse.ok) {
+        if (checkData) {
+          setCybrillaApiWarnings(extractCybrillaWarningsFromPayload(checkData));
+        }
         throw new Error(checkData?.message || `KYC check failed with HTTP ${checkResponse.status}.`);
       }
 
       let updatedInvestor = applyKycActionData(checkData);
+      setCybrillaApiWarnings(extractCybrillaWarningsFromPayload(checkData));
       let message = forceNewCheck
         ? 'Fresh POA pre-verification started with updated identity details.'
         : 'POA pre-verification submitted. Refresh if the response is still accepted.';
@@ -1325,9 +1839,13 @@ function InvestorDetail({
         });
         const requestData = await requestResponse.json().catch(() => null);
         if (!requestResponse.ok) {
+          if (requestData) {
+            setCybrillaApiWarnings(extractCybrillaWarningsFromPayload(requestData));
+          }
           throw new Error(requestData?.message || `KYC request failed with HTTP ${requestResponse.status}.`);
         }
         updatedInvestor = applyKycActionData(requestData) || updatedInvestor;
+        setCybrillaApiWarnings(extractCybrillaWarningsFromPayload(requestData));
         message = 'POA says fresh KYC is required, so a Cybrilla KYC request was created and saved.';
       }
 
@@ -1335,9 +1853,10 @@ function InvestorDetail({
         message = 'KYC verified by Cybrilla and saved in your database.';
       }
       setKycActionMessage(message);
+      await loadKycFlowStatus();
     } catch (err) {
       console.error('kyc_api_call action=create_error', err);
-      setKycActionError(err instanceof Error ? err.message : 'KYC action failed.');
+      reportKycIssue(err instanceof Error ? err.message : 'KYC action failed.');
     } finally {
       kycCheckInFlightRef.current = false;
       setKycActionLoading('');
@@ -1448,10 +1967,10 @@ function InvestorDetail({
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         type: 'aadhaar',
-        postbackUrl: `${window.location.origin}/distributor/investors`,
+        postbackUrl: buildKycPostbackUrl(currentInvestor.id, 'aadhaar'),
       }),
     }),
-    'Aadhaar identity document flow created.',
+    'Aadhaar Digilocker flow created.',
   );
 
   const tabs = [
@@ -1496,10 +2015,20 @@ function InvestorDetail({
           )}
           {canContinueOnboarding && onContinueOnboarding && (
             <button
+              type="button"
               onClick={() => onContinueOnboarding(currentInvestor)}
               className="flex items-center gap-2 px-4 py-2 text-sm font-medium bg-emerald-600 text-white rounded-lg shadow-sm hover:bg-emerald-700 transition-colors"
             >
               <ArrowRight className="w-4 h-4" /> Continue Onboarding
+            </button>
+          )}
+          {isKycDone && onModifyKyc && (
+            <button
+              type="button"
+              onClick={() => onModifyKyc(currentInvestor)}
+              className="flex items-center gap-2 px-4 py-2 text-sm font-medium bg-indigo-600 text-white rounded-lg shadow-sm hover:bg-indigo-700 transition-colors"
+            >
+              <Pencil className="w-4 h-4" /> Modify KYC
             </button>
           )}
           {!isEditing && (
@@ -1522,10 +2051,20 @@ function InvestorDetail({
           <button className="flex items-center gap-2 px-4 py-2 text-sm font-medium bg-white border border-slate-200 text-slate-700 rounded-lg shadow-sm hover:bg-slate-50 transition-colors">
             <Download className="w-4 h-4" /> Dossier
           </button>
-          {isKycDone && onInvest && (
+          {canInvest && onInvest && (
             <button
               onClick={() => onInvest(currentInvestor)}
               className="flex items-center gap-2 px-4 py-2 text-sm font-medium bg-blue-600 text-white rounded-lg shadow-sm hover:bg-blue-700 transition-colors"
+            >
+              <TrendingUp className="w-4 h-4" /> Invest Now
+            </button>
+          )}
+          {isKycDone && !canInvest && onInvest && (
+            <button
+              type="button"
+              disabled
+              title={investBlockedReason}
+              className="flex items-center gap-2 px-4 py-2 text-sm font-medium bg-slate-100 text-slate-400 rounded-lg cursor-not-allowed"
             >
               <TrendingUp className="w-4 h-4" /> Invest Now
             </button>
@@ -1676,6 +2215,35 @@ function InvestorDetail({
             />
 
             <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
+              <div className="mb-4 rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-3">
+                <p className="text-xs font-semibold text-indigo-900">Cybrilla KYC flow (fresh onboarding)</p>
+                <p className="mt-1 text-xs leading-5 text-indigo-800">
+                  Use the checklist below for pre-verification → Aadhaar Digilocker → eSign.
+                  For investors still in onboarding, prefer <span className="font-semibold">Continue Onboarding</span> (Step 3).
+                  <span className="font-semibold"> Modify KYC</span> is only for already-verified records.
+                </p>
+              </div>
+
+              <KycFlowPanel
+                flow={kycFlowStatus}
+                loading={kycFlowLoading}
+                actionLoading={kycFlowActionLoading || kycActionLoading}
+                aadhaarRedirectUrl={identityRedirectUrl}
+                esignRedirectUrl={esignRedirectUrl}
+                aadhaarLinkDisabled={aadhaarLinkLocked}
+                esignLinkDisabled={esignLinkLocked}
+                primaryActionDisabled={
+                  (kycFlowStatus?.nextAction === 'RUN_PRE_VERIFICATION' && poaRunLocked)
+                  || (kycFlowStatus?.nextAction === 'START_AADHAAR' && aadhaarStartLocked)
+                  || (kycFlowStatus?.nextAction === 'CREATE_KYC_REQUEST' && kycRequestCreateLocked)
+                  || (kycFlowStatus?.nextAction === 'START_ESIGN' && esignStartLocked)
+                }
+                error={kycFlowError}
+                alwaysVisible
+                onRunNext={runKycFlowNextAction}
+              />
+
+              <div className="mt-6 border-t border-slate-100 pt-4">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                 <div>
                   <p className="text-sm font-semibold text-slate-800 flex items-center gap-2">
@@ -1688,7 +2256,7 @@ function InvestorDetail({
                 <div className="flex flex-wrap gap-2">
                   <button
                     onClick={applyKycWorkflow}
-                    disabled={Boolean(kycActionLoading)}
+                    disabled={anyKycApiBusy}
                     className="inline-flex items-center justify-center gap-2 rounded-lg bg-[#0B1B3E] px-4 py-2 text-xs font-semibold text-white transition-colors hover:bg-[#1A3066] disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     {kycActionLoading === 'kyc-apply' ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <ShieldCheck className="h-3.5 w-3.5" />}
@@ -1696,7 +2264,7 @@ function InvestorDetail({
                   </button>
                   <button
                     onClick={createKycCheck}
-                    disabled={Boolean(kycActionLoading)}
+                    disabled={poaRunLocked}
                     className="inline-flex items-center justify-center gap-2 rounded-lg border border-blue-200 px-4 py-2 text-xs font-semibold text-blue-700 transition-colors hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     {kycActionLoading === 'kyc-check' ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <ShieldCheck className="h-3.5 w-3.5" />}
@@ -1707,7 +2275,37 @@ function InvestorDetail({
               <div className={`mt-4 rounded-xl border p-3 text-xs font-medium ${kycDecision.canProceed ? 'border-green-100 bg-green-50 text-green-700' : 'border-slate-200 bg-slate-50 text-slate-600'}`}>
                 <p className="font-bold">{kycDecision.title}</p>
                 <p className="mt-1 leading-5">{kycDecision.message}</p>
+                <button
+                  type="button"
+                  onClick={() => presentKycReasonDialog({
+                    decision: kycDecision,
+                    warnings: cybrillaKycWarnings,
+                    preVerification: kycPreVerification,
+                    flowMessage: kycFlowStatus?.message,
+                  }, { force: true })}
+                  className="mt-2 font-semibold text-indigo-700 underline-offset-2 hover:underline"
+                >
+                  View all Cybrilla details
+                </button>
               </div>
+
+              {cybrillaKycWarnings.length > 0 && (
+                <CybrillaKycWarnings
+                  warnings={cybrillaKycWarnings}
+                  title="Warnings from Cybrilla"
+                  className="mt-4"
+                />
+              )}
+
+              {panAadhaarNotLinked && (
+                <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-4 text-xs text-amber-800">
+                  <p className="font-semibold text-amber-900">PAN–Aadhaar link required</p>
+                  <p className="mt-1 leading-5">
+                    Cybrilla returned <span className="font-mono">aadhaar_not_linked</span>.
+                    Link PAN with Aadhaar on the Income Tax portal, then re-run pre-verification.
+                  </p>
+                </div>
+              )}
 
               {getPreVerificationRows(kycPreVerification).length > 0 && (
                 <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2">
@@ -1753,8 +2351,13 @@ function InvestorDetail({
                 </button>
                 <button
                   onClick={createKycRequest}
-                  disabled={Boolean(kycActionLoading)}
-                  className="rounded-lg border border-blue-200 px-3 py-2 text-xs font-semibold text-blue-700 transition-colors hover:bg-blue-50 disabled:opacity-50"
+                  disabled={kycRequestCreateLocked || !freshKycRequestAllowed}
+                  title={
+                    !freshKycRequestAllowed
+                      ? 'Run pre-verification and resolve investor readiness (kyc_unavailable) before creating a KYC request.'
+                      : undefined
+                  }
+                  className="rounded-lg border border-blue-200 px-3 py-2 text-xs font-semibold text-blue-700 transition-colors hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   Create KYC request
                 </button>
@@ -1765,20 +2368,48 @@ function InvestorDetail({
                 >
                   Fetch request
                 </button>
-                <button
-                  onClick={simulateKycRequest}
-                  disabled={Boolean(kycActionLoading)}
-                  className="rounded-lg border border-amber-200 px-3 py-2 text-xs font-semibold text-amber-700 transition-colors hover:bg-amber-50 disabled:opacity-50"
-                >
-                  Simulate success
-                </button>
+                {isCybrillaSandboxMode() && (
+                  <button
+                    onClick={simulateKycRequest}
+                    disabled={Boolean(kycActionLoading)}
+                    className="rounded-lg border border-amber-200 px-3 py-2 text-xs font-semibold text-amber-700 transition-colors hover:bg-amber-50 disabled:opacity-50"
+                    title="Sandbox only — calls Cybrilla /v2/kyc_requests/:id/simulate"
+                  >
+                    Simulate success
+                  </button>
+                )}
                 <button
                   onClick={createIdentityDocument}
-                  disabled={Boolean(kycActionLoading)}
-                  className="rounded-lg border border-emerald-200 px-3 py-2 text-xs font-semibold text-emerald-700 transition-colors hover:bg-emerald-50 disabled:opacity-50"
+                  disabled={aadhaarStartLocked || !currentInvestor.externalKycRequestId}
+                  className="rounded-lg border border-emerald-200 px-3 py-2 text-xs font-semibold text-emerald-700 transition-colors hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   Aadhaar document
                 </button>
+                {identityDocumentId && (
+                  <button
+                    onClick={refreshAadhaarIdentityDocument}
+                    disabled={Boolean(kycActionLoading)}
+                    className="rounded-lg border border-indigo-200 px-3 py-2 text-xs font-semibold text-indigo-700 transition-colors hover:bg-indigo-50 disabled:opacity-50"
+                  >
+                    Refresh Aadhaar
+                  </button>
+                )}
+                <button
+                  onClick={startEsign}
+                  disabled={esignStartLocked || !currentInvestor.externalKycRequestId}
+                  className="rounded-lg border border-violet-200 px-3 py-2 text-xs font-semibold text-violet-700 transition-colors hover:bg-violet-50 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Start eSign
+                </button>
+                {currentInvestor.externalEsignId && (
+                  <button
+                    onClick={refreshEsign}
+                    disabled={Boolean(kycActionLoading || kycFlowActionLoading)}
+                    className="rounded-lg border border-violet-200 px-3 py-2 text-xs font-semibold text-violet-700 transition-colors hover:bg-violet-50 disabled:opacity-50"
+                  >
+                    Refresh eSign
+                  </button>
+                )}
               </div>
 
               {kycActionError && (
@@ -1792,15 +2423,21 @@ function InvestorDetail({
                 </p>
               )}
               {identityRedirectUrl && (
-                <a
+                <KycProviderLink
                   href={identityRedirectUrl}
-                  target="_blank"
-                  rel="noreferrer"
+                  label="Open Digilocker for Aadhaar fetch"
+                  disabled={aadhaarLinkLocked}
                   className="mt-3 inline-flex items-center gap-1.5 text-xs font-semibold text-blue-700 hover:text-blue-800"
-                >
-                  Open Aadhaar fetch link <ExternalLink className="h-3.5 w-3.5" />
-                </a>
+                  disabledReason="Digilocker link is disabled while Aadhaar fetch is starting or already in progress."
+                />
               )}
+              {identityFetchStatus && (
+                <p className={`mt-2 text-xs font-semibold uppercase ${aadhaarFetchComplete ? 'text-green-700' : 'text-indigo-700'}`}>
+                  Aadhaar fetch status: {identityFetchStatus.replace(/_/g, ' ')}
+                  {aadhaarProofsAttached ? ' · attached to KYC request' : ''}
+                </p>
+              )}
+              </div>
             </div>
 
             <KycDocumentUpload
@@ -1814,6 +2451,12 @@ function InvestorDetail({
           </motion.div>
         )}
       </AnimatePresence>
+
+      <CybrillaKycReasonDialog
+        open={kycReasonDialogOpen}
+        content={kycReasonDialogContent}
+        onClose={() => setKycReasonDialogOpen(false)}
+      />
     </motion.div>
   );
 }

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard, Users, BookOpen, Search, Bell, Menu,
@@ -6,8 +6,11 @@ import {
   BarChart3, Network, Layers, UserCheck, ShieldCheck, X, AlertTriangle,
   PieChart, RefreshCw, FileBarChart2, MessageSquare, ClipboardList, Calculator, Wrench
 } from 'lucide-react';
-import { apiFetch } from '../config/api';
 import { useFocusTrap } from '../hooks/useFocusTrap';
+import { useGetNotificationsByDistributorQuery } from '../store/api/platizioApi';
+import { useAppSelector } from '../store/hooks';
+import { selectAuthStatus, selectIsAuthLoading } from '../store/slices/authSlice';
+import { ADMIN_ROLES, normalizeRole } from '../types/auth';
 
 const DIST_NAV_PRIMARY = [
   { id: '/distributor/dashboard',      icon: <LayoutDashboard className="w-4 h-4" />, label: 'Dashboard' },
@@ -36,58 +39,36 @@ const ADMIN_NAV = [
   { id: '/admin/investor-mgmt', icon: <UserCheck className="w-4 h-4" />, label: 'Investor Management' },
 ];
 
-const ADMIN_ROLES = new Set(['ADMIN', 'MASTER_DISTRIBUTOR']);
-const normalizeRole = (role?: string) => role?.trim().toUpperCase() || '';
 const NOTIFICATION_POLL_INTERVAL_MS = 5 * 60 * 1000;
 
 export default function AppLayout({ userData, onSignOut }: { userData: any, onSignOut: () => void }) {
   const navigate = useNavigate();
   const location = useLocation();
   const [showInactivePopup, setShowInactivePopup] = useState(true);
-  const [unreadNotifs, setUnreadNotifs] = useState(0);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const distributorId = userData?.id ? String(userData.id) : undefined;
+  const authStatus = useAppSelector(selectAuthStatus);
+  const authLoading = useAppSelector(selectIsAuthLoading);
+  const notificationsEnabled = Boolean(distributorId) && authStatus === 'authenticated' && !authLoading;
 
-  useEffect(() => {
-    if (!userData?.id) {
-      setUnreadNotifs(0);
-      return;
-    }
+  const { data: notifications = [] } = useGetNotificationsByDistributorQuery(distributorId!, {
+    skip: !notificationsEnabled,
+    pollingInterval: NOTIFICATION_POLL_INTERVAL_MS,
+    skipPollingIfUnfocused: true,
+  });
 
-    let cancelled = false;
-    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-
-    const fetchUnreadNotifications = async () => {
-      if (document.visibilityState === 'hidden') return;
-
-      try {
-        const res = await apiFetch(`/notifications/distributor/${userData.id}`, { headers });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const data = await res.json();
-        const unread = Array.isArray(data)
-          ? data.filter((n: any) => n.readFlag === false || n.read === false || n.read_flag === false).length
-          : 0;
-
-        if (!cancelled) setUnreadNotifs(unread);
-      } catch (err) {
-        console.error('Failed to fetch notifications', err);
-        if (!cancelled) setUnreadNotifs(0);
-      }
-    };
-
-    fetchUnreadNotifications();
-    const intervalId = window.setInterval(fetchUnreadNotifications, NOTIFICATION_POLL_INTERVAL_MS);
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === 'visible') void fetchUnreadNotifications();
-    };
-
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-
-    return () => {
-      cancelled = true;
-      window.clearInterval(intervalId);
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
-    };
-  }, [userData?.id]);
+  const unreadNotifs = useMemo(
+    () =>
+      Array.isArray(notifications)
+        ? notifications.filter(
+            (notification: any) =>
+              notification.readFlag === false ||
+              notification.read === false ||
+              notification.read_flag === false,
+          ).length
+        : 0,
+    [notifications],
+  );
 
   const mode = location.pathname.startsWith('/admin') ? 'admin' : 'distributor';
 
@@ -363,7 +344,14 @@ export default function AppLayout({ userData, onSignOut }: { userData: any, onSi
 
               {mode === 'distributor' ? (
                 <button
-                  onClick={() => navigate('/distributor/investor-onboarding')}
+                  type="button"
+                  onClick={() => navigate('/distributor/investor-onboarding', {
+                    state: {
+                      freshStart: true,
+                      returnTo: '/distributor/dashboard',
+                      resetKey: Date.now(),
+                    },
+                  })}
                   aria-label="New Onboarding"
                   className="flex items-center gap-1 px-3 md:px-4 py-2 text-sm font-medium bg-[#0B1B3E] text-white rounded-lg shadow-sm hover:bg-[#1A3066] transition-colors"
                 >

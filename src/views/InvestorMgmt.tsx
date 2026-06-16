@@ -240,13 +240,6 @@ export default function InvestorMgmt({ userData }: { userData?: any }) {
       }
 
       let updatedInvestor = result?.investor;
-      if (updatedInvestor?.externalKycCheckId || updatedInvestor?.externalKycRequestId) {
-        const syncResponse = await apiFetch(`/investors/${inv.id}/kyc-sync`, { method: 'POST' });
-        const syncResult = await syncResponse.json().catch(() => null);
-        if (syncResponse.ok && syncResult?.investor) {
-          updatedInvestor = syncResult.investor;
-        }
-      }
       if (updatedInvestor) {
         setInvestors(prev => prev.map(row => row.id === inv.id ? mapInvestor(updatedInvestor) : row));
       }

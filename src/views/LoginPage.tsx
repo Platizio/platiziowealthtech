@@ -180,6 +180,7 @@ export default function LoginPage({
         role: data?.role,
         email: data?.email,
       });
+      setPwLoading(false);
       onLogin(data);
     } catch (error) {
       console.error('Login failed:', error);
@@ -669,16 +670,6 @@ export default function LoginPage({
                   initial={{ opacity: 0, x: -12 }} animate={{ opacity: 1, x: 0 }}
                   exit={{ opacity: 0, x: -12 }} transition={{ duration: 0.18 }}
                 >
-                  {/* Demo hint */}
-                  <div className="mb-6 bg-blue-50 border border-blue-100 rounded-xl px-4 py-3 flex items-start gap-3">
-                    <span className="text-blue-400 mt-0.5 text-sm">ℹ</span>
-                    <div className="text-xs text-blue-700 leading-relaxed">
-                      <p className="font-semibold mb-0.5">Demo credentials</p>
-                      <p>Email: <span className="font-mono font-bold">alice@example.com</span></p>
-                      <p>Password: <span className="font-mono font-bold">Platizio@2024</span></p>
-                    </div>
-                  </div>
-
                   {/* Error */}
                   <AnimatePresence>
                     {pwError && !approvalPopup && (

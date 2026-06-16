@@ -5,6 +5,7 @@ import { Product } from '../data/products';
 import { apiFetch } from '../config/api';
 import Pagination from '../components/Pagination';
 import { getPageContent, getPageMeta, isPagePayload } from '../utils/pagination';
+import { productSchemeKey } from '../utils/productSchemeKey';
 import { useDebounce } from '../hooks/useDebounce';
 import EmptyState from '../components/EmptyState';
 import { useFocusTrap } from '../hooks/useFocusTrap';
@@ -206,7 +207,7 @@ export default function ProductMgmt({
   ) => {
     const syncFromCybrilla = options?.syncFromCybrilla ?? false;
     const forceRefresh = options?.forceRefresh ?? false;
-    const backoffRemainingMs = syncFromCybrilla ? liveSyncBackoffRemainingMs() : 0;
+    const backoffRemainingMs = syncFromCybrilla && !forceRefresh ? liveSyncBackoffRemainingMs() : 0;
     let useCybrillaSync = syncFromCybrilla;
     if (backoffRemainingMs > 0) {
       useCybrillaSync = false;
@@ -225,8 +226,12 @@ export default function ProductMgmt({
     const params = new URLSearchParams({ page: String(requestPage), size: String(size) });
     if (debouncedSearch.trim()) params.set('query', debouncedSearch.trim());
     if (assetFilter !== 'All') params.set('assetClass', assetFilter);
-    if (categoryFilter !== 'All') params.set('category', categoryFilter);
-    if (useCybrillaSync) params.set('syncFromCybrilla', 'true');
+    if (useCybrillaSync) {
+      params.set('syncFromCybrilla', 'true');
+      if (forceRefresh) params.set('forceCatalogueRefresh', 'true');
+    } else {
+      params.set('local', 'true');
+    }
 
     console.groupCollapsed('[Cybrilla Workflow] Fetch fund schemes');
     console.log('frontend_route=', '/admin/product-mgmt');
@@ -277,6 +282,8 @@ export default function ProductMgmt({
         try {
           const fallbackParams = new URLSearchParams(params);
           fallbackParams.delete('syncFromCybrilla');
+          fallbackParams.delete('forceCatalogueRefresh');
+          fallbackParams.set('local', 'true');
           const cachedRes = await apiFetch(`/products/schemes/page?${fallbackParams.toString()}`);
           const cachedResult = cachedRes.ok ? await readJsonSafely(cachedRes) : [];
           const cachedSchemes = getPageContent(cachedResult);
@@ -304,9 +311,7 @@ export default function ProductMgmt({
   };
 
   useEffect(() => {
-    const syncOnOpen = !catalogSyncedOnMountRef.current;
-    if (syncOnOpen) catalogSyncedOnMountRef.current = true;
-    loadProducts(page, { syncFromCybrilla: syncOnOpen });
+    loadProducts(page, { syncFromCybrilla: false });
   }, [page, size, debouncedSearch, assetFilter, categoryFilter]);
 
   const fetchProductsFromCybrilla = async () => {
@@ -561,9 +566,9 @@ export default function ProductMgmt({
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {displayedProducts.map(p => (
+              {displayedProducts.map((p, index) => (
                 <tr
-                  key={p.id}
+                  key={productSchemeKey(p, index)}
                   className={`group hover:bg-slate-50 transition-colors ${p.status === 'Inactive' ? 'opacity-40' : ''}`}
                 >
                   <td className="px-6 py-4">

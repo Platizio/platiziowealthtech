@@ -5,7 +5,11 @@ import {
   ArrowLeft, RefreshCw, ShieldCheck, ExternalLink, Upload, CheckCircle2,
   AlertCircle, Clock, FileSignature, Fingerprint, Loader2,
 } from 'lucide-react';
-import { apiClient } from '../config/api';
+import { apiFetch } from '../config/api';
+import {
+  kycModifyCallbackBaseUrl,
+  rewriteKycModifyCallbackUrl,
+} from '../utils/kycFlow';
 
 // kyc_form states that are still "in flight" — we poll while in these.
 const ACTIVE_STATES = ['under_review', 'created', 'awaiting_esign', 'awaiting_submission'];
@@ -26,11 +30,39 @@ type KycForm = {
 
 type KycFormResponse = { form: KycForm | null; external: any };
 
-const extractError = (err: any, fallback: string) =>
-  err?.response?.data?.message || err?.response?.data?.error || err?.message || fallback;
+const readApiError = async (response: Response, fallback: string) => {
+  const data = await response.json().catch(() => null);
+  if (data && typeof data === 'object') {
+    const body = data as { message?: string; error?: string };
+    return body.message || body.error || fallback;
+  }
+  return fallback;
+};
+
+const readJson = async <T,>(response: Response): Promise<T | null> => {
+  try {
+    return await response.json();
+  } catch {
+    return null;
+  }
+};
 
 const prettyStatus = (status?: string) =>
   (status || 'not_started').replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+
+/** Legacy broken Finprim mock URLs (pre-callback sandbox) — use simulate API instead of opening. */
+const isLegacyBrokenProofUrl = (url?: string | null) =>
+  !!url && url.includes('fetch_my_proof?form=');
+
+const isSandboxProofUrl = (url?: string | null) =>
+  !!url && (url.includes('sandbox=digilocker') || url.startsWith('platizio-sandbox://'));
+
+const isSandboxMockEsignUrl = (url?: string | null) =>
+  !!url && (
+    (url.includes('/esign/') && url.includes('kycf_'))
+    || url.includes('sandbox=esign')
+    || url.startsWith('platizio-sandbox://')
+  );
 
 const STATUS_STYLES: Record<string, string> = {
   under_review: 'bg-amber-50 text-amber-700 border-amber-200',
@@ -71,64 +103,155 @@ export default function InvestorKycModify() {
     }
   }, [form?.fieldsNeededJson]);
 
+  const proofFetchUrl = useMemo(
+    () => rewriteKycModifyCallbackUrl(form?.proofFetchUrl, investorId),
+    [form?.proofFetchUrl, investorId],
+  );
+  const esignUrl = useMemo(
+    () => rewriteKycModifyCallbackUrl(form?.esignUrl, investorId),
+    [form?.esignUrl, investorId],
+  );
+
   const load = useCallback(async () => {
+    if (!investorId) {
+      setError('Investor id is missing from the URL.');
+      setLoading(false);
+      return;
+    }
     setError(null);
     try {
-      const res = await apiClient.get<KycFormResponse>(`/investors/${investorId}/kyc-form`);
-      setData(res.data);
+      const response = await apiFetch(`/investors/${investorId}/kyc-form`);
+      const data = await readJson<KycFormResponse>(response);
+      if (!response.ok) {
+        throw new Error(await readApiError(response, 'Unable to load the KYC form.'));
+      }
+      setData(data);
     } catch (err) {
-      setError(extractError(err, 'Unable to load the KYC form.'));
+      setError(err instanceof Error ? err.message : 'Unable to load the KYC form.');
     } finally {
       setLoading(false);
     }
   }, [investorId]);
 
-  const refresh = useCallback(async (formId?: string) => {
+  const refresh = useCallback(async (formId?: string, options?: { silent?: boolean }) => {
     const id = formId || form?.externalKycFormId;
-    if (!id) return;
-    setBusy('refresh');
-    setError(null);
+    if (!id || !investorId) return;
+    const silent = options?.silent === true;
+    if (!silent) setBusy('refresh');
+    if (!silent) setError(null);
     try {
-      const res = await apiClient.post<KycFormResponse>(`/investors/${investorId}/kyc-form/${id}/refresh`);
-      setData(res.data);
+      const response = await apiFetch(`/investors/${investorId}/kyc-form/${id}/refresh`, { method: 'POST' });
+      const data = await readJson<KycFormResponse>(response);
+      if (!response.ok) {
+        throw new Error(await readApiError(response, 'Unable to refresh the KYC form status.'));
+      }
+      setData(data);
     } catch (err) {
-      setError(extractError(err, 'Unable to refresh the KYC form status.'));
+      if (!silent) {
+        setError(err instanceof Error ? err.message : 'Unable to refresh the KYC form status.');
+      }
     } finally {
-      setBusy(null);
+      if (!silent) setBusy(null);
     }
   }, [form?.externalKycFormId, investorId]);
 
   // Initial load.
   useEffect(() => { load(); }, [load]);
 
-  // Handle Digilocker / eSign redirect-back: refresh, then clean the URL.
+  const simulateProofFetch = useCallback(async (formId?: string) => {
+    const id = formId || form?.externalKycFormId;
+    if (!id || !investorId) return;
+    setBusy('simulate-proof');
+    setError(null);
+    try {
+      const response = await apiFetch(
+        `/investors/${investorId}/kyc-form/${id}/sandbox/simulate-proof-fetch`,
+        { method: 'POST' },
+      );
+      const data = await readJson<KycFormResponse>(response);
+      if (!response.ok) {
+        throw new Error(await readApiError(response, 'Unable to simulate Digilocker proof fetch.'));
+      }
+      setData(data);
+      setInfo('Digilocker proof simulated locally (sandbox). Continue with signature upload.');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to simulate Digilocker proof fetch.');
+    } finally {
+      setBusy(null);
+    }
+  }, [form?.externalKycFormId, investorId]);
+
+  const simulateEsign = useCallback(async (formId?: string) => {
+    const id = formId || form?.externalKycFormId;
+    if (!id || !investorId) return;
+    setBusy('simulate-esign');
+    setError(null);
+    try {
+      const response = await apiFetch(
+        `/investors/${investorId}/kyc-form/${id}/sandbox/simulate-esign`,
+        { method: 'POST' },
+      );
+      const data = await readJson<KycFormResponse>(response);
+      if (!response.ok) {
+        throw new Error(await readApiError(response, 'Unable to simulate eSign.'));
+      }
+      setData(data);
+      setInfo('eSign simulated locally (sandbox). Cybrilla would submit to the KRA next.');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to simulate eSign.');
+    } finally {
+      setBusy(null);
+    }
+  }, [form?.externalKycFormId, investorId]);
+
+  // Handle Digilocker / eSign redirect-back: simulate locally when needed, then refresh.
   useEffect(() => {
     if (!action || callbackHandled.current || loading) return;
     callbackHandled.current = true;
+    const params = new URLSearchParams(window.location.search);
     const label = action === 'esign-callback' ? 'eSign' : 'Digilocker';
     setInfo(`Returned from ${label}. Refreshing status…`);
     (async () => {
-      await refresh();
+      if (action === 'proof-callback' && params.get('sandbox') === 'digilocker') {
+        await simulateProofFetch();
+      } else if (action === 'esign-callback' && params.get('sandbox') === 'esign') {
+        await simulateEsign();
+      } else {
+        await refresh();
+      }
       navigate(`/distributor/investors/${investorId}/kyc-modify`, { replace: true });
     })();
-  }, [action, loading, refresh, navigate, investorId]);
+  }, [action, loading, refresh, navigate, investorId, simulateProofFetch, simulateEsign]);
 
   // Poll while the form is in an active state.
   useEffect(() => {
     if (!isActive || !form?.externalKycFormId) return;
-    const interval = setInterval(() => { refresh(); }, 8000);
+    const interval = setInterval(() => { refresh(undefined, { silent: true }); }, 8000);
     return () => clearInterval(interval);
   }, [isActive, form?.externalKycFormId, refresh]);
 
   const startForm = async () => {
+    if (!investorId) return;
     setBusy('create');
     setError(null);
     setInfo(null);
     try {
-      const res = await apiClient.post<KycFormResponse>(`/investors/${investorId}/kyc-form`);
-      setData(res.data);
+      const response = await apiFetch(`/investors/${investorId}/kyc-form`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ callbackBaseUrl: kycModifyCallbackBaseUrl() }),
+      });
+      const data = await readJson<KycFormResponse>(response);
+      if (!response.ok) {
+        throw new Error(await readApiError(response, 'Unable to start the KYC modify form.'));
+      }
+      setData(data);
+      const resumed = !!data?.form?.status && ACTIVE_STATES.includes(data.form.status);
+      setInfo(resumed
+        ? 'Resuming your in-progress KYC modify form.'
+        : 'KYC modify form created. Follow the steps below.');
     } catch (err) {
-      setError(extractError(err, 'Unable to start the KYC modify form.'));
+      setError(err instanceof Error ? err.message : 'Unable to start the KYC modify form.');
     } finally {
       setBusy(null);
     }
@@ -147,12 +270,19 @@ export default function InvestorKycModify() {
     setBusy('details');
     setError(null);
     try {
-      const res = await apiClient.patch<KycFormResponse>(
-        `/investors/${investorId}/kyc-form/${form.externalKycFormId}`, payload);
-      setData(res.data);
+      const response = await apiFetch(`/investors/${investorId}/kyc-form/${form.externalKycFormId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const data = await readJson<KycFormResponse>(response);
+      if (!response.ok) {
+        throw new Error(await readApiError(response, 'Unable to submit the details.'));
+      }
+      setData(data);
       setInfo('Details submitted.');
     } catch (err) {
-      setError(extractError(err, 'Unable to submit the details.'));
+      setError(err instanceof Error ? err.message : 'Unable to submit the details.');
     } finally {
       setBusy(null);
     }
@@ -165,12 +295,18 @@ export default function InvestorKycModify() {
     try {
       const fd = new FormData();
       fd.append('file', file);
-      const res = await apiClient.post<KycFormResponse>(
-        `/investors/${investorId}/kyc-form/${form.externalKycFormId}/signature`, fd);
-      setData(res.data);
+      const response = await apiFetch(`/investors/${investorId}/kyc-form/${form.externalKycFormId}/signature`, {
+        method: 'POST',
+        body: fd,
+      });
+      const data = await readJson<KycFormResponse>(response);
+      if (!response.ok) {
+        throw new Error(await readApiError(response, 'Unable to upload the signature.'));
+      }
+      setData(data);
       setInfo('Signature uploaded.');
     } catch (err) {
-      setError(extractError(err, 'Unable to upload the signature.'));
+      setError(err instanceof Error ? err.message : 'Unable to upload the signature.');
     } finally {
       setBusy(null);
       if (fileInputRef.current) fileInputRef.current.value = '';
@@ -182,12 +318,18 @@ export default function InvestorKycModify() {
     setBusy('retry-proof');
     setError(null);
     try {
-      const res = await apiClient.post<KycFormResponse>(
-        `/investors/${investorId}/kyc-form/${form.externalKycFormId}/retry-proof-fetch`);
-      setData(res.data);
+      const response = await apiFetch(
+        `/investors/${investorId}/kyc-form/${form.externalKycFormId}/retry-proof-fetch`,
+        { method: 'POST' },
+      );
+      const data = await readJson<KycFormResponse>(response);
+      if (!response.ok) {
+        throw new Error(await readApiError(response, 'Unable to retry the proof fetch.'));
+      }
+      setData(data);
       setInfo('A fresh Digilocker link has been generated.');
     } catch (err) {
-      setError(extractError(err, 'Unable to retry the proof fetch.'));
+      setError(err instanceof Error ? err.message : 'Unable to retry the proof fetch.');
     } finally {
       setBusy(null);
     }
@@ -344,13 +486,28 @@ export default function InvestorKycModify() {
                       back here automatically afterwards.
                     </p>
                     <div className="flex flex-wrap gap-2">
-                      {form.proofFetchUrl && !proofFailed && (
-                        <a
-                          href={form.proofFetchUrl}
-                          className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-700"
-                        >
-                          <ExternalLink className="w-4 h-4" /> Open Digilocker
-                        </a>
+                      {proofFetchUrl && !proofFailed && (
+                        isLegacyBrokenProofUrl(proofFetchUrl) ? (
+                          <button
+                            type="button"
+                            onClick={() => simulateProofFetch()}
+                            disabled={busy === 'simulate-proof'}
+                            className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-700 disabled:opacity-50"
+                          >
+                            {busy === 'simulate-proof'
+                              ? <Loader2 className="w-4 h-4 animate-spin" />
+                              : <Fingerprint className="w-4 h-4" />}
+                            Simulate Digilocker (sandbox)
+                          </button>
+                        ) : (
+                          <a
+                            href={proofFetchUrl}
+                            className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-700"
+                          >
+                            <ExternalLink className="w-4 h-4" />
+                            Open Digilocker{isSandboxProofUrl(proofFetchUrl) ? ' (sandbox)' : ''}
+                          </a>
+                        )
                       )}
                       {proofFailed && (
                         <button onClick={retryProof} disabled={busy === 'retry-proof'}
@@ -442,11 +599,25 @@ export default function InvestorKycModify() {
                 All details are in. The investor must eSign to submit the form to the KRA. They are
                 redirected back here automatically afterwards.
               </p>
-              {form.esignUrl ? (
-                <a href={form.esignUrl}
-                  className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-700">
-                  <ExternalLink className="w-4 h-4" /> Open eSign
-                </a>
+              {esignUrl ? (
+                isSandboxMockEsignUrl(esignUrl) ? (
+                  <button
+                    type="button"
+                    onClick={() => simulateEsign()}
+                    disabled={busy === 'simulate-esign'}
+                    className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-700 disabled:opacity-50"
+                  >
+                    {busy === 'simulate-esign'
+                      ? <Loader2 className="w-4 h-4 animate-spin" />
+                      : <FileSignature className="w-4 h-4" />}
+                    Simulate eSign (sandbox)
+                  </button>
+                ) : (
+                  <a href={esignUrl}
+                    className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-700">
+                    <ExternalLink className="w-4 h-4" /> Open eSign
+                  </a>
+                )
               ) : (
                 <button onClick={() => refresh()} disabled={!!busy}
                   className="inline-flex items-center gap-2 rounded-lg border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50">

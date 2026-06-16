@@ -19,6 +19,7 @@ import {
 } from 'lucide-react';
 import { apiFetch } from '../config/api';
 import { useFocusTrap } from '../hooks/useFocusTrap';
+import { isPersistedSchemeId } from '../utils/productSchemeKey';
 
 const MISSING_VALUE = 'Currently unavailable';
 
@@ -290,6 +291,14 @@ export default function BackendFundDetailModal({
     setScheme(fund);
     setLoading(true);
     setError('');
+
+    if (!isPersistedSchemeId(fund?.id)) {
+      // Live Cybrilla catalogue rows have no local UUID; render list payload instead of GET /schemes/null.
+      setLoading(false);
+      return () => {
+        cancelled = true;
+      };
+    }
 
     apiFetch(`/products/schemes/${fund.id}`)
       .then(async response => {
@@ -641,7 +650,9 @@ export default function BackendFundDetailModal({
           </button>
           <button
             onClick={() => onInvest(scheme)}
-            className="flex-1 py-2.5 bg-[#0B1B3E] text-white text-sm font-semibold rounded-xl hover:bg-[#1A3066] transition-colors"
+            disabled={!isPersistedSchemeId(scheme?.id)}
+            title={!isPersistedSchemeId(scheme?.id) ? 'Sync products from Cybrilla before placing an order' : undefined}
+            className="flex-1 py-2.5 bg-[#0B1B3E] text-white text-sm font-semibold rounded-xl hover:bg-[#1A3066] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             Invest Now
           </button>

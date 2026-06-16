@@ -2,7 +2,9 @@ import React, { useEffect } from 'react';
 import { useForm, type SubmitHandler } from 'react-hook-form';
 import { Save, X, AlertCircle } from 'lucide-react';
 import { apiFetch } from '../config/api';
+import PincodeCityFields from './PincodeCityFields';
 import { normalizePan, PAN_REGEX } from '../utils/kycPreVerification';
+import { validateInvestorMinimumAge } from '../utils/kycActionLocks';
 
 /**
  * F-10: edit form for an existing investor.
@@ -113,8 +115,14 @@ export default function InvestorEditForm({ investor, onSaved, onCancel }: Props)
     handleSubmit,
     reset,
     setError,
+    setValue,
+    watch,
     formState: { errors, isSubmitting },
   } = useForm<FormValues>({ defaultValues: toDefaults(investor) });
+
+  const postalCode = watch('postalCode');
+  const city = watch('city');
+  const state = watch('state');
 
   // Re-seed defaults if the parent swaps to a different investor without
   // unmounting (defensive — current Investors.tsx unmounts on selection
@@ -127,6 +135,11 @@ export default function InvestorEditForm({ investor, onSaved, onCancel }: Props)
 
   const onSubmit: SubmitHandler<FormValues> = async values => {
     setFormError(null);
+    const minimumAgeError = validateInvestorMinimumAge(values.dateOfBirth);
+    if (minimumAgeError) {
+      setError('dateOfBirth', { message: minimumAgeError });
+      return;
+    }
     // Strip empty optional strings so the backend's `if (request.foo() != null)`
     // guards do not overwrite stored values with "". Required fields (name,
     // mobile, email) always send through.
@@ -274,15 +287,6 @@ export default function InvestorEditForm({ investor, onSaved, onCancel }: Props)
           {errors.goalMaturityDate && <p className={ERR_TEXT_CLS}><AlertCircle className="w-3 h-3" />{errors.goalMaturityDate.message}</p>}
         </div>
 
-        <div>
-          <label className={LABEL_CLS}>Postal code</label>
-          <input
-            {...register('postalCode')}
-            className={`${INPUT_CLS} ${errors.postalCode ? ERR_INPUT_CLS : ''}`}
-          />
-          {errors.postalCode && <p className={ERR_TEXT_CLS}><AlertCircle className="w-3 h-3" />{errors.postalCode.message}</p>}
-        </div>
-
         <div className="md:col-span-2">
           <label className={LABEL_CLS}>Address line 1</label>
           <input
@@ -300,22 +304,24 @@ export default function InvestorEditForm({ investor, onSaved, onCancel }: Props)
           />
         </div>
 
-        <div>
-          <label className={LABEL_CLS}>City</label>
-          <input
-            {...register('city')}
-            className={`${INPUT_CLS} ${errors.city ? ERR_INPUT_CLS : ''}`}
+        <div className="md:col-span-2 grid grid-cols-1 md:grid-cols-2 gap-4">
+          <PincodeCityFields
+            postalCode={postalCode}
+            city={city}
+            state={state}
+            onPostalCodeChange={value => setValue('postalCode', value, { shouldDirty: true })}
+            onLocationResolved={({ city: resolvedCity, state: resolvedState }) => {
+              setValue('city', resolvedCity, { shouldDirty: true });
+              setValue('state', resolvedState, { shouldDirty: true });
+            }}
+            onCityChange={value => setValue('city', value, { shouldDirty: true })}
+            onStateChange={value => setValue('state', value, { shouldDirty: true })}
+            inputClassName={INPUT_CLS}
+            selectClassName={INPUT_CLS}
+            postalCodeError={errors.postalCode?.message}
+            cityError={errors.city?.message}
+            stateError={errors.state?.message}
           />
-          {errors.city && <p className={ERR_TEXT_CLS}><AlertCircle className="w-3 h-3" />{errors.city.message}</p>}
-        </div>
-
-        <div>
-          <label className={LABEL_CLS}>State</label>
-          <input
-            {...register('state')}
-            className={`${INPUT_CLS} ${errors.state ? ERR_INPUT_CLS : ''}`}
-          />
-          {errors.state && <p className={ERR_TEXT_CLS}><AlertCircle className="w-3 h-3" />{errors.state.message}</p>}
         </div>
 
         <div className="md:col-span-2">

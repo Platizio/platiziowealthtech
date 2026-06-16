@@ -131,7 +131,18 @@ export default function InvestorRedeem({ userData: _userData }: { userData?: any
         if (response.status === 502 || response.status === 503) {
           throw new Error('Cybrilla is temporarily unavailable. Your request was not submitted — please try again in a few minutes.');
         }
-        throw new Error(body?.message || `Redemption failed (HTTP ${response.status}).`);
+        const message = body?.message || `Redemption failed (HTTP ${response.status}).`;
+        if (/mf investment account|investor profile|occupation/i.test(message)) {
+          throw new Error(
+            `${message} Redemption uses the same investor FP profile setup as purchases — restart the backend if you recently deployed a fix, then retry.`,
+          );
+        }
+        if (/fintech primitives purchase id|externalorderid/i.test(message)) {
+          throw new Error(
+            'This holding was not purchased through live Cybrilla POA (demo-only order). Place a real purchase first, then redeem that order.',
+          );
+        }
+        throw new Error(message);
       }
       setHoldings(prev => prev.map(h => (h.id === holding.id ? { ...h, alreadyRedeemed: true } : h)));
       setActionMessage(`Redemption submitted for "${holding.fund}". Track its progress under Transactions.`);

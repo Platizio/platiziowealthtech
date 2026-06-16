@@ -1,13 +1,19 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
+import { useNavigate } from 'react-router-dom';
 import { Search, Filter, ChevronLeft, CheckCircle2, Clock, XCircle, AlertCircle, RefreshCw, ArrowDown, ArrowUp, ArrowUpDown, Inbox } from 'lucide-react';
 import { apiFetch } from '../config/api';
+import InvestorActionLink from '../components/InvestorActionLink';
 import Pagination from '../components/Pagination';
 import { getPageContent, getPageMeta } from '../utils/pagination';
 import { formatDateTime } from '../utils/formatDate';
+import { buildInvestorActionUrl, formatOrderStatusLabel, normalizeOrderStatus } from '../utils/investorAction';
+import { isPersistedSchemeId } from '../utils/productSchemeKey';
+import { isSipCancellable } from '../utils/sipCancel';
+import type { TransactionListItem } from '../types/order';
 import EmptyState from '../components/EmptyState';
 
-type StatusKey = 'Successful' | 'Processing' | 'Submitted' | 'Payment Pending' | 'Pending Investor Action' | 'Failed' | 'Retry Available' | 'Draft' | 'Created' | 'SUCCESSFUL' | 'COMPLETED' | 'FAILED' | 'PENDING_PAYMENT' | 'DRAFT';
+type StatusKey = 'Successful' | 'Processing' | 'Submitted' | 'Payment Pending' | 'Pending Investor Action' | 'Failed' | 'Retry Available' | 'Draft' | 'Created' | 'SUCCESSFUL' | 'COMPLETED' | 'FAILED' | 'PENDING_PAYMENT' | 'DRAFT' | 'Cancelled' | 'CANCELLED';
 
 const statusConfig: Record<StatusKey, { color: string; icon: React.ReactNode; label: string }> = {
   Successful: { color: 'bg-green-50 text-green-700', icon: <CheckCircle2 className="w-3.5 h-3.5" />, label: 'Successful' },
@@ -20,45 +26,43 @@ const statusConfig: Record<StatusKey, { color: string; icon: React.ReactNode; la
   'Pending Investor Action': { color: 'bg-amber-50 text-amber-700', icon: <AlertCircle className="w-3.5 h-3.5" />, label: 'Pending Investor Action' },
   Failed: { color: 'bg-red-50 text-red-700', icon: <XCircle className="w-3.5 h-3.5" />, label: 'Failed' },
   FAILED: { color: 'bg-red-50 text-red-700', icon: <XCircle className="w-3.5 h-3.5" />, label: 'Failed' },
+  Cancelled: { color: 'bg-slate-100 text-slate-600', icon: <XCircle className="w-3.5 h-3.5" />, label: 'Cancelled' },
+  CANCELLED: { color: 'bg-slate-100 text-slate-600', icon: <XCircle className="w-3.5 h-3.5" />, label: 'Cancelled' },
   'Retry Available': { color: 'bg-purple-50 text-purple-700', icon: <RefreshCw className="w-3.5 h-3.5" />, label: 'Retry Available' },
   Draft: { color: 'bg-slate-100 text-slate-600', icon: <Clock className="w-3.5 h-3.5" />, label: 'Draft' },
   DRAFT: { color: 'bg-slate-100 text-slate-600', icon: <Clock className="w-3.5 h-3.5" />, label: 'Draft' },
   Created: { color: 'bg-slate-100 text-slate-600', icon: <Clock className="w-3.5 h-3.5" />, label: 'Created' },
 };
 
-function buildTimeline(status: string) {
-  const steps = [
-    { label: 'Order Created', time: '09:15 AM' },
-    { label: 'Investor Action Sent', time: '09:16 AM' },
-    { label: 'Payment Authorized', time: status === 'Payment Pending' || status === 'PENDING_PAYMENT' ? 'Awaiting' : '09:30 AM' },
-    { label: 'Submitted to Exchange', time: ['Processing', 'Submitted', 'Successful', 'SUCCESSFUL'].includes(status) ? '09:45 AM' : '—' },
-    { label: 'Order Successful', time: status === 'Successful' || status === 'SUCCESSFUL' ? '10:32 AM' : '—' },
-  ];
-  const doneCount =
-    status === 'Created' ? 1 :
-    (status === 'Pending Investor Action' || status === 'DRAFT') ? 1 :
-    (status === 'Payment Pending' || status === 'PENDING_PAYMENT') ? 2 :
-    status === 'Submitted' ? 3 :
-    status === 'Processing' ? 4 :
-    (status === 'Successful' || status === 'SUCCESSFUL') ? 5 : 2;
-  return steps.map((s, i) => ({ ...s, done: i < doneCount }));
-}
-
 const ORDER_STATUS_STEPS = ['Pending', 'Processing', 'Completed'];
 
 const getOrderStatusStepIndex = (status?: string) => {
   const normalized = String(status || '').trim().toUpperCase().replace(/[\s-]+/g, '_');
 
+  if (['FAILED', 'CANCELLED'].includes(normalized)) return -1;
   if (['COMPLETED', 'SUCCESSFUL', 'SUCCESS'].includes(normalized)) return 2;
-  if (['PROCESSING', 'SUBMITTED', 'IN_PROGRESS', 'APPROVED', 'ACCEPTED'].includes(normalized)) return 1;
+  if (['PROCESSING', 'SUBMITTED', 'IN_PROGRESS', 'APPROVED', 'ACCEPTED', 'PAYMENT_PENDING', 'PENDING_PAYMENT'].includes(normalized)) return 1;
   return 0;
 };
 
 function StatusTimeline({ steps, current }: { steps: string[]; current?: string }) {
   const currentIndex = getOrderStatusStepIndex(current);
+  const failed = currentIndex < 0;
 
   return (
     <div className="space-y-0">
+      {failed ? (
+        <div className="flex gap-3">
+          <div className="flex h-6 w-6 items-center justify-center rounded-full bg-red-500">
+            <XCircle className="h-3.5 w-3.5 text-white" />
+          </div>
+          <div>
+            <p className="text-sm font-medium text-white">Failed</p>
+            <p className="mt-0.5 text-[10px] text-red-300">Current status</p>
+          </div>
+        </div>
+      ) : (
+        <>
       {steps.map((step, index) => {
         const isCompleted = index < currentIndex;
         const isCurrent = index === currentIndex;
@@ -100,16 +104,16 @@ function StatusTimeline({ steps, current }: { steps: string[]; current?: string 
           </div>
         );
       })}
+        </>
+      )}
     </div>
   );
 }
 
 const TYPE_FILTERS = ['All', 'SIP', 'Lumpsum', 'Redemption', 'Switch'];
-const STATUS_FILTERS = ['All', 'PENDING', 'PROCESSING', 'COMPLETED', 'FAILED'];
+const STATUS_FILTERS = ['All', 'PENDING', 'PROCESSING', 'COMPLETED', 'FAILED', 'CANCELLED'];
 type SortDirection = 'ASC' | 'DESC';
 type SortField = 'investorId' | 'productSchemeId' | 'transactionType' | 'amount' | 'orderStatus' | 'createdAt';
-
-const normalizeOrderStatus = (status?: string) => String(status || '').trim().toUpperCase().replace(/[\s-]+/g, '_');
 
 const matchesStatusFilter = (status: string, statusFilter: string) => {
   if (statusFilter === 'All') return true;
@@ -137,6 +141,7 @@ const getComparableValue = (tx: any, sortField: SortField) => {
 };
 
 export default function Transactions({ userData }: { userData?: any }) {
+  const navigate = useNavigate();
   const [selected, setSelected] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [typeFilter, setTypeFilter] = useState('All');
@@ -228,7 +233,7 @@ export default function Transactions({ userData }: { userData?: any }) {
 
         const [investorsRes, schemesRes] = await Promise.all([
           apiFetch(`/investors/by-distributor/${userData.id}`, { headers }),
-          apiFetch('/products/schemes', { headers })
+          apiFetch('/products/schemes?local=true&size=1000', { headers })
         ]);
 
         const ordersPayload = ordersRes.ok ? await ordersRes.json() : [];
@@ -241,21 +246,32 @@ export default function Transactions({ userData }: { userData?: any }) {
         const investorMap = new Map(investors.map((i: any) => [i.id, i]));
         const schemeMap = new Map(schemes.map((s: any) => [s.id, s]));
 
-        const formatted = orders.map((o: any) => {
+        const formatted: TransactionListItem[] = orders.map((o: any) => {
           const inv = investorMap.get(o.investorId) as any;
           const scm = schemeMap.get(o.productSchemeId) as any;
+          const schemeKnown = Boolean(o.productSchemeId && scm && isPersistedSchemeId(o.productSchemeId));
+          const rawStatus = !schemeKnown && normalizeOrderStatus(o.orderStatus) !== 'CANCELLED'
+            ? 'FAILED'
+            : (o.orderStatus || 'Draft');
+          const displayStatus = !schemeKnown ? 'Payment Failed' : formatOrderStatusLabel(rawStatus);
           return {
             id: o.id,
+            investorId: o.investorId,
+            productSchemeId: o.productSchemeId,
             investor: inv ? inv.fullName || 'Unknown Investor' : 'Unknown Investor',
-            fund: scm ? scm.schemeName || 'Unknown Scheme' : 'Unknown Scheme',
+            fund: schemeKnown ? (scm.schemeName || 'Unknown Scheme') : 'Unknown fund',
             type: o.transactionType || 'Lumpsum',
             amount: o.amount ? `₹${o.amount.toLocaleString()}` : '—',
             rawAmount: o.amount || 0,
-            status: o.orderStatus || 'Draft',
+            status: displayStatus,
+            rawOrderStatus: rawStatus,
+            schemeKnown,
             date: formatDateTime(o.createdAt || new Date().toISOString()),
             rawCreatedAt: o.createdAt || new Date().toISOString(),
             pan: inv?.pan || '—',
-            mandate: o.paymentMode || o.mandateMode || '—'
+            mandate: o.paymentMode || o.mandateMode || '—',
+            investorActionUrl: o.investorActionUrl,
+            failureReason: o.failureReason,
           };
         });
 
@@ -294,10 +310,17 @@ export default function Transactions({ userData }: { userData?: any }) {
 
   if (selected !== null) {
     const tx = transactions.find(t => t.id === selected);
-    if (tx) return <TransactionDetail tx={tx} onBack={() => setSelected(null)} onOrderCancelled={() => {
-      setSelected(null);
-      setRefreshKey(k => k + 1);
-    }} />;
+    if (tx) return (
+      <TransactionDetail
+        tx={tx}
+        onBack={() => setSelected(null)}
+        onOrderCancelled={() => {
+          setSelected(null);
+          setRefreshKey(k => k + 1);
+        }}
+        onCreateNewOrder={() => navigate('/distributor/ledger')}
+      />
+    );
   }
 
   return (
@@ -308,7 +331,11 @@ export default function Transactions({ userData }: { userData?: any }) {
           <p className="text-slate-500 text-sm mt-1">Track all orders, SIPs and redemptions</p>
         </div>
         <div className="flex items-center gap-3">
-          <button className="flex items-center gap-2 px-4 py-2 text-sm font-medium bg-[#0B1B3E] text-white rounded-lg shadow-sm hover:bg-[#1A3066] transition-colors">
+          <button
+            type="button"
+            onClick={() => navigate('/distributor/ledger')}
+            className="flex items-center gap-2 px-4 py-2 text-sm font-medium bg-[#0B1B3E] text-white rounded-lg shadow-sm hover:bg-[#1A3066] transition-colors"
+          >
             + New Transaction
           </button>
         </div>
@@ -436,18 +463,84 @@ export default function Transactions({ userData }: { userData?: any }) {
   );
 }
 
-function TransactionDetail({ tx, onBack, onOrderCancelled }: { tx: any; onBack: () => void; onOrderCancelled?: () => void }) {
-  const s = statusConfig[tx.status as StatusKey] ?? statusConfig.Draft;
+function TransactionDetail({
+  tx,
+  onBack,
+  onOrderCancelled,
+  onCreateNewOrder,
+}: {
+  tx: TransactionListItem;
+  onBack: () => void;
+  onOrderCancelled?: () => void;
+  onCreateNewOrder?: () => void;
+}) {
+  const [liveTx, setLiveTx] = useState(tx);
+  const s = statusConfig[liveTx.status as StatusKey] ?? statusConfig[liveTx.rawOrderStatus as StatusKey] ?? statusConfig.Draft;
   const [confirmCancel, setConfirmCancel] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   const [cancelError, setCancelError] = useState('');
-  const isSipOrder = String(tx.type || '').toUpperCase() === 'SIP';
+  const [linkCopied, setLinkCopied] = useState(false);
+  const isSipOrder = String(liveTx.type || '').toUpperCase() === 'SIP';
+  const actionUrl = buildInvestorActionUrl(liveTx.investorActionUrl);
+  const awaitingAction =
+    normalizeOrderStatus(liveTx.rawOrderStatus) === 'PENDING_INVESTOR_ACTION'
+    || normalizeOrderStatus(liveTx.rawOrderStatus) === 'PAYMENT_PENDING';
+
+  useEffect(() => {
+    setLiveTx(tx);
+  }, [tx]);
+
+  useEffect(() => {
+    const normalized = normalizeOrderStatus(liveTx.rawOrderStatus);
+    const shouldPoll = ['PENDING_INVESTOR_ACTION', 'PAYMENT_PENDING', 'PROCESSING', 'CREATED'].includes(normalized);
+    if (!shouldPoll) return;
+
+    let cancelled = false;
+    const refresh = async () => {
+      try {
+        const response = await apiFetch(`/orders/${liveTx.id}`);
+        if (!response.ok || cancelled) return;
+        const order = await response.json();
+        setLiveTx(prev => ({
+          ...prev,
+          rawOrderStatus: order.orderStatus || prev.rawOrderStatus,
+          status: formatOrderStatusLabel(order.orderStatus),
+          failureReason: order.failureReason ?? prev.failureReason,
+          investorActionUrl: order.investorActionUrl ?? prev.investorActionUrl,
+        }));
+      } catch {
+        // ignore transient poll errors
+      }
+    };
+
+    refresh();
+    const timer = window.setInterval(refresh, 5000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [liveTx.id, liveTx.rawOrderStatus]);
+
+  const copyInvestorLink = async () => {
+    if (!actionUrl) return;
+    try {
+      await navigator.clipboard.writeText(actionUrl);
+      setLinkCopied(true);
+      window.setTimeout(() => setLinkCopied(false), 2000);
+    } catch {
+      window.prompt('Copy this link for the investor:', actionUrl);
+    }
+  };
 
   const cancelSip = async () => {
     setCancelling(true);
     setCancelError('');
     try {
-      const response = await apiFetch(`/orders/${tx.id}`, { method: 'DELETE' });
+      const response = await apiFetch(`/orders/${liveTx.id}/cancel`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cancellationCode: 'invest_later' }),
+      });
       if (!response.ok) {
         const errorBody = await response.json().catch(() => null);
         throw new Error(errorBody?.message || `Cancel SIP failed (${response.status})`);
@@ -466,7 +559,7 @@ function TransactionDetail({ tx, onBack, onOrderCancelled }: { tx: any; onBack: 
       {confirmCancel && (
         <ConfirmModal
           title="Cancel SIP?"
-          message="This will cancel the SIP order and notify the backend to cancel it with Cybrilla where an external order exists."
+          message="This calls Fintech Primitives POST /v2/mf_purchase_plans/{id}/cancel and records the SIP as Cancelled (Cybrilla keeps cancelled plans on record)."
           confirmLabel={cancelling ? 'Cancelling...' : 'Cancel SIP'}
           disabled={cancelling}
           onCancel={() => setConfirmCancel(false)}
@@ -488,7 +581,7 @@ function TransactionDetail({ tx, onBack, onOrderCancelled }: { tx: any; onBack: 
           </div>
         </div>
         <div className="flex gap-2">
-        {isSipOrder && (
+        {isSipOrder && isSipCancellable(liveTx.rawOrderStatus) && (
           <button
             onClick={() => setConfirmCancel(true)}
             className="flex items-center gap-2 px-4 py-2 text-sm font-medium bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors"
@@ -496,9 +589,13 @@ function TransactionDetail({ tx, onBack, onOrderCancelled }: { tx: any; onBack: 
             <XCircle className="w-4 h-4" /> Cancel SIP
           </button>
         )}
-        {tx.status === 'Retry Available' && (
-          <button className="flex items-center gap-2 px-4 py-2 text-sm font-medium bg-[#0B1B3E] text-white rounded-lg hover:bg-[#1A3066] transition-colors">
-            <RefreshCw className="w-4 h-4" /> Retry Order
+        {normalizeOrderStatus(liveTx.rawOrderStatus) === 'RETRY_AVAILABLE' && (
+          <button
+            type="button"
+            onClick={onCreateNewOrder}
+            className="flex items-center gap-2 px-4 py-2 text-sm font-medium bg-[#0B1B3E] text-white rounded-lg hover:bg-[#1A3066] transition-colors"
+          >
+            <RefreshCw className="w-4 h-4" /> Place New Order
           </button>
         )}
         </div>
@@ -526,28 +623,46 @@ function TransactionDetail({ tx, onBack, onOrderCancelled }: { tx: any; onBack: 
             </div>
           </div>
 
-          {(tx.status === 'Payment Pending' || tx.status === 'PENDING_PAYMENT' || tx.status === 'Pending Investor Action') && (
-            <div className="bg-amber-50 rounded-2xl p-5 border border-amber-200 flex gap-4">
-              <AlertCircle className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
-              <div>
-                <p className="text-sm font-semibold text-amber-800">Awaiting investor action</p>
-                <p className="text-xs text-amber-700 mt-1 leading-relaxed">
-                  A payment authorization link has been sent to the investor's registered email and mobile. Resend if they haven't acted.
-                </p>
-                <button className="mt-3 px-4 py-2 bg-amber-600 text-white text-xs font-semibold rounded-lg hover:bg-amber-700 transition-colors">
-                  Resend Link
+          {awaitingAction && (
+            <div className="space-y-4">
+              <InvestorActionLink
+                orderId={liveTx.id}
+                orderStatus={liveTx.rawOrderStatus}
+                investorActionUrl={liveTx.investorActionUrl}
+              />
+              {actionUrl && (
+                <button
+                  type="button"
+                  onClick={copyInvestorLink}
+                  className="inline-flex items-center gap-2 rounded-lg border border-amber-200 bg-white px-4 py-2 text-xs font-semibold text-amber-800 transition-colors hover:bg-amber-50"
+                >
+                  {linkCopied ? (
+                    <>
+                      <CheckCircle2 className="h-3.5 w-3.5" /> Link copied
+                    </>
+                  ) : (
+                    <>
+                      <RefreshCw className="h-3.5 w-3.5" /> Copy investor link again
+                    </>
+                  )}
                 </button>
-              </div>
+              )}
             </div>
           )}
 
-          {(tx.status === 'Failed' || tx.status === 'FAILED') && (
+          {(normalizeOrderStatus(liveTx.rawOrderStatus) === 'FAILED') && (
             <div className="bg-red-50 rounded-2xl p-5 border border-red-200 flex gap-4">
               <XCircle className="w-5 h-5 text-red-500 flex-shrink-0 mt-0.5" />
               <div>
                 <p className="text-sm font-semibold text-red-800">Order failed</p>
-                <p className="text-xs text-red-700 mt-1">Reason: The transaction could not be processed. Please ask the investor to check their account and retry.</p>
-                <button className="mt-3 px-4 py-2 bg-red-600 text-white text-xs font-semibold rounded-lg hover:bg-red-700 transition-colors">
+                <p className="text-xs text-red-700 mt-1">
+                  {liveTx.failureReason || 'The transaction could not be processed. Review investor readiness and place a new order.'}
+                </p>
+                <button
+                  type="button"
+                  onClick={onCreateNewOrder}
+                  className="mt-3 px-4 py-2 bg-red-600 text-white text-xs font-semibold rounded-lg hover:bg-red-700 transition-colors"
+                >
                   Create New Order
                 </button>
               </div>
@@ -558,7 +673,7 @@ function TransactionDetail({ tx, onBack, onOrderCancelled }: { tx: any; onBack: 
         {/* Timeline */}
         <div className="bg-[#0B1B3E] rounded-2xl p-6 text-white h-fit">
           <h2 className="font-semibold mb-6">Order Status</h2>
-          <StatusTimeline steps={ORDER_STATUS_STEPS} current={tx.status} />
+          <StatusTimeline steps={ORDER_STATUS_STEPS} current={liveTx.rawOrderStatus} />
         </div>
       </div>
     </motion.div>

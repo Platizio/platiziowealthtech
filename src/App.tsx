@@ -10,6 +10,18 @@ import AppLayout from './layout/AppLayout';
 import LandingPage from './views/LandingPage';
 import LoginPage from './views/LoginPage';
 import { apiFetch, SESSION_EXPIRED_EVENT } from './config/api';
+import { useAppDispatch, useAppSelector } from './store/hooks';
+import {
+  clearAuth,
+  logout,
+  restoreSession,
+  shouldRestoreOnBoot,
+  selectAuthUser,
+  selectCanAccessAdmin,
+  selectIsAuthLoading,
+  setAuthenticatedUser,
+} from './store/slices/authSlice';
+import { normalizeAuthUser, type AuthUser } from './types/auth';
 
 // ── Lazy-loaded routes (F-33) ────────────────────────────────────────────
 // Each `lazy(() => import('./views/X'))` becomes its own bundle chunk under
@@ -62,112 +74,68 @@ function PageSkeleton() {
   );
 }
 
-const ADMIN_ROLES = new Set(['ADMIN', 'MASTER_DISTRIBUTOR']);
-
-const normalizeRole = (role?: string) => role?.trim().toUpperCase() || '';
-
-const normalizeAuthUser = (user: any) => {
-  if (!user) return null;
-  return {
-    ...user,
-    id: user.id || user.distributorId,
-  };
-};
-
 export default function App() {
-  const [userSession, setUserSession] = useState<any>(null);
-  const [loadingSession, setLoadingSession] = useState(true);
+  const dispatch = useAppDispatch();
   const navigate = useNavigate();
+  const userSession = useAppSelector(selectAuthUser);
+  const loadingSession = useAppSelector(selectIsAuthLoading);
+  const canAccessAdmin = useAppSelector(selectCanAccessAdmin);
 
   useEffect(() => {
-    const restoreSession = async () => {
-      const isProtectedPath = window.location.pathname.startsWith('/admin') || window.location.pathname.startsWith('/distributor');
-      if (!isProtectedPath) {
-        setLoadingSession(false);
+    void dispatch(restoreSession()).then((result) => {
+      if (restoreSession.rejected.match(result)) {
+        console.warn('Session restore unavailable (backend may be down):', result.payload);
         return;
       }
-
-      try {
-        let res = await apiFetch('/auth/me', { skipAuthRedirect: true });
-        if (res.status === 401) {
-          const refreshRes = await apiFetch('/auth/refresh', { method: 'POST', skipAuthRedirect: true });
-          if (refreshRes.ok) {
-            res = await apiFetch('/auth/me', { skipAuthRedirect: true });
-          }
-        }
-
-        if (res.status === 401 || res.status === 403) {
-          if (window.location.pathname.startsWith('/admin') || window.location.pathname.startsWith('/distributor')) {
-            navigate('/login?reason=session_expired', { replace: true });
-          }
-          setUserSession(null);
-          return;
-        }
-        if (res.ok) {
-          const user = await res.json();
-          setUserSession(normalizeAuthUser(user));
-          return;
-        }
-        throw new Error('Failed to restore session');
-      } catch (err) {
-        console.error('Session restore failed:', err);
-        setUserSession(null);
-      } finally {
-        setLoadingSession(false);
+      if (restoreSession.fulfilled.match(result) && !result.payload && shouldRestoreOnBoot()) {
+        const returnTo = encodeURIComponent(
+          `${window.location.pathname}${window.location.search}${window.location.hash}`,
+        );
+        navigate(`/login?reason=session_expired&returnTo=${returnTo}`, { replace: true });
       }
-    };
-
-    restoreSession();
-  }, [navigate]);
+    });
+  }, [dispatch, navigate]);
 
   useEffect(() => {
     const handleSessionExpired = () => {
-      setUserSession(null);
+      dispatch(clearAuth());
       navigate('/login?reason=session_expired', { replace: true });
     };
 
     window.addEventListener(SESSION_EXPIRED_EVENT, handleSessionExpired);
     return () => window.removeEventListener(SESSION_EXPIRED_EVENT, handleSessionExpired);
-  }, [navigate]);
+  }, [dispatch, navigate]);
 
-  const getUserData = () => {
-    if (!userSession) return null;
-    return Array.isArray(userSession) ? userSession[0] : userSession;
-  };
+  const userData = userSession;
 
-  const userData = getUserData();
-  const canAccessAdmin = ADMIN_ROLES.has(normalizeRole(userData?.role));
-
-  const handleLoginSuccess = (user?: any) => {
-    console.log("App.tsx -> handleLoginSuccess called. Received user:", user);
-    const normalizedUser = normalizeAuthUser(user);
-    if (normalizedUser?.id) {
-      setUserSession(normalizedUser);
+  const handleLoginSuccess = async (user?: AuthUser) => {
+    let normalizedUser = normalizeAuthUser(user ?? null);
+    try {
+      const response = await apiFetch('/auth/me', { skipAuthRedirect: true });
+      if (response.ok) {
+        const sessionUser = await response.json();
+        normalizedUser = normalizeAuthUser(sessionUser) ?? normalizedUser;
+      }
+    } catch {
+      // Fall back to the login payload when /auth/me is temporarily unavailable.
     }
-    navigate('/distributor/dashboard');
-  };
-
-  const clearAuthContext = () => {
-    setUserSession(null);
-    window.sessionStorage.removeItem('authToken');
-    window.sessionStorage.removeItem('userSession');
-    window.localStorage.removeItem('authToken');
-    window.localStorage.removeItem('userSession');
+    if (normalizedUser?.id) {
+      dispatch(setAuthenticatedUser(normalizedUser));
+      const params = new URLSearchParams(window.location.search);
+      const returnTo = params.get('returnTo');
+      if (returnTo && (returnTo.startsWith('/distributor/') || returnTo.startsWith('/admin/'))) {
+        navigate(returnTo, { replace: true });
+        return;
+      }
+      navigate('/distributor/dashboard');
+      return;
+    }
+    navigate('/login?reason=session_expired', { replace: true });
   };
 
   const handleSignOut = async () => {
-    console.log("App.tsx -> handleSignOut called. Invalidating server session.");
-    try {
-      const response = await apiFetch('/auth/logout', { method: 'POST', skipAuthRedirect: true });
-      if (!response.ok) {
-        console.error('Logout request failed:', response.status);
-      }
-    } catch (err) {
-      console.error('Logout request failed:', err);
-    } finally {
-      clearAuthContext();
-      navigate('/login', { replace: true });
-    }
+    await dispatch(logout());
+    navigate('/login', { replace: true });
   };
 
   if (loadingSession) {
@@ -195,7 +163,7 @@ export default function App() {
       <Route path="/unauthorized" element={<Unauthorized />} />
 
       {/* ── App Layout ────────────────────────────────────────────────────────── */}
-      {userSession && (
+      {userData && (
         <Route element={<AppLayout userData={userData} onSignOut={handleSignOut} />}>
           
           {/* Distributor Routes */}
@@ -203,7 +171,7 @@ export default function App() {
           <Route path="/distributor/investors" element={<Investors onInvest={(inv) => navigate('/distributor/investor-transaction', { state: { investor: inv } })} userData={userData} />} />
           <Route path="/distributor/ledger" element={<Ledger userData={userData} />} />
           <Route path="/distributor/transactions" element={<Transactions userData={userData} />} />
-          <Route path="/distributor/leads" element={<Leads userData={userData} onStartOnboarding={(prospect) => navigate('/distributor/investor-onboarding', { state: { prospect } })} />} />
+          <Route path="/distributor/leads" element={<Leads userData={userData} onStartOnboarding={(prospect) => navigate('/distributor/investor-onboarding', { state: { prospect, returnTo: '/distributor/leads', resetKey: Date.now() } })} />} />
           <Route path="/distributor/earnings" element={<Earnings />} />
           <Route path="/distributor/notifications" element={<Notifications userData={userData} />} />
           <Route path="/distributor/profile" element={<Profile userData={userData} />} />
@@ -249,8 +217,17 @@ export default function App() {
         </Route>
       )}
 
-      {/* Fallback route */}
-      <Route path="*" element={<Navigate to={userSession ? "/distributor/dashboard" : "/"} replace />} />
+      {/* Fallback route — never bounce protected URLs to `/` while session restore is in flight */}
+      <Route
+        path="*"
+        element={
+          loadingSession ? (
+            <PageSkeleton />
+          ) : (
+            <Navigate to={userSession ? '/distributor/dashboard' : '/'} replace />
+          )
+        }
+      />
     </Routes>
     </Suspense>
   );
@@ -262,13 +239,19 @@ import { useLocation } from 'react-router-dom';
 function InvestorOnboardingWrapper({ userData }: { userData?: any }) {
   const location = useLocation();
   const navigate = useNavigate();
-  const prospect = location.state?.prospect || null;
-  const investor = location.state?.investor || null;
-  const investorId = location.state?.investorId || investor?.id || null;
-  const resumeStep = location.state?.resumeStep || null;
-  const returnTo = location.state?.returnTo || (prospect ? '/distributor/leads' : '/distributor/investors');
+  const freshStart = Boolean(location.state?.freshStart);
+  const prospect = freshStart ? null : (location.state?.prospect || null);
+  const investor = freshStart ? null : (location.state?.investor || null);
+  const investorId = freshStart ? null : (location.state?.investorId || investor?.id || null);
+  const resumeStep = freshStart ? null : (location.state?.resumeStep ?? null);
+  const returnTo =
+    location.state?.returnTo ||
+    (freshStart ? '/distributor/dashboard' : prospect ? '/distributor/leads' : '/distributor/investors');
+  const sessionKey = location.state?.resetKey ?? location.key;
+
   return (
     <InvestorOnboarding
+      key={sessionKey}
       prospect={prospect}
       resumeInvestor={investor}
       resumeInvestorId={investorId}

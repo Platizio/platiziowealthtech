@@ -6,11 +6,20 @@ import {
   Target, Users, BookOpen, PieChart, Activity, Eye,
 } from 'lucide-react';
 import { apiFetch } from '../config/api';
+import InvestorActionLink from '../components/InvestorActionLink';
+import { formatOrderStatusLabel } from '../utils/investorAction';
 import BackendFundDetailModal from '../components/BackendFundDetailModal';
 import Pagination from '../components/Pagination';
 import { useDebounce } from '../hooks/useDebounce';
 import { useFocusTrap } from '../hooks/useFocusTrap';
 import { getPageContent, getPageMeta, isPagePayload } from '../utils/pagination';
+import { productSchemeKey, isPersistedSchemeId } from '../utils/productSchemeKey';
+import {
+  formatAmcDisplayName,
+  formatSchemeDisplayName,
+  isTransactionReadyScheme,
+  readSchemeMinSip,
+} from '../utils/orderableScheme';
 
 // ─── Colour maps ──────────────────────────────────────────────────────────────
 const categoryStyle: Record<string, string> = {
@@ -64,7 +73,6 @@ export default function Ledger({ userData }: { userData?: any }) {
   const [investModal, setInvestModal]   = useState<any | null>(null);
   const [detailModal, setDetailModal]   = useState<any | null>(null);
   const refreshInFlightRef = useRef(false);
-  const catalogSyncedOnMountRef = useRef(false);
 
   const readJsonSafely = async (response: Response) => {
     const text = await response.text();
@@ -88,45 +96,68 @@ export default function Ledger({ userData }: { userData?: any }) {
     );
   };
 
-  const fetchSchemes = async (options?: { syncFromCybrilla?: boolean; forceRefresh?: boolean }) => {
-    const syncFromCybrilla = options?.syncFromCybrilla ?? false;
-    const forceRefresh = options?.forceRefresh ?? false;
-    const backoffRemainingMs = syncFromCybrilla ? liveSyncBackoffRemainingMs() : 0;
-    let useCybrillaSync = syncFromCybrilla;
-    if (backoffRemainingMs > 0) {
-      useCybrillaSync = false;
-    }
+  const applySchemePage = (data: unknown, pageContent: any[]) => {
+    const isPaged = isPagePayload(data);
+    const meta = getPageMeta(data, pageContent.length);
+    const active = pageContent.filter((s: any) => s.active !== false);
+    setBackendPaged(isPaged);
+    setSchemes(active);
+    setTotalPages(isPaged ? meta.totalPages : Math.max(Math.ceil(active.length / Math.max(size, 1)), 1));
+    setTotalElements(isPaged ? meta.totalElements : active.length);
+  };
 
-    if (useCybrillaSync && refreshInFlightRef.current) return;
-    if (useCybrillaSync) refreshInFlightRef.current = true;
-    if (useCybrillaSync) setRefreshing(true);
+  const fetchLocalSchemeFallback = async (params: URLSearchParams) => {
+    const fallbackParams = new URLSearchParams(params);
+    fallbackParams.set('local', 'true');
+    console.log('fallback_request=', 'GET /api/v1/products/schemes/page?local=true');
+    const cachedRes = await apiFetch(`/products/schemes/page?${fallbackParams.toString()}`);
+    const cachedData = cachedRes.ok ? await readJsonSafely(cachedRes) : [];
+    const cachedContent = getPageContent(cachedData);
+    applySchemePage(cachedData, cachedContent);
+    return cachedContent.filter((s: any) => s.active !== false);
+  };
+
+  const fetchSchemes = async (options?: { forceRefresh?: boolean }) => {
+    const forceRefresh = options?.forceRefresh ?? false;
+    const backoffRemainingMs = forceRefresh ? 0 : liveSyncBackoffRemainingMs();
+
+    if (refreshInFlightRef.current) return;
+    refreshInFlightRef.current = true;
+    if (forceRefresh) setRefreshing(true);
     else setLoading(true);
     setError(
       backoffRemainingMs > 0
-        ? `Live Cybrilla sync is cooling down. Showing cached products; try again in ${Math.ceil(backoffRemainingMs / 60000)} min.`
+        ? `Live POA catalogue is cooling down. Showing cached products; try again in ${Math.ceil(backoffRemainingMs / 60000)} min.`
         : '',
     );
-    const requestPage = useCybrillaSync && forceRefresh ? 0 : page;
+
+    const requestPage = forceRefresh ? 0 : page;
     const params = new URLSearchParams({ page: String(requestPage), size: String(size) });
     if (debouncedSearch.trim()) params.set('query', debouncedSearch.trim());
     if (assetFilter !== 'All') params.set('assetClass', assetFilter);
     if (categoryFilter !== 'All') params.set('category', categoryFilter);
     if (typeFilter !== 'All') params.set('productType', typeFilter);
-    if (useCybrillaSync) params.set('syncFromCybrilla', 'true');
-    const listEndpoint = `/products/schemes/page?${params.toString()}`;
+
     console.groupCollapsed('[Cybrilla Workflow] Display fund schemes');
     console.log('frontend_route=', '/distributor/ledger');
-    console.log('frontend_request=', `GET /api/v1/products/schemes/page${useCybrillaSync ? '?syncFromCybrilla=true' : ''}`);
+    console.log('frontend_request=', 'GET /api/v1/products/schemes/page (POA mf_scheme_plans live browse)');
     console.log(
       'backend_expected_external_call=',
-      useCybrillaSync
-        ? 'GET https://s.finprim.com/api/oms/fund_schemes (paginated); replaces MF rows in product_schemes'
-        : 'none; reading product_schemes from local DB',
+      'GET https://s.finprim.com/v2/mf_scheme_plans/cybrillapoa (paginated); upserts POA-orderable rows',
     );
     console.log('frontend_note=', 'Browser calls Platizio backend only. Backend uses the currently valid server-side bearer token and never exposes credentials to the frontend.');
 
     try {
-      const res = await apiFetch(listEndpoint);
+      if (backoffRemainingMs > 0) {
+        const cachedActive = await fetchLocalSchemeFallback(params);
+        if (cachedActive.length === 0) {
+          setError('Failed to load products. Please try again later.');
+        }
+        console.log('workflow_status=', 'completed_from_cache');
+        return;
+      }
+
+      const res = await apiFetch(`/products/schemes/page?${params.toString()}`);
       const data = await readJsonSafely(res);
       const pageContent = getPageContent(data);
       console.log('frontend_response=', {
@@ -137,50 +168,25 @@ export default function Ledger({ userData }: { userData?: any }) {
       });
 
       if (!res.ok) throw new Error(typeof data === 'string' ? data : data?.message || `HTTP ${res.status}`);
-      if (useCybrillaSync) {
-        window.localStorage.setItem(LIVE_SCHEME_SYNC_KEY, String(Date.now()));
-        window.localStorage.removeItem(LIVE_SCHEME_SYNC_BACKOFF_KEY);
-        if (forceRefresh) setPage(0);
-      }
-      const isPaged = isPagePayload(data);
-      const meta = getPageMeta(data, pageContent.length);
-      const active = pageContent.filter((s: any) => s.active !== false);
-      setBackendPaged(isPaged);
-      setSchemes(active);
-      setTotalPages(isPaged ? meta.totalPages : Math.max(Math.ceil(active.length / Math.max(size, 1)), 1));
-      setTotalElements(isPaged ? meta.totalElements : active.length);
-
+      applySchemePage(data, pageContent);
+      window.localStorage.setItem(LIVE_SCHEME_SYNC_KEY, String(Date.now()));
+      window.localStorage.removeItem(LIVE_SCHEME_SYNC_BACKOFF_KEY);
+      if (forceRefresh) setPage(0);
       console.log('workflow_status=', 'completed');
     } catch (e: any) {
       console.error('Error fetching product schemes:', e);
       console.error('workflow_status=', 'failed');
-      if (useCybrillaSync) {
-        markLiveSyncBackoff();
-        try {
-          console.log('fallback_request=', 'GET /api/v1/products/schemes/page from local DB');
-          const fallbackParams = new URLSearchParams(params);
-          fallbackParams.delete('syncFromCybrilla');
-          const cachedRes = await apiFetch(`/products/schemes/page?${fallbackParams.toString()}`);
-          const cachedData = cachedRes.ok ? await cachedRes.json() : [];
-          const cachedContent = getPageContent(cachedData);
-          const cachedActive = cachedContent.filter((s: any) => s.active !== false);
-          const isPaged = isPagePayload(cachedData);
-          const meta = getPageMeta(cachedData, cachedContent.length);
-          setBackendPaged(isPaged);
-          setSchemes(cachedActive);
-          setTotalPages(isPaged ? meta.totalPages : Math.max(Math.ceil(cachedActive.length / Math.max(size, 1)), 1));
-          setTotalElements(isPaged ? meta.totalElements : cachedActive.length);
-          if (cachedActive.length > 0) {
-            setError('Showing locally cached products because live Cybrilla sync is temporarily unavailable.');
-          } else {
-            setError('Failed to refresh products from Cybrilla. Please try again later.');
-          }
-        } catch (fallbackError) {
-          console.error('Fallback product scheme fetch failed:', fallbackError);
-          setError('Failed to refresh products from Cybrilla. Please try again later.');
+      markLiveSyncBackoff();
+      try {
+        const cachedActive = await fetchLocalSchemeFallback(params);
+        if (cachedActive.length > 0) {
+          setError('Showing locally cached products because the live POA catalogue is temporarily unavailable. Invest Now may be disabled until refresh succeeds.');
+        } else {
+          setError('Failed to load products from Cybrilla. Please try again later.');
         }
-      } else {
-        setError('Failed to load cached products. Please try again.');
+      } catch (fallbackError) {
+        console.error('Fallback product scheme fetch failed:', fallbackError);
+        setError('Failed to load products. Please try again later.');
       }
     } finally {
       console.groupEnd();
@@ -191,9 +197,7 @@ export default function Ledger({ userData }: { userData?: any }) {
   };
 
   useEffect(() => {
-    const syncOnOpen = !catalogSyncedOnMountRef.current;
-    if (syncOnOpen) catalogSyncedOnMountRef.current = true;
-    fetchSchemes({ syncFromCybrilla: syncOnOpen });
+    fetchSchemes();
   }, [page, size, debouncedSearch, assetFilter, categoryFilter, typeFilter]);
 
   useEffect(() => {
@@ -256,7 +260,7 @@ export default function Ledger({ userData }: { userData?: any }) {
             <span className="font-semibold text-slate-700">{effectiveTotalElements}</span> products available
           </p>
           <button
-            onClick={() => fetchSchemes({ syncFromCybrilla: true, forceRefresh: true })}
+            onClick={() => fetchSchemes({ forceRefresh: true })}
             disabled={refreshing}
             className="flex items-center gap-2 px-3 py-2 text-xs font-semibold bg-white border border-slate-200 text-slate-600 rounded-lg hover:bg-slate-50 transition-colors disabled:opacity-50"
           >
@@ -334,7 +338,7 @@ export default function Ledger({ userData }: { userData?: any }) {
           <AlertCircle className="w-12 h-12 text-red-300 mx-auto mb-4" />
           <p className="font-semibold text-slate-700 mb-2">{error}</p>
           <button
-            onClick={() => fetchSchemes({ syncFromCybrilla: true, forceRefresh: true })}
+            onClick={() => fetchSchemes({ forceRefresh: true })}
             className="text-sm text-blue-600 hover:underline font-medium"
           >Try again</button>
         </div>
@@ -354,7 +358,7 @@ export default function Ledger({ userData }: { userData?: any }) {
           <button
             onClick={() => {
               if (filtersActive) clearFilters();
-              else fetchSchemes({ syncFromCybrilla: true, forceRefresh: true });
+              else fetchSchemes({ forceRefresh: true });
             }}
             disabled={!filtersActive && refreshing}
             className="mt-5 flex items-center gap-2 px-4 py-2 text-sm font-semibold bg-[#0B1B3E] text-white rounded-lg hover:bg-[#1A3066] transition-colors disabled:opacity-50"
@@ -370,13 +374,13 @@ export default function Ledger({ userData }: { userData?: any }) {
       ) : (
         <>
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {paginated.map(scheme => {
+          {paginated.map((scheme, index) => {
             const assetClass = getAssetClass(scheme);
             const catCls  = categoryStyle[scheme.category]    || categoryStyle['Other'];
             const typeCls = productTypeStyle[scheme.productType] || productTypeStyle[assetClass] || productTypeStyle['OTHER'];
             return (
               <div
-                key={scheme.id}
+                key={productSchemeKey(scheme, index)}
                 className="bg-white rounded-2xl p-6 shadow-sm border border-slate-200 flex flex-col group relative overflow-hidden transition-all hover:shadow-md"
               >
                 {/* Badges */}
@@ -402,8 +406,8 @@ export default function Ledger({ userData }: { userData?: any }) {
                 </div>
 
                 {/* Name + AMC */}
-                <h3 className="font-semibold text-slate-800 mb-1 leading-snug text-sm">{scheme.schemeName}</h3>
-                <p className="text-xs text-slate-400 mb-5">{scheme.amcName}</p>
+                <h3 className="font-semibold text-slate-800 mb-1 leading-snug text-sm">{formatSchemeDisplayName(scheme)}</h3>
+                <p className="text-xs text-slate-400 mb-5">{formatAmcDisplayName(scheme)}</p>
 
                 {/* Scheme code */}
                 <div className="mt-auto pb-4">
@@ -422,7 +426,13 @@ export default function Ledger({ userData }: { userData?: any }) {
                   </button>
                   <button
                     onClick={() => setInvestModal(scheme)}
-                    className="flex-1 py-2 bg-[#0B1B3E] text-white text-xs font-semibold rounded-lg hover:bg-[#1A3066] transition-colors"
+                    disabled={!isTransactionReadyScheme(scheme)}
+                    title={
+                      isTransactionReadyScheme(scheme)
+                        ? 'Place SIP or lumpsum order'
+                        : 'Fund needs a saved POA catalogue id and ISIN (refresh catalogue if missing)'
+                    }
+                    className="flex-1 py-2 bg-[#0B1B3E] text-white text-xs font-semibold rounded-lg hover:bg-[#1A3066] transition-colors disabled:cursor-not-allowed disabled:opacity-40"
                   >
                     Invest Now
                   </button>
@@ -480,6 +490,11 @@ function FundDetailModal({ fund, onClose, onInvest }: { fund: any; onClose: () =
     setSchemeDetail(fund);
     setDetailLoading(true);
     setDetailError('');
+
+    if (!isPersistedSchemeId(fund?.id)) {
+      setDetailLoading(false);
+      return () => { cancelled = true; };
+    }
 
     apiFetch(`/products/schemes/${fund.id}`)
       .then(async res => {
@@ -1145,7 +1160,7 @@ function TransactionModal({ fund, userData, onClose }: { fund: any; userData?: a
     return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
   };
   const minAmount = type === 'SIP'
-    ? 500
+    ? readSchemeMinSip(fund, 500)
     : parseMoneyValue(fund.minInvestment || fund.minimumInvestment || fund.minLumpsum, 1000);
   const amountNumber = Number(amount);
   const amountValid = Number.isFinite(amountNumber) && amountNumber >= minAmount;
@@ -1248,13 +1263,21 @@ function TransactionModal({ fund, userData, onClose }: { fund: any; userData?: a
 
   const submitOrder = async () => {
     if (!selectedInvestor || !amountValid || orderSubmitting) return;
+    if (!isTransactionReadyScheme(fund)) {
+      setOrderError('This fund is not POA-orderable. Sync the Cybrilla POA catalogue and pick a fund with a valid ISIN.');
+      return;
+    }
 
     setOrderSubmitting(true);
     setOrderError('');
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), 180_000);
     try {
       const payload = {
         investorId: selectedInvestor.id,
         productSchemeId: fund.id,
+        externalSchemeCode: fund.externalSchemeCode || undefined,
+        externalIsin: fund.externalIsin || undefined,
         type: type === 'SIP' ? 'SIP' : 'LUMPSUM',
         transactionType: type === 'SIP' ? 'SIP' : 'LUMPSUM_PURCHASE',
         amount: amountNumber,
@@ -1262,23 +1285,49 @@ function TransactionModal({ fund, userData, onClose }: { fund: any; userData?: a
         mandateMode: type === 'SIP' ? 'AUTO_DEBIT' : 'BANK_TRANSFER',
         sipFrequency: type === 'SIP' ? sipFrequency : undefined,
         sipStartDate: type === 'SIP' ? sipStartDate : undefined,
+        sipInstalments: type === 'SIP' ? 12 : undefined,
       };
 
       const response = await apiFetch('/orders', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
+        signal: controller.signal,
       });
       const result = await response.json().catch(() => null);
 
       if (!response.ok) {
-        throw new Error(result?.message || `Order creation failed (${response.status})`);
+        const baseMessage = result?.message || `Order creation failed (${response.status})`;
+        if (response.status === 404 && /product scheme not found/i.test(baseMessage)) {
+          throw new Error(
+            'Selected fund is no longer in the local catalogue. Close this dialog, refresh funds on the Ledger, then try again.',
+          );
+        }
+        if (response.status === 400 && /kyc must be completed/i.test(baseMessage)) {
+          throw new Error('Investor KYC must be completed before placing an order.');
+        }
+        if (response.status === 400 && /verified bank account/i.test(baseMessage)) {
+          throw new Error('Investor must have a verified bank account before placing an order.');
+        }
+        if (response.status === 400 && /investor profile|mf investment account|fintech primitives/i.test(baseMessage)) {
+          throw new Error(
+            `${baseMessage} Use Investors → Sync from Cybrilla for this investor, or select Anita Verma (demo-ready) and retry.`,
+          );
+        }
+        throw new Error(baseMessage);
       }
 
       setCreatedOrder(result || {});
     } catch (err: any) {
-      setOrderError(err?.message || 'Order creation failed. Please try again.');
+      if (err?.name === 'AbortError') {
+        setOrderError(
+          'Order creation is taking longer than expected. Cybrilla may still be preparing the investor profile — check Transactions in a moment, then retry if no order appears.',
+        );
+      } else {
+        setOrderError(err?.message || 'Order creation failed. Please try again.');
+      }
     } finally {
+      window.clearTimeout(timeoutId);
       setOrderSubmitting(false);
     }
   };
@@ -1320,8 +1369,12 @@ function TransactionModal({ fund, userData, onClose }: { fund: any; userData?: a
               </p>
               <div className="mt-6 rounded-2xl border border-slate-100 bg-slate-50 p-4 text-left text-sm">
                 <div className="flex justify-between gap-4 py-1">
+                  <span className="text-slate-500">Order ID</span>
+                  <span className="font-mono text-xs font-medium text-slate-800 text-right">{createdOrder.id || '—'}</span>
+                </div>
+                <div className="flex justify-between gap-4 py-1">
                   <span className="text-slate-500">Fund</span>
-                  <span className="font-medium text-slate-800 text-right">{fund.schemeName}</span>
+                  <span className="font-medium text-slate-800 text-right">{formatSchemeDisplayName(fund)}</span>
                 </div>
                 <div className="flex justify-between gap-4 py-1">
                   <span className="text-slate-500">Amount</span>
@@ -1329,8 +1382,16 @@ function TransactionModal({ fund, userData, onClose }: { fund: any; userData?: a
                 </div>
                 <div className="flex justify-between gap-4 py-1">
                   <span className="text-slate-500">Status</span>
-                  <span className="font-semibold text-amber-700">{createdOrder.orderStatus || 'Processing'}</span>
+                  <span className="font-semibold text-amber-700">{formatOrderStatusLabel(createdOrder.orderStatus)}</span>
                 </div>
+              </div>
+              <div className="mt-5 text-left">
+                <InvestorActionLink
+                  orderId={createdOrder.id}
+                  orderStatus={createdOrder.orderStatus}
+                  investorActionUrl={createdOrder.investorActionUrl}
+                  compact
+                />
               </div>
               <button
                 onClick={onClose}
@@ -1342,7 +1403,7 @@ function TransactionModal({ fund, userData, onClose }: { fund: any; userData?: a
           ) : (
           <>
           <h2 id="transaction-modal-title" className="text-xl font-semibold mb-1 text-slate-800">New Transaction</h2>
-          <p className="text-sm text-slate-500 mb-8">{fund.schemeName}</p>
+          <p className="text-sm text-slate-500 mb-8">{formatSchemeDisplayName(fund)}</p>
 
           {/* Progress bar */}
           <div className="flex items-center gap-2 mb-8">
@@ -1466,13 +1527,13 @@ function TransactionModal({ fund, userData, onClose }: { fund: any; userData?: a
                   <div className="flex justify-between items-center pb-4 border-b border-slate-200">
                     <div>
                       <p className="text-xs text-slate-400 font-semibold uppercase mb-1">Fund</p>
-                      <p className="font-medium text-slate-800 text-sm">{fund.schemeName}</p>
+                      <p className="font-medium text-slate-800 text-sm">{formatSchemeDisplayName(fund)}</p>
                     </div>
                     <CheckCircle2 className="w-5 h-5 text-green-500" />
                   </div>
                   <div>
                     <p className="text-xs text-slate-400 font-semibold uppercase mb-1">AMC</p>
-                    <p className="font-medium text-slate-800 text-sm">{fund.amcName}</p>
+                    <p className="font-medium text-slate-800 text-sm">{formatAmcDisplayName(fund)}</p>
                   </div>
                   <div className="grid grid-cols-2 pt-4">
                     <div className="col-span-2 pb-4">
@@ -1536,6 +1597,11 @@ function TransactionModal({ fund, userData, onClose }: { fund: any; userData?: a
               {step !== 3 && <ChevronRight className="w-4 h-4" />}
             </button>
           </div>
+          {step === 3 && orderSubmitting && (
+            <p className="mt-3 text-center text-xs text-slate-500">
+              Syncing with Cybrilla (profile, bank, purchase). First order for an investor can take up to 2 minutes.
+            </p>
+          )}
           </>
           )}
         </div>

@@ -1,9 +1,43 @@
 import axios from 'axios';
 import { parseServerValidation } from '../utils/serverValidation';
 
-const configuredBaseUrl = import.meta.env.VITE_API_BASE_URL || '/api/v1';
+/** Spring Boot origin for investor-action pages (/investor-actions/*), not the Vite dev server. */
+export const BACKEND_ORIGIN =
+  (import.meta.env.VITE_BACKEND_ORIGIN as string | undefined)?.replace(/\/$/, '') ||
+  'http://localhost:8081';
 
-export const API_BASE_URL = configuredBaseUrl.replace(/\/$/, '');
+const resolveApiBaseUrl = () => {
+  const configured = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.trim();
+  if (configured) {
+    const normalized = configured.replace(/\/$/, '');
+    // Dev guard: absolute API URLs (e.g. http://localhost:8081/api/v1) are cross-origin from
+    // :3000, so SameSite=Lax HttpOnly cookies are not sent and refresh appears as logout.
+    if (typeof window !== 'undefined' && /^https?:\/\//i.test(normalized)) {
+      try {
+        const apiOrigin = new URL(normalized).origin;
+        if (apiOrigin !== window.location.origin && import.meta.env.DEV) {
+          console.warn(
+            '[Platizio] VITE_API_BASE_URL targets',
+            apiOrigin,
+            'but the app runs on',
+            window.location.origin,
+            '— using /api/v1 proxy so auth cookies survive refresh.',
+          );
+          return '/api/v1';
+        }
+      } catch {
+        // fall through to configured value
+      }
+    }
+    return normalized;
+  }
+  if (typeof window !== 'undefined' && import.meta.env.DEV) {
+    return '/api/v1';
+  }
+  return `${BACKEND_ORIGIN}/api/v1`;
+};
+
+export const API_BASE_URL = resolveApiBaseUrl();
 export const SESSION_EXPIRED_EVENT = 'platizio:session-expired';
 
 type ApiFetchInit = RequestInit & {
@@ -34,7 +68,7 @@ const clearLocalAuthState = () => {
 };
 
 const redirectToLoginForExpiredSession = () => {
-  if (sessionRedirectInProgress || typeof window === 'undefined') return;
+  if (sessionRedirectInProgress || isSessionRestoreInProgress() || typeof window === 'undefined') return;
 
   sessionRedirectInProgress = true;
   clearLocalAuthState();
@@ -47,8 +81,21 @@ const redirectToLoginForExpiredSession = () => {
 
 let sessionRedirectInProgress = false;
 let refreshInProgress: Promise<boolean> | null = null;
+let sessionRestoreInProgress = false;
 
-const refreshSession = async () => {
+/** True while auth/restoreSession is in flight — RTK queries should not cascade refresh. */
+export const isSessionRestoreInProgress = () => sessionRestoreInProgress;
+
+export const beginSessionRestore = () => {
+  sessionRestoreInProgress = true;
+};
+
+export const endSessionRestore = () => {
+  sessionRestoreInProgress = false;
+};
+
+/** Single-flight refresh — avoids rotating the refresh token twice (React StrictMode / parallel 401s). */
+export const refreshSession = async (): Promise<boolean> => {
   if (!refreshInProgress) {
     refreshInProgress = fetch(apiUrl('/auth/refresh'), {
       method: 'POST',
@@ -64,6 +111,10 @@ const refreshSession = async () => {
   return refreshInProgress;
 };
 
+export const resetSessionRedirectGuard = () => {
+  sessionRedirectInProgress = false;
+};
+
 export const apiClient = axios.create({
   baseURL: API_BASE_URL,
   withCredentials: true,
@@ -71,11 +122,25 @@ export const apiClient = axios.create({
 
 apiClient.interceptors.response.use(
   response => response,
-  error => {
+  async error => {
     if (error?.response?.status === 400) {
       error.serverValidation = parseServerValidation(error.response.data);
     }
-    if (error?.response?.status === 401 && typeof window !== 'undefined') {
+    const requestUrl = String(error?.config?.url || '');
+    const requestConfig = error?.config as (typeof error.config & { _authRetry?: boolean }) | undefined;
+    if (
+      error?.response?.status === 401
+      && typeof window !== 'undefined'
+      && requestConfig
+      && !requestConfig._authRetry
+      && !isAuthRedirectExcluded(requestUrl)
+      && !isSessionRestoreInProgress()
+    ) {
+      const refreshed = await refreshSession();
+      if (refreshed) {
+        requestConfig._authRetry = true;
+        return apiClient.request(requestConfig);
+      }
       redirectToLoginForExpiredSession();
     }
     return Promise.reject(error);
@@ -92,6 +157,9 @@ export const apiFetch = async (pathOrUrl: string, init: ApiFetchInit = {}) => {
   });
 
   if (response.status === 401 && !skipAuthRedirect && !isAuthRedirectExcluded(pathOrUrl) && typeof window !== 'undefined') {
+    if (isSessionRestoreInProgress()) {
+      return response;
+    }
     const refreshed = await refreshSession();
     if (refreshed) {
       return fetch(url, {
