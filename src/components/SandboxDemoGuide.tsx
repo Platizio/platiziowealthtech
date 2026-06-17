@@ -66,7 +66,7 @@ export default function SandboxDemoGuide({ onApplyScenario, compact, defaultExpa
           <Beaker className="h-4 w-4 text-amber-700" />
           <span className="text-sm font-semibold text-amber-900">Sandbox demo guide</span>
           <span className="rounded-full bg-amber-200 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-amber-900">
-            Cybrilla test data
+            Platizio test data
           </span>
         </div>
         {expanded ? <ChevronUp className="h-4 w-4 text-amber-700" /> : <ChevronDown className="h-4 w-4 text-amber-700" />}
@@ -75,7 +75,7 @@ export default function SandboxDemoGuide({ onApplyScenario, compact, defaultExpa
       {expanded && (
         <div className="border-t border-amber-200 px-4 pb-4 pt-3">
           <p className="mb-3 text-xs leading-5 text-amber-900/80">
-            Official Cybrilla sandbox simulators only. Use <span className="font-semibold">BBBPB3753B</span> for the full
+            Official Platizio sandbox simulators only. Use <span className="font-semibold">BBBPB3753B</span> for the full
             kyc_unavailable demo, or <span className="font-semibold">AAAPA3751A</span> for a fast purchase.
           </p>
 

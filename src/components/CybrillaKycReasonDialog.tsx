@@ -121,7 +121,7 @@ export default function CybrillaKycReasonDialog({ open, content, onClose }: Prop
                 type="button"
                 onClick={onClose}
                 className="rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700"
-                aria-label="Close Cybrilla KYC details"
+                aria-label="Close Platizio KYC details"
               >
                 <X className="h-4 w-4" />
               </button>
@@ -129,7 +129,7 @@ export default function CybrillaKycReasonDialog({ open, content, onClose }: Prop
 
             {warnings.length > 0 && (
               <div className="mt-5 rounded-xl border border-red-100 bg-red-50/70 p-4">
-                <p className="text-xs font-semibold uppercase tracking-wide text-red-900">Cybrilla messages</p>
+                <p className="text-xs font-semibold uppercase tracking-wide text-red-900">Platizio messages</p>
                 <ul className="mt-3 space-y-3">
                   {warnings.map(warning => (
                     <li key={warning.id} className="text-sm leading-5 text-red-900">

@@ -125,7 +125,7 @@ export const kycFlowNextActionLabel = (action: KycFlowNextAction) => {
     case 'REFRESH_AADHAAR': return 'Refresh Aadhaar status';
     case 'START_ESIGN': return 'Start eSign';
     case 'REFRESH_ESIGN': return 'Refresh eSign status';
-    case 'WAIT': return 'Waiting on Cybrilla';
+    case 'WAIT': return 'Waiting on Platizio';
     case 'COMPLETE': return 'Flow complete';
     default: return action;
   }

@@ -33,9 +33,10 @@ const firstMetaValue = (meta: any, keys: string[]) => {
 
 const formatSchemeNav = (rawNav: unknown): string => {
   const num = typeof rawNav === 'number' ? rawNav : Number(String(rawNav ?? '').replace(/[^0-9.]/g, ''));
+  // DF-07: when NAV is unavailable, show an em dash rather than a misleading ₹0.00.
   return Number.isFinite(num) && num > 0
     ? `₹${num.toLocaleString('en-IN', { maximumFractionDigits: 2, minimumFractionDigits: 2 })}`
-    : '₹0.00';
+    : '—';
 };
 
 const formatSchemeReturn = (rawReturn: unknown): string => {
@@ -93,15 +94,15 @@ type BankAccount = {
 
 const sipSchema = z.object({
   amount: z.number().min(500, 'Minimum SIP is ₹500'),
-  frequency: z.enum(['MONTHLY', 'QUARTERLY']),
+  frequency: z.enum(['MONTHLY', 'QUARTERLY'], { message: 'Select a SIP frequency' }),
   startDate: z.string().refine(d => new Date(d) > new Date(), 'Start date must be in the future'),
   instalments: z.number().int().positive().optional(),
 });
 
 type SipFormValues = z.infer<typeof sipSchema>;
 
-const frequencyLabel = (value: SipFormValues['frequency']) =>
-  value === 'MONTHLY' ? 'Monthly' : 'Quarterly';
+const frequencyLabel = (value: string | undefined) =>
+  value === 'MONTHLY' ? 'Monthly' : value === 'QUARTERLY' ? 'Quarterly' : '—';
 
 const parseAmountInput = (value: unknown) => {
   if (typeof value === 'number') return value;
@@ -251,13 +252,14 @@ export default function InvestorTransaction({ investor, onComplete, onBack }: Pr
     mode: 'onBlur',
     reValidateMode: 'onBlur',
     defaultValues: {
-      frequency: 'MONTHLY',
+      // DF-09: no pre-selected frequency — the user must actively choose.
+      frequency: '' as unknown as SipFormValues['frequency'],
       startDate: '',
     },
   });
 
   const amountNum = parseAmountInput(watch('amount'));
-  const frequency = watch('frequency') || 'MONTHLY';
+  const frequency = watch('frequency'); // DF-09: no MONTHLY fallback
   const startDate = watch('startDate') || '';
   const instalments = watch('instalments');
   const minAmount = product ? (txType === 'sip' ? product.minSip : product.minLumpsum) : 0;
@@ -324,7 +326,7 @@ export default function InvestorTransaction({ investor, onComplete, onBack }: Pr
           setProductsError(
             debouncedFundSearch.trim()
               ? 'No funds match your search. Try a different name, AMC, or scheme code.'
-              : 'No orderable funds found. Open Ledger and refresh the Cybrilla POA catalogue, then try again.',
+              : 'No orderable funds found. Open Ledger and refresh the Platizio POA catalogue, then try again.',
           );
         }
       } catch (err: any) {
@@ -384,7 +386,7 @@ export default function InvestorTransaction({ investor, onComplete, onBack }: Pr
 
     if (!isSip && !isSandboxLumpsumAmountValid(amountNum)) {
       const lastDigit = sandboxAmountLastDigit(amountNum);
-      const message = `Cybrilla sandbox rejects lumpsum amounts ending in ${lastDigit}. Use ₹5000, ₹10000, etc. (last digit must be 0).`;
+      const message = `Platizio sandbox rejects lumpsum amounts ending in ${lastDigit}. Use ₹5000, ₹10000, etc. (last digit must be 0).`;
       console.warn('[Platizio] lumpsum_order_blocked_sandbox_amount', { amount: amountNum, lastDigit });
       setSubmitError(message);
       return;
@@ -502,7 +504,7 @@ export default function InvestorTransaction({ investor, onComplete, onBack }: Pr
           <p className="text-slate-500 text-sm mb-6">
             {orderFailed ? (
               <>
-                Cybrilla/Fintech Primitives rejected this purchase during review.
+                Platizio rejected this purchase during review.
                 {createdOrder?.failureReason ? (
                   <> {createdOrder.failureReason}</>
                 ) : (
@@ -608,7 +610,7 @@ export default function InvestorTransaction({ investor, onComplete, onBack }: Pr
           <motion.div key="s1" initial={{ x: 20 }} animate={{ x: 0 }} exit={{ x: -20 }} transition={{ duration: 0.22 }}>
             <h2 className="font-semibold text-slate-800 mb-4">Select a Fund</h2>
             <p className="text-xs text-slate-500 mb-4">
-              Browse the Cybrilla POA catalogue — only synced, orderable schemes can be selected.
+              Browse the Platizio POA catalogue — only synced, orderable schemes can be selected.
             </p>
 
             <div className="relative mb-4">
@@ -765,7 +767,7 @@ export default function InvestorTransaction({ investor, onComplete, onBack }: Pr
               )}
               {!isSip && amountNum > 0 && amountValid && !isSandboxLumpsumAmountValid(amountNum) && (
                 <p className="text-xs text-amber-700 mt-2 font-medium">
-                  Sandbox tip: lumpsum amount must end in <span className="font-bold">0</span> (e.g. ₹5000). Ending in 1 forces FP review failure.
+                  Sandbox tip: lumpsum amount must end in <span className="font-bold">0</span> (e.g. ₹5000). Ending in 1 forces Platizio review failure.
                 </p>
               )}
               {!isSip && amountNum > 0 && !amountValid && (
@@ -788,6 +790,7 @@ export default function InvestorTransaction({ investor, onComplete, onBack }: Pr
                     {...register('frequency')}
                     className={`w-full px-3.5 py-3 text-sm bg-slate-50 border rounded-xl outline-none focus:ring-2 focus:ring-blue-100 focus:border-blue-500 ${errors.frequency ? 'border-red-300 bg-red-50' : 'border-slate-200'}`}
                   >
+                    <option value="" disabled>Select frequency</option>
                     <option value="MONTHLY">Monthly</option>
                     <option value="QUARTERLY">Quarterly</option>
                   </select>

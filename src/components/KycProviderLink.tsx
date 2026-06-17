@@ -15,7 +15,7 @@ export default function KycProviderLink({
   label,
   icon,
   disabled = false,
-  disabledReason = 'Link disabled while the Cybrilla step is in progress.',
+  disabledReason = 'Link disabled while the Platizio step is in progress.',
   className = 'mt-3 inline-flex items-center gap-1.5 text-xs font-semibold text-indigo-700 hover:text-indigo-800',
 }: Props) {
   const [opened, setOpened] = useState(false);

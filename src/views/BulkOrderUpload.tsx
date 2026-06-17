@@ -269,7 +269,7 @@ export default function BulkOrderUpload({ userData }: { userData?: any }) {
                 {result.dryRun ? 'Validation Result' : 'Submission Result'}
               </h2>
               <p className="text-xs text-slate-400 mt-0.5">
-                {result.platform.replaceAll('_', ' ')} - batch {result.batchSize}
+                {(result.platform ?? '').replaceAll('_', ' ')} - batch {result.batchSize}
               </p>
             </div>
             {invalidRows.length > 0 ? (
@@ -304,7 +304,7 @@ export default function BulkOrderUpload({ userData }: { userData?: any }) {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-50">
-                {result.rows.map(row => (
+                {(result.rows ?? []).map(row => (
                   <tr key={row.rowNumber} className="hover:bg-slate-50/80">
                     <td className="px-4 py-3 text-slate-500">{row.rowNumber}</td>
                     <td className="px-4 py-3">

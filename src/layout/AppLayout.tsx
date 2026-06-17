@@ -78,8 +78,7 @@ export default function AppLayout({ userData, onSignOut }: { userData: any, onSi
   const displayRole = normalizeRole(userData?.role) || 'SUB_DISTRIBUTOR';
   const canAccessAdmin = ADMIN_ROLES.has(displayRole);
   const nismExpiryDate = userData?.nismExpiryDate || userData?.nism_expiry_date || null;
-  const arnExpiryDate  = userData?.arnExpiryDate  || userData?.arn_expiry_date  || null;
-  
+
   const parseDate = (dateStr: any) => {
     if (!dateStr) return null;
     if (Array.isArray(dateStr)) {
@@ -96,8 +95,7 @@ export default function AppLayout({ userData, onSignOut }: { userData: any, onSi
   };
   
   const nismExpired = checkExpired(nismExpiryDate);
-  const arnExpired  = checkExpired(arnExpiryDate);
-  const isExpired   = nismExpired || arnExpired;
+  const isExpired   = nismExpired;
 
   // F-32: focus-trap the expired-credentials dialog while it's open so
   // keyboard users can't Tab into the page behind it. Pre-compute the open
@@ -145,14 +143,10 @@ export default function AppLayout({ userData, onSignOut }: { userData: any, onSi
                 <AlertTriangle className="w-6 h-6 text-red-500" />
               </div>
               <h2 id="expired-credentials-title" className="text-lg font-bold text-slate-800 mb-2">
-                {arnExpired && nismExpired ? 'Credentials Expired' : arnExpired ? 'ARN Expired' : 'NISM Expired'}
+                NISM Expired
               </h2>
               <p className="text-sm text-slate-500 mb-6">
-                {arnExpired && nismExpired 
-                  ? 'Your ARN and NISM certifications have expired. Please renew them to restore full access.' 
-                  : arnExpired 
-                    ? 'Your ARN certificate has expired. Please renew it to maintain compliance.' 
-                    : 'Your NISM certification has expired. Please renew it to avoid transaction restrictions.'}
+                Your NISM certification has expired. Please renew it to avoid transaction restrictions.
               </p>
               <button onClick={() => setShowInactivePopup(false)} className="w-full py-2.5 bg-red-500 text-white font-semibold text-sm rounded-xl hover:bg-red-600 transition-colors">
                 Close

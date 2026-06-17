@@ -110,7 +110,8 @@ const mapBackendSchemeToProduct = (scheme: BackendProductScheme, index: number):
     category: normalizeCategory(String(rawCategory || '')),
     return1y: formatReturn(rawReturn),
     minInvest: formatCurrency(rawMinInvestment, 'Rs 100'),
-    nav: formatCurrency(rawNav, 'Rs 0'),
+    // DF-07: show an em dash, not a misleading "Rs 0", when NAV is unavailable.
+    nav: formatCurrency(rawNav, '—'),
     visibility: rawVisibility ? String(rawVisibility) : 'All Tiers',
     riskLevel: rawRisk ? String(rawRisk) : 'Moderate',
     status: scheme.active === false ? 'Inactive' : 'Active',
@@ -212,7 +213,7 @@ export default function ProductMgmt({
     if (backoffRemainingMs > 0) {
       useCybrillaSync = false;
       setSyncError(
-        `Live Cybrilla sync is cooling down. Showing cached products; try again in ${Math.ceil(backoffRemainingMs / 60000)} min.`,
+        `Live Platizio sync is cooling down. Showing cached products; try again in ${Math.ceil(backoffRemainingMs / 60000)} min.`,
       );
     } else if (syncFromCybrilla) {
       setSyncError('');
@@ -294,8 +295,8 @@ export default function ProductMgmt({
           setTotalElements(cachedMeta.totalElements);
           setSyncError(
             cachedSchemes.length > 0
-              ? 'Showing locally cached products because live Cybrilla sync is temporarily unavailable.'
-              : 'Failed to sync products from Cybrilla. Check backend connectivity to s.finprim.com.',
+              ? 'Showing locally cached products because live Platizio sync is temporarily unavailable.'
+              : 'Failed to sync products from Platizio.',
           );
         } catch {
           setSyncError(error instanceof Error ? error.message : 'Unable to load products');
@@ -429,7 +430,7 @@ export default function ProductMgmt({
               className="flex items-center gap-2 px-4 py-2 text-sm font-medium bg-white border border-slate-200 text-slate-700 rounded-lg shadow-sm hover:bg-slate-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <RefreshCw className={`w-4 h-4 ${loadingProducts ? 'animate-spin' : ''}`} />
-              {loadingProducts ? 'Fetching...' : 'Fetch from Cybrilla'}
+              {loadingProducts ? 'Fetching...' : 'Fetch from Platizio'}
             </button>
           )}
           <button

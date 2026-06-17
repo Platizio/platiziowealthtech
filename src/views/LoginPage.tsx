@@ -96,7 +96,6 @@ export default function LoginPage({
   const [otpId, setOtpId] = useState('');         // identifier entered
   const [otpStep, setOtpStep] = useState<OtpStep>('send');
   const [otpDigits, setOtpDigits] = useState<string[]>(Array(6).fill(''));
-  const [otpGenerated, setOtpGenerated] = useState('');
   const [otpUser, setOtpUser] = useState<any>(null);
   const [otpError, setOtpError] = useState('');
   const [otpLoading, setOtpLoading] = useState(false);
@@ -299,7 +298,6 @@ export default function LoginPage({
     try {
       const data = await requestOtp(id);
       setOtpId(id);
-      setOtpGenerated(data?.devCode || '');
       setOtpDigits(Array(6).fill(''));
       setCountdown(typeof data?.resendInSeconds === 'number' ? data.resendInSeconds : 30);
       setOtpStep('verify');
@@ -374,7 +372,6 @@ export default function LoginPage({
     setOtpError('');
     try {
       const data = await requestOtp(otpId.trim().toLowerCase());
-      setOtpGenerated(data?.devCode || '');
       setOtpDigits(Array(6).fill(''));
       setCountdown(typeof data?.resendInSeconds === 'number' ? data.resendInSeconds : 30);
       setTimeout(() => otpRefs.current[0]?.focus(), 50);
@@ -387,7 +384,7 @@ export default function LoginPage({
   /* ── OTP: reset to step 1 ───────────────────────────────────────────── */
   const resetOtp = () => {
     setOtpStep('send'); setOtpId('');
-    setOtpDigits(Array(6).fill('')); setOtpGenerated('');
+    setOtpDigits(Array(6).fill(''));
     setOtpUser(null); setOtpError(''); setCountdown(0);
   };
 
@@ -811,18 +808,6 @@ export default function LoginPage({
                             Change
                           </button>
                         </div>
-
-                        {/* Dev-mode OTP reveal — only when the backend returns a
-                            devCode (local profile with email delivery disabled). */}
-                        {otpGenerated && (
-                          <div className="mb-6 bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 flex items-center gap-3">
-                            <span className="text-amber-500 text-base flex-shrink-0">⚡</span>
-                            <p className="text-xs text-amber-800 leading-relaxed">
-                              <span className="font-semibold">Dev mode — your OTP is: </span>
-                              <span className="font-mono font-bold text-amber-900 tracking-[0.3em]">{otpGenerated}</span>
-                            </p>
-                          </div>
-                        )}
 
                         {/* Error */}
                         <AnimatePresence>
