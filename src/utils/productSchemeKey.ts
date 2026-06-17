@@ -1,5 +1,5 @@
 type SchemeLike = {
-  id?: string | null;
+  id?: string | number | null;
   externalSchemeCode?: string | null;
   externalIsin?: string | null;
   schemeName?: string | null;
@@ -17,7 +17,7 @@ export const isPersistedSchemeId = (value: unknown): value is string => {
 
 /** Stable React list key for Cybrilla/local fund rows (id may be null on live browse). */
 export const productSchemeKey = (scheme: SchemeLike, index = 0): string => {
-  const id = scheme?.id?.trim();
+  const id = scheme?.id != null ? String(scheme.id).trim() : '';
   if (id) return id;
 
   const code = scheme?.externalSchemeCode?.trim();
