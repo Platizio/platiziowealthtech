@@ -1327,7 +1327,9 @@ function InvestorDetail({
   const poaRunLocked = shouldLockPoaRunButton({
     anyBusy: anyKycApiBusy && kycActionLoading !== 'kyc-check',
     kycPhase: kycActionLoading === 'kyc-check' ? 'checking' : kycDecision.state,
-    preVerificationComplete: poaPreVerificationComplete,
+    // `kyc_unavailable` (requiresFreshKyc) is a "start fresh KYC" signal, not a terminal pass —
+    // keep pre-verification re-runnable so the investor is never permanently blocked.
+    preVerificationComplete: poaPreVerificationComplete && !kycDecision.requiresFreshKyc,
   });
   const aadhaarStartLocked = shouldLockAadhaarStart({
     anyBusy: anyKycApiBusy,

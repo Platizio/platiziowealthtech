@@ -4,6 +4,7 @@ import { motion } from 'motion/react';
 import { ArrowLeft, TrendingDown, AlertCircle, CheckCircle2, Layers, RefreshCw } from 'lucide-react';
 import { apiFetch } from '../config/api';
 import { getPageContent } from '../utils/pagination';
+import { fetchRedemptions, syncRedemptions, latestRedemptionStatus, redemptionStatusMeta } from '../utils/redeemOrder';
 
 // Order statuses that represent a settled holding the investor actually owns
 // and can therefore redeem (sell). Draft / failed / pending orders are not
@@ -22,6 +23,7 @@ interface Holding {
   status: string;
   createdAt?: string;
   alreadyRedeemed: boolean;
+  redemptionStatus?: string;
 }
 
 const formatCurrency = (value?: number) =>
@@ -46,6 +48,7 @@ export default function InvestorRedeem({ userData: _userData }: { userData?: any
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
   const [redeemingId, setRedeemingId] = useState('');
+  const [syncingId, setSyncingId] = useState('');
   const [actionError, setActionError] = useState('');
   const [actionMessage, setActionMessage] = useState('');
 
@@ -79,12 +82,11 @@ export default function InvestorRedeem({ userData: _userData }: { userData?: any
       const withRedemptionFlags = await Promise.all(
         redeemable.map(async (o: any) => {
           let alreadyRedeemed = false;
+          let redemptionStatus: string | undefined;
           try {
-            const r = await apiFetch(`/orders/${o.id}/redemptions`);
-            if (r.ok) {
-              const records = await r.json().catch(() => []);
-              alreadyRedeemed = Array.isArray(records) && records.length > 0;
-            }
+            const records = await fetchRedemptions(o.id);
+            alreadyRedeemed = records.length > 0;
+            redemptionStatus = latestRedemptionStatus(records);
           } catch {
             // Non-fatal — treat as not redeemed; the backend still guards duplicates.
           }
@@ -104,6 +106,7 @@ export default function InvestorRedeem({ userData: _userData }: { userData?: any
             status: o.orderStatus || '—',
             createdAt: o.createdAt,
             alreadyRedeemed,
+            redemptionStatus,
           } as Holding;
         }),
       );
@@ -150,12 +153,28 @@ export default function InvestorRedeem({ userData: _userData }: { userData?: any
         }
         throw new Error(message);
       }
-      setHoldings(prev => prev.map(h => (h.id === holding.id ? { ...h, alreadyRedeemed: true } : h)));
-      setActionMessage(`Redemption submitted for "${holding.fund}". Track its progress under Transactions.`);
+      setHoldings(prev => prev.map(h => (h.id === holding.id ? { ...h, alreadyRedeemed: true, redemptionStatus: 'SUBMITTED' } : h)));
+      setActionMessage(`Redemption submitted for "${holding.fund}". Use Sync to track its status.`);
     } catch (err) {
       setActionError(err instanceof Error ? err.message : 'Redemption failed. Please try again.');
     } finally {
       setRedeemingId('');
+    }
+  };
+
+  const syncStatus = async (holding: Holding) => {
+    if (syncingId) return;
+    setSyncingId(holding.id);
+    try {
+      const records = await syncRedemptions(holding.id);
+      const status = latestRedemptionStatus(records);
+      setHoldings(prev =>
+        prev.map(h =>
+          h.id === holding.id ? { ...h, redemptionStatus: status, alreadyRedeemed: records.length > 0 } : h,
+        ),
+      );
+    } finally {
+      setSyncingId('');
     }
   };
 
@@ -267,9 +286,22 @@ export default function InvestorRedeem({ userData: _userData }: { userData?: any
                     <td className="px-6 py-4 text-sm text-slate-600">{formatDate(h.createdAt)}</td>
                     <td className="px-6 py-4 text-right">
                       {h.alreadyRedeemed ? (
-                        <span className="inline-flex items-center gap-1 text-xs font-semibold text-slate-400">
-                          <CheckCircle2 className="w-3.5 h-3.5" /> Redemption submitted
-                        </span>
+                        <div className="inline-flex items-center gap-2">
+                          <span className={`inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-full ${redemptionStatusMeta(h.redemptionStatus).cls}`}>
+                            {h.redemptionStatus === 'SUCCESSFUL' || h.redemptionStatus === 'BANK_CREDIT_COMPLETED' ? (
+                              <CheckCircle2 className="w-3 h-3" />
+                            ) : null}
+                            {redemptionStatusMeta(h.redemptionStatus).label}
+                          </span>
+                          <button
+                            onClick={() => syncStatus(h)}
+                            disabled={syncingId === h.id}
+                            title="Refresh redemption status from Cybrilla"
+                            className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-semibold text-slate-500 border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors disabled:opacity-40"
+                          >
+                            <RefreshCw className={`w-3 h-3 ${syncingId === h.id ? 'animate-spin' : ''}`} /> Sync
+                          </button>
+                        </div>
                       ) : (
                         <button
                           onClick={() => redeem(h)}

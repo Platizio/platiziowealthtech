@@ -868,7 +868,9 @@ export const getPreVerificationDecision = (
       return {
         state: 'failed',
         title: 'Fresh KYC required',
-        message: readinessReason || 'No reusable KYC record was found for this investor.',
+        message: readinessReason
+          || 'No existing KYC was found for this PAN — this is expected for a new investor and is not an error. '
+          + 'Click "Create KYC request" to start a fresh KYC application, or re-run pre-verification.',
         canProceed: false,
         requiresFreshKyc: true,
         requiresPanAadhaarLink: false,

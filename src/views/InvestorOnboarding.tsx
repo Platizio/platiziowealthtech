@@ -396,10 +396,20 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
     || kycPhase === 'checking',
   );
   const poaPreVerificationComplete = isPoaPreVerificationComplete(kycDecision);
+  // When the user goes back and edits identity (PAN / name / DOB / mobile / etc.)
+  // after a prior pre-verification, the saved result is stale: it was computed for
+  // the OLD identity. Treat the prior completion as invalid so "Run pre-verification"
+  // is enabled again and a fresh check can run against the new data.
+  const identityChangedSinceKyc = Boolean(
+    lastKycIdentityFingerprint && lastKycIdentityFingerprint !== identityFingerprint,
+  );
   const poaRunLocked = shouldLockPoaRunButton({
     anyBusy: anyKycApiBusy && kycPhase !== 'checking',
     kycPhase,
-    preVerificationComplete: poaPreVerificationComplete,
+    // `kyc_unavailable` (requiresFreshKyc) is NOT a terminal success — per Cybrilla docs it
+    // means "start a fresh KYC application". Keep "Run pre-verification" enabled so the investor
+    // can re-run it and is never permanently blocked; the "Create KYC request" path stays available too.
+    preVerificationComplete: poaPreVerificationComplete && !identityChangedSinceKyc && !kycDecision.requiresFreshKyc,
   });
   const aadhaarStartLocked = shouldLockAadhaarStart({
     anyBusy: anyKycApiBusy,
@@ -738,15 +748,22 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
     setBankEditMode(true);
   };
 
-  // Reset the POA pre-verification result if identity fields change.
+  // Reset the POA pre-verification result if identity fields change — including after
+  // going BACK and editing. Keyed off BOTH the draft fingerprint and the last-KYC
+  // fingerprint: on a resumed/loaded investor `draftIdentityFingerprint` is empty, so
+  // without the lastKyc check an edit-after-resume would never clear the stale result.
+  // `lastKycIdentityFingerprint` is intentionally NOT cleared here so the button stays
+  // unlocked (see identityChangedSinceKyc) until a fresh pre-verification actually runs.
   useEffect(() => {
-    if (!draftIdentityFingerprint || draftIdentityFingerprint === identityFingerprint) return;
-    setDraftIdentityFingerprint('');
+    const draftChanged = Boolean(draftIdentityFingerprint) && draftIdentityFingerprint !== identityFingerprint;
+    const kycChanged = Boolean(lastKycIdentityFingerprint) && lastKycIdentityFingerprint !== identityFingerprint;
+    if (!draftChanged && !kycChanged) return;
+    if (draftIdentityFingerprint) setDraftIdentityFingerprint('');
     setKycPreVerification(null);
     setKycPhase('idle');
     setKycActionError('');
     setKycActionMessage('Identity details changed. Run POA pre-verification again.');
-  }, [draftIdentityFingerprint, identityFingerprint]);
+  }, [draftIdentityFingerprint, lastKycIdentityFingerprint, identityFingerprint]);
 
   const consentAcknowledged = consentDataProcessing && consentCybrillaKyc;
 
@@ -1426,7 +1443,10 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
         const storedAadhaar = readAadhaarVerificationFromInvestor(flow.investor);
         if (storedAadhaar) applyAadhaarVerificationState(storedAadhaar);
         const rebuiltPreVerification = buildPreVerificationFromBackendState(flow.investor);
-        if (rebuiltPreVerification) {
+        // Don't resurrect a pre-verification built from the backend's (now stale) identity
+        // once the user has edited identity fields — that would re-lock the Run button and
+        // re-show the old readiness result. The fresh check the user is about to run wins.
+        if (rebuiltPreVerification && !identityChangedSinceKyc) {
           setKycPreVerification(prev => prev || rebuiltPreVerification);
           const readinessReason = readCybrillaReadinessReason(rebuiltPreVerification, { investor: flow.investor });
           const flowDecision = getPreVerificationDecision(rebuiltPreVerification, { investor: flow.investor });
@@ -1669,6 +1689,44 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
       reportKycIssue(err instanceof Error ? err.message : 'Fresh KYC request failed.');
     } finally {
       setCreatingKycRequest(false);
+    }
+  };
+
+  // Sandbox-only: the Cybrilla sandbox cannot complete a real Digilocker/eSign session, so the
+  // onboarding Aadhaar step would otherwise dead-end. Drive the existing sandbox-gated
+  // POST /kyc-requests/{id}/simulate endpoint to "successful" so the demo KYC completes and the
+  // flow can advance to bank verification. Never shown outside sandbox mode.
+  const simulateKycApprovalSandbox = async () => {
+    const investor = draftInvestor || resumeInvestor;
+    if (!investor?.id || !kycRequestId) {
+      setKycActionError('Create a KYC request before simulating sandbox approval.');
+      return;
+    }
+    setAadhaarActionLoading('simulate-kyc');
+    setKycActionError('');
+    setKycActionMessage('');
+    try {
+      const response = await apiFetch(`/investors/${investor.id}/kyc-requests/${kycRequestId}/simulate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: 'successful' }),
+      });
+      const result = await readJsonSafely(response);
+      if (!response.ok) {
+        if (result && typeof result === 'object') {
+          setCybrillaApiWarnings(extractCybrillaWarningsFromPayload(result));
+        }
+        throw new Error(typeof result === 'string'
+          ? result
+          : result?.message || `Sandbox KYC simulation failed with HTTP ${response.status}`);
+      }
+      if (result?.investor) setDraftInvestor(result.investor);
+      setKycActionMessage('Sandbox: KYC request marked successful — KYC is complete. Click Continue to move to Bank verification.');
+      await loadKycFlowStatus(investor.id);
+    } catch (err) {
+      reportKycIssue(err instanceof Error ? err.message : 'Sandbox KYC simulation failed.');
+    } finally {
+      setAadhaarActionLoading('');
     }
   };
 
@@ -2815,6 +2873,31 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
                           : 'Aadhaar document fetched from Digilocker.'}
                       </p>
                     )}
+                  </div>
+                )}
+
+                {isCybrillaSandboxMode() && kycRequestId
+                  && String(activeInvestor?.kycStatus || '').toUpperCase() !== 'COMPLETED' && (
+                  <div className="mt-5 rounded-xl border border-dashed border-emerald-300 bg-emerald-50/60 p-4">
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                      <div className="min-w-0">
+                        <p className="text-xs font-semibold text-emerald-900">Sandbox shortcut — simulate KYC approval</p>
+                        <p className="mt-1 text-xs leading-5 text-emerald-800">
+                          The Cybrilla sandbox can't complete a real Digilocker/eSign session, so the Aadhaar step
+                          can't finish here. Use this to mark the KYC request <span className="font-semibold">successful</span>
+                          {' '}and continue the demo. Sandbox only — never shown in production.
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={simulateKycApprovalSandbox}
+                        disabled={anyKycApiBusy}
+                        className="inline-flex flex-shrink-0 items-center justify-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold text-white transition-colors hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {aadhaarActionLoading === 'simulate-kyc' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5" />}
+                        Simulate KYC approval
+                      </button>
+                    </div>
                   </div>
                 )}
 
