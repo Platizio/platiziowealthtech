@@ -14,7 +14,7 @@ WORKDIR /app
 #   VITE_BACKEND_ORIGIN -> your backend's PUBLIC URL, used only for the
 #                          investor-action links (full-page links to the backend)
 ARG VITE_API_BASE_URL=/api/v1
-ARG VITE_BACKEND_ORIGIN
+ARG VITE_BACKEND_ORIGIN=https://platiziowealthtechh.onrender.com
 ENV VITE_API_BASE_URL=$VITE_API_BASE_URL
 ENV VITE_BACKEND_ORIGIN=$VITE_BACKEND_ORIGIN
 
@@ -34,6 +34,9 @@ FROM nginx:1.27-alpine AS serve
 ENV NGINX_ENVSUBST_FILTER="^(PORT|BACKEND_URL)$"
 # Render injects PORT at runtime (defaults to 10000); this is just a fallback.
 ENV PORT=10000
+# Backend the nginx /api/v1 proxy targets. Defaulted so the service deploys
+# out-of-the-box; override by setting BACKEND_URL in the Render dashboard.
+ENV BACKEND_URL=https://platiziowealthtechh.onrender.com
 
 COPY nginx.conf.template /etc/nginx/templates/default.conf.template
 COPY --from=build /app/dist /usr/share/nginx/html
