@@ -247,6 +247,48 @@ public class InvestorActionService {
         }
     }
 
+    /**
+     * FP-documented payment retry (BUG-030): after a failed payment the {@code mf_purchase} is still
+     * submitted, so a fresh payment can be started WITHOUT re-confirming the purchase. Re-initiates
+     * payment for the submitted purchase and returns the order to {@code PAYMENT_PENDING} with a new
+     * redirect URL. Only valid for a non-SIP order that has an FP purchase id.
+     */
+    @Transactional
+    public InvestorActionPage retryLumpsumPayment(String token) {
+        TransactionOrder order = findOrder(token);
+        if (isSipMandateOrder(order)) {
+            return pageFor(order, "This is a SIP — complete it through the mandate flow, not payment retry.");
+        }
+        if (!StringUtils.hasText(order.getExternalOrderId())) {
+            return pageFor(order, "This order was never submitted to Fintech Primitives, so there is no payment to "
+                    + "retry. Place a new order from the Ledger.");
+        }
+        if (order.getOrderStatus() != OrderStatus.RETRY_AVAILABLE
+                && order.getOrderStatus() != OrderStatus.PAYMENT_PENDING) {
+            return pageFor(order, "Payment retry is only available while a payment is pending or has failed.");
+        }
+        Investor investor = investorRepository.findById(order.getInvestorId())
+                .orElseThrow(() -> new EntityNotFoundException("Investor not found"));
+        try {
+            String redirect = submitPurchaseForPayment(order, investor);
+            order.setOrderStatus(OrderStatus.PAYMENT_PENDING);
+            order.setInvestorActionUrl(redirect);
+            order.setFailureReason(null);
+            order = orderRepository.save(order);
+            auditService.log("ORDER", order.getId(), "PAYMENT_RETRIED", order.getDistributorId(),
+                    "{\"externalOrderId\":\"" + safe(order.getExternalOrderId()) + "\"}");
+            return pageFor(order, isUpiUri(redirect)
+                    ? "A new payment is ready. Open your UPI app to complete your investment."
+                    : "A new payment is ready. Continue to the secure payment page to complete your investment.");
+        } catch (CybrillaUnavailableException ex) {
+            return pageFor(order, "Cybrilla/Fintech Primitives is temporarily unreachable. Please retry in a moment.");
+        } catch (IllegalStateException | CybrillaApiException ex) {
+            logger.warn("investor_action_payment_retry status='failed' order_id='{}' reason='{}'",
+                    order.getId(), ex.getMessage());
+            return pageFor(orderRepository.save(order), "Could not start a new payment: " + ex.getMessage());
+        }
+    }
+
     public boolean sandboxPaymentSimulationEnabled() {
         return sandboxSimulatePayment && "sandbox".equalsIgnoreCase(cybrillaEnvironment);
     }
@@ -504,10 +546,15 @@ public class InvestorActionService {
         if (StringUtils.hasText(status) && "pending".equalsIgnoreCase(status.trim())) {
             return "Payment is pending provider confirmation.";
         }
-        order.setOrderStatus(OrderStatus.FAILED);
-        order.setFailureReason("Payment failed"
-                + (StringUtils.hasText(paymentId) ? " (paymentId=" + paymentId + ")" : ""));
-        return "Payment failed. Please contact your distributor to retry.";
+        // Payment honesty (BUG-030): a failed payment attempt does NOT fail the purchase — the FP
+        // mf_purchase is still submitted. Keep the order retryable so the investor can start a fresh
+        // payment (FP-documented retry: new payment, no re-confirm) instead of dead-ending at FAILED.
+        order.setOrderStatus(OrderStatus.RETRY_AVAILABLE);
+        order.setFailureReason("Last payment attempt failed"
+                + (StringUtils.hasText(paymentId) ? " (paymentId=" + paymentId + ")" : "")
+                + ". You can retry the payment.");
+        order.setInvestorActionUrl(null);
+        return "Payment failed. You can retry the payment below.";
     }
 
     private String submitPurchaseForPayment(TransactionOrder order, Investor investor) {

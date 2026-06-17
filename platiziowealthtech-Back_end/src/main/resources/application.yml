@@ -64,7 +64,7 @@ management:
       enabled: false
 
 server:
-  port: ${SERVER_PORT:8081}
+  port: ${PORT:${SERVER_PORT:8081}}
 
 cybrilla:
   # sandbox | production — production enables live PAN/KYC verification for any valid Indian PAN.

@@ -39,6 +39,11 @@ public interface TransactionOrderRepository extends JpaRepository<TransactionOrd
      */
     Optional<TransactionOrder> findByExternalOrderId(String externalOrderId);
     /**
+     * Looks up a SIP order by the FP integer mandate id stored on it. Used by the webhook handler to
+     * reconcile {@code mandate.*} events (BUG-047) against authoritative provider mandate state.
+     */
+    Optional<TransactionOrder> findFirstByExternalMandateId(Integer externalMandateId);
+    /**
      * Unbounded variant used by the SIP dashboard service (B-71). Realistic
      * per-distributor SIP volume is in the low hundreds, well within memory
      * limits, and consistent with the unpaginated

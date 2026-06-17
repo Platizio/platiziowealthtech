@@ -121,6 +121,12 @@ public class OrderController {
         return orderService.listRedemptionsByOrder(orderId, actorPrincipal(auth));
     }
 
+    /** Reconciles redemption records for an order against authoritative Fintech Primitives state. */
+    @PostMapping("/{orderId}/redemptions/sync")
+    public List<RedemptionRecord> syncRedemptions(@PathVariable UUID orderId, Authentication auth) {
+        return orderService.syncRedemptionsForOrder(orderId, actorPrincipal(auth));
+    }
+
     @PreAuthorize("hasRole('ADMIN')")
     @PatchMapping("/{orderId}/status")
     public TransactionOrder updateStatus(

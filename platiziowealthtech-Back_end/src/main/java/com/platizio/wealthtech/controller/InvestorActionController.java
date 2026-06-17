@@ -137,6 +137,24 @@ public class InvestorActionController {
     }
 
     @PostMapping(
+            value = {"/investor-actions/{token}/retry-payment", "/investor-action/{token}/retry-payment"},
+            produces = MediaType.TEXT_HTML_VALUE
+    )
+    public ResponseEntity<String> retryPayment(@PathVariable String token) {
+        try {
+            return ResponseEntity.ok(render(investorActionService.retryLumpsumPayment(token)));
+        } catch (EntityNotFoundException | IllegalArgumentException ex) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(renderError(ex.getMessage()));
+        } catch (IllegalStateException ex) {
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(renderError(ex.getMessage()));
+        } catch (CybrillaUnavailableException ex) {
+            return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(renderError(ex.getMessage()));
+        } catch (CybrillaApiException ex) {
+            return ResponseEntity.status(HttpStatus.BAD_GATEWAY).body(renderError(ex.getMessage()));
+        }
+    }
+
+    @PostMapping(
             value = {"/investor-actions/{token}/sandbox/simulate-mandate", "/investor-action/{token}/sandbox/simulate-mandate"},
             produces = MediaType.TEXT_HTML_VALUE
     )
@@ -466,6 +484,19 @@ public class InvestorActionController {
             actions.append("""
                     <form method="post" action="/investor-actions/%s/prepare-investor">
                       <button type="submit" class="btn-secondary">Repair Investor Profile</button>
+                    </form>
+                    <a class="pay-link btn-outline" href="%s/distributor/ledger">Place New Order (Ledger)</a>
+                    """.formatted(escape(page.token()), escape(frontendOrigin)));
+            return actions.toString();
+        }
+        if (page.orderStatus() == OrderStatus.RETRY_AVAILABLE
+                && page.externalOrderId() != null && !page.externalOrderId().isBlank()
+                && !"SIP".equals(page.transactionType())) {
+            // Payment honesty (BUG-030): the purchase is still submitted with FP — let the investor
+            // start a fresh payment without re-confirming, instead of forcing a brand-new order.
+            actions.append("""
+                    <form method="post" action="/investor-actions/%s/retry-payment">
+                      <button type="submit">Retry Payment</button>
                     </form>
                     <a class="pay-link btn-outline" href="%s/distributor/ledger">Place New Order (Ledger)</a>
                     """.formatted(escape(page.token()), escape(frontendOrigin)));

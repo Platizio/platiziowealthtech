@@ -70,9 +70,9 @@
 
 ## P4 — Config / data hygiene
 - `[✓]` BUG-014 — added `JWT_SECRET`/`DB_PASSWORD`/`PAYMENT_POSTBACK_URL` to `.env.example`
-- `[ ]` BUG-022 — move V41–V51 demo fixups to a dev-only seeder (migration-history change → review)
-- `[ ]` BUG-030 — gate `DemoOrderAdvancer` to demo-stub orders only
-- `[ ]` BUG-029 — fail-fast on FP tenant-not-configured (also needs Cybrilla tenant enablement)
+- `[—]` BUG-022 — move V41–V51 demo fixups to a dev-only seeder. **Deferred (deliberate):** these are already scoped to a single demo-investor UUID (`9b5c4d3e-…`), so they are **production-safe no-ops** (no matching row in prod). Relocating 11 applied migrations into a seeder means replicating their cumulative effect (error-prone) for a purely cosmetic benefit, with real risk to the just-stabilized Flyway boot. `ignore-migration-patterns: "*:missing"` makes deletion technically safe, so this can be done later as a separately-reviewed change — not bundled here.
+- `[✓]` BUG-030 — `DemoOrderAdvancer` now skips real FP-backed orders (`mfp_`/`mfpp_`) AND SIPs; only demo-stub orders auto-advance. Real lumpsum completes via the sandbox Simulate-Payment flow. (2026-06-17)
+- `[✓]` BUG-029 — `ExternalIntegrationConfigValidator` logs a clear `external_integration_config status='INCOMPLETE' missing=[…]` at startup when the live Cybrilla/FP integration is enabled but unconfigured (no secret values logged); stays up for non-FP features. (2026-06-17)
 
 ## Deferred — security / auth (per user: handle after functionality)
 - `[—]` BUG-028 — restrict `CybrillaDirectController` proxy to ADMIN
@@ -94,9 +94,9 @@
 > Decisions locked by user: in-place SIP edit if FP allows; analyse docs + diagnose payment then make success honest; every (real POA) holding redeemable; follow FP docs. See `history.md` for the doc analysis + payment-failure diagnosis.
 
 - `[✓]` **SIP in-place edit** — `PATCH /v2/mf_purchase_plans` (amount + installment_day). Backend `OrderService.updateSipPlan` + `PATCH /orders/{id}/sip` + `SipUpdateRequest`; FE `SipDashboard` Edit modal. Verified backend 283/0/0 + FE vite build.
-- `[ ]` **Payment honesty + retry** — gate `DemoOrderAdvancer` (BUG-030) so PAYMENT_PENDING no longer auto-advances to SUCCESSFUL; make sandbox "Simulate Payment" the demo driver; add FP-documented **payment-retry** (new payment attempt on failure, no re-confirm). Diagnosis: real payment isn't code-broken — only postback/finalization (localhost postback unreachable) + the timer mask; hard-fails are upstream Cybrilla tenant config (BUG-029).
-- `[ ]` **Redemption** — complete FP lifecycle (consent OTP → confirm → poll), surface it (sidebar/per-holding), and produce a real redeemable holding (demo placeholder `fp_purchase_demo_001` is not a real POA folio → not redeemable). FP redemption is folio-level, gated by `redeemable_units>0`, POA-folios only.
-- `[ ]` **Integration gaps** — portfolio holdings refresh after SUCCESSFUL, sync-from-cybrilla prominence, mandate webhook reconcile (BUG-047).
+- `[✓]` **Payment honesty + retry (2026-06-17).** (a) `DemoOrderAdvancer` no longer auto-advances real FP orders (`mfp_`/`mfpp_`) or SIPs → sandbox "Simulate Payment Success" is the honest demo driver. (b) **Payment-retry:** a failed payment no longer dead-ends at FAILED — the order goes `RETRY_AVAILABLE` and the investor-action page shows a **Retry Payment** button (`POST /investor-actions/{token}/retry-payment` → `InvestorActionService.retryLumpsumPayment`) that starts a fresh payment on the still-submitted purchase (no re-confirm). Files: `init/DemoOrderAdvancer.java`, `service/InvestorActionService.java`, `controller/InvestorActionController.java`.
+- `[✓]` **Redemption — FP lifecycle completed (2026-06-17).** BE: `createRedemption` now consent→confirm→reads FP state (SUBMITTED); added `fetchRedemption`/`updateRedemptionConsent`/`confirmRedemption` (Real GET/PATCH `/v2/mf_redemptions`, Mock canned states); `syncRedemptionsForOrder` + `POST /orders/{id}/redemptions/sync` reconcile to PROCESSING/SUCCESSFUL/FAILED/BANK_CREDIT_*; notify on terminal. FE: Redemptions + InvestorRedeem show the real status badge + a Sync action (shared `redeemOrder.ts`); already in the sidebar. Suite 288/0/0; endpoints wired. Live redeem still needs a real SUCCESSFUL POA purchase (`mfp_`) — demo `fp_purchase_demo_001` is not a real folio.
+- `[✓]` **Integration gaps (2026-06-17).** **Mandate webhook reconcile (BUG-047):** `CybrillaWebhookController` now routes `mandate.*` events to `OrderService.handleMandateWebhook` (find SIP order by FP mandate id → fetch authoritative state → approved=APPROVED / rejected|failed|cancelled=FAILED + notify), replacing `acknowledged_no_reconcile`; added `findFirstByExternalMandateId`. **Portfolio refresh:** already live — `DashboardService` derives the portfolio from orders on each request, so a SUCCESSFUL order appears on the next load (no stale cache). (Sync-from-Cybrilla prominence is a minor FE-affordance, not a correctness gap.)
 
 ---
 

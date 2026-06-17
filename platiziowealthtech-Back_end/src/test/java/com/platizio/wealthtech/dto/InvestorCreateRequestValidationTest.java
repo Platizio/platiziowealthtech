@@ -63,10 +63,34 @@ class InvestorCreateRequestValidationTest {
         assertThat(recordComponentNames(AuthSignupRequest.class)).doesNotContain("pan");
     }
 
+    @Test
+    void acceptsValidMobileNumber() {
+        assertThat(VALIDATOR.validate(requestWithMobile("9876543210"))).isEmpty();
+    }
+
+    @Test
+    void rejectsMobileNumberWithInvalidFormat() {
+        // Too short, and starting with a non-6-9 digit — both invalid.
+        assertThat(messagesFor(requestWithMobile("12345")))
+                .anyMatch(m -> m.contains("Mobile number must be a valid 10-digit"));
+        assertThat(messagesFor(requestWithMobile("1234567890")))
+                .anyMatch(m -> m.contains("Mobile number must be a valid 10-digit"));
+    }
+
     private static Set<String> messagesFor(InvestorCreateRequest request) {
         return VALIDATOR.validate(request).stream()
                 .map(violation -> violation.getMessage())
                 .collect(Collectors.toSet());
+    }
+
+    private static InvestorCreateRequest requestWithMobile(String mobile) {
+        return new InvestorCreateRequest(
+                UUID.randomUUID(),
+                "Priya Sharma",
+                mobile,
+                "priya@example.com",
+                "ABCDE1234F",
+                null, null, null, null, null, null, null, null, null, null, null, null, null, null);
     }
 
     private static InvestorCreateRequest requestWithPan(String pan) {

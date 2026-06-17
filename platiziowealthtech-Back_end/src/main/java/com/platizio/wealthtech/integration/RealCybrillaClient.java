@@ -123,7 +123,7 @@ public class RealCybrillaClient implements CybrillaClient {
         String existingProfileId = findInvestorProfileIdByPan(investor.getPan());
         if (StringUtils.hasText(existingProfileId)) {
             JsonNode existingProfile = fetchInvestorProfile(existingProfileId);
-            assertExistingProfileSupportsOrderSubmission(investor, existingProfileId, existingProfile);
+            warnIfExistingProfileMissingOccupation(investor, existingProfileId, existingProfile);
             String fpPan = existingProfile.path("pan").asText("");
             String localPan = investor.getPan() == null ? "" : investor.getPan().trim().toUpperCase(Locale.ROOT);
             if (StringUtils.hasText(fpPan) && StringUtils.hasText(localPan) && !localPan.equalsIgnoreCase(fpPan.trim())) {
@@ -153,7 +153,7 @@ public class RealCybrillaClient implements CybrillaClient {
             existingProfileId = findInvestorProfileIdByPan(investor.getPan());
             if (StringUtils.hasText(existingProfileId)) {
                 JsonNode existingProfile = fetchInvestorProfile(existingProfileId);
-                assertExistingProfileSupportsOrderSubmission(investor, existingProfileId, existingProfile);
+                warnIfExistingProfileMissingOccupation(investor, existingProfileId, existingProfile);
                 logger.info(
                         "cybrilla_workflow operation='create_investor_profile' status='resolved_after_create_conflict' local_investor_id='{}' external_profile_id='{}'",
                         investor.getId(),
@@ -1455,7 +1455,49 @@ public class RealCybrillaClient implements CybrillaClient {
                     redemptionPayload(order, investor, productScheme),
                     idempotencyKey("redemption", order.getId())
             );
-            return extractId(response, "redemption");
+            String redemptionId = extractId(response, "redemption");
+            logger.info(
+                    "cybrilla_workflow operation='create_mf_redemption' status='response' order_id='{}' redemption_id='{}' fp_state='{}'",
+                    order.getId(), redemptionId, response == null ? null : response.path("state").asText(null));
+            return redemptionId;
+        });
+    }
+
+    @Override
+    public JsonNode fetchRedemption(String redemptionId) {
+        if (!StringUtils.hasText(redemptionId)) {
+            throw new CybrillaApiException("Redemption id is required");
+        }
+        return executeWithTenantTokenRetry("fetch redemption", () ->
+                get("fetch_mf_redemption", MF_REDEMPTIONS_PATH + "/" + redemptionId.trim()));
+    }
+
+    @Override
+    public JsonNode updateRedemptionConsent(String redemptionId, Map<String, Object> consent) {
+        if (!StringUtils.hasText(redemptionId)) {
+            throw new CybrillaApiException("Redemption id is required");
+        }
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("id", redemptionId.trim());
+        payload.put("consent", consent);
+        return executeWithTenantTokenRetry("update redemption consent", () ->
+                patch("update_mf_redemption_consent", MF_REDEMPTIONS_PATH, payload));
+    }
+
+    @Override
+    public JsonNode confirmRedemption(String redemptionId) {
+        if (!StringUtils.hasText(redemptionId)) {
+            throw new CybrillaApiException("Redemption id is required");
+        }
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("id", redemptionId.trim());
+        payload.put("state", "confirmed");
+        return executeWithTenantTokenRetry("confirm redemption", () -> {
+            JsonNode response = patch("confirm_mf_redemption", MF_REDEMPTIONS_PATH, payload);
+            logger.info(
+                    "cybrilla_workflow operation='confirm_mf_redemption' status='response' redemption_id='{}' fp_state='{}'",
+                    redemptionId, response == null ? null : response.path("state").asText(null));
+            return response;
         });
     }
 
@@ -2580,19 +2622,28 @@ public class RealCybrillaClient implements CybrillaClient {
     }
 
     /**
-     * Stricter than {@link #hasProfileText}: FP GET may return empty enum objects for unset fields.
+     * Non-fatal diagnostic for an existing FP profile whose GET response omits {@code occupation}.
+     *
+     * <p>Fintech Primitives commonly omits {@code occupation} from {@code GET /v2/investor_profiles}
+     * even when it is stored server-side (occupation is set once on POST create and is immutable
+     * thereafter — see {@code fp-profile-patch-rules.md}). Treating a hidden-on-GET occupation as
+     * "missing" used to throw here, which hard-blocked KYC onboarding for any PAN whose profile
+     * already existed in FP — the common sandbox case where PANs are reused and a prior onboarding
+     * already created a complete profile. KYC does not require occupation; genuine order-readiness is
+     * enforced by FP at order-submission time, where {@link #ensureInvestorProfileOrderReady} and the
+     * immutable-field retry already handle it. So we only log and proceed.
      */
-    private void assertExistingProfileSupportsOrderSubmission(Investor investor, String profileId, JsonNode existingProfile) {
+    private void warnIfExistingProfileMissingOccupation(Investor investor, String profileId, JsonNode existingProfile) {
         if (hasProfileFieldValue(existingProfile, "occupation")) {
             return;
         }
-        throw new CybrillaApiException(
-                "Fintech Primitives investor profile " + profileId
-                        + " is missing occupation, which cannot be added via PATCH after the profile was first created. "
-                        + "Assign a fresh sandbox PAN (pattern XXXPX3751X) for investor "
-                        + investor.getId()
-                        + " and clear cybrilla_investor_id so POST /v2/investor_profiles can create a complete profile."
-        );
+        logger.warn(
+                "cybrilla_workflow operation='resolve_existing_investor_profile' status='occupation_absent_on_get' "
+                        + "local_investor_id='{}' external_profile_id='{}' "
+                        + "detail='FP GET omitted occupation; proceeding (set once on POST create and commonly hidden "
+                        + "on GET). Order submission surfaces any genuine gap.'",
+                investor.getId(),
+                profileId);
     }
 
     private boolean hasProfileFieldValue(JsonNode profile, String field) {
@@ -3000,8 +3051,9 @@ public class RealCybrillaClient implements CybrillaClient {
         put(payload, "installment_day", sipInstallmentDay(order));
         put(payload, "number_of_installments", order.getSipInstalments());
         put(payload, "user_ip", "127.0.0.1");
-        put(payload, "gateway", MF_PURCHASE_GATEWAY);
-        put(payload, "initiated_via", "web");
+        // NOTE: /v2/mf_purchase_plans does NOT accept `gateway` or `initiated_via` (those are
+        // mf_purchases-only fields) — FP rejects them as unrecognized. The plan's gateway is
+        // inferred from the mf_investment_account / scheme.
         if (mandateId != null && mandateId > 0) {
             put(payload, "payment_method", "mandate");
             put(payload, "payment_source", mandateId);

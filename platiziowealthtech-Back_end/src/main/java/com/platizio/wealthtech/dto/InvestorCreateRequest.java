@@ -13,7 +13,10 @@ import java.util.UUID;
 public record InvestorCreateRequest(
         @NotNull UUID distributorId,
         @NotBlank String fullName,
-        @NotBlank String mobileNumber,
+        @NotBlank
+        @Pattern(regexp = "^[6-9]\\d{9}$",
+                message = "Mobile number must be a valid 10-digit Indian number starting with 6-9")
+        String mobileNumber,
         @NotBlank @Email String email,
         @NotBlank
         @Size(min = 10, max = 10, message = "PAN must be exactly 10 characters")

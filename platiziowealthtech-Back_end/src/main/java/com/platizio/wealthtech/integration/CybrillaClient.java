@@ -139,6 +139,12 @@ public interface CybrillaClient {
     JsonNode createNachPayment(int mandateId, List<Integer> amcOrderIds);
     String createSipOrderWithMandate(TransactionOrder order, Investor investor, ProductScheme productScheme, int mandateId);
     String createRedemption(TransactionOrder order, Investor investor, ProductScheme productScheme);
+    /** FP tenant: GET /v2/mf_redemptions/:id — authoritative redemption state for status sync. */
+    JsonNode fetchRedemption(String redemptionId);
+    /** FP tenant: PATCH /v2/mf_redemptions {id, consent} — records investor consent before confirmation. */
+    JsonNode updateRedemptionConsent(String redemptionId, Map<String, Object> consent);
+    /** FP tenant: PATCH /v2/mf_redemptions {id, state:'confirmed'} — confirms/submits the redemption. */
+    JsonNode confirmRedemption(String redemptionId);
     void cancelOrder(TransactionOrder order);
 
     /**

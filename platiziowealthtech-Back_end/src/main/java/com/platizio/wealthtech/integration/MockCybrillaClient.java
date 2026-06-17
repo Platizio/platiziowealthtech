@@ -778,6 +778,25 @@ public class MockCybrillaClient implements CybrillaClient {
     }
 
     @Override
+    public JsonNode fetchRedemption(String redemptionId) {
+        // Demo: a redemption settles to 'successful' so the lifecycle reaches a terminal state.
+        return OBJECT_MAPPER.createObjectNode()
+                .put("id", redemptionId)
+                .put("state", "successful")
+                .put("bank_credit_reference", "DEMO-CREDIT-" + redemptionId);
+    }
+
+    @Override
+    public JsonNode updateRedemptionConsent(String redemptionId, java.util.Map<String, Object> consent) {
+        return OBJECT_MAPPER.createObjectNode().put("id", redemptionId).put("state", "confirmed");
+    }
+
+    @Override
+    public JsonNode confirmRedemption(String redemptionId) {
+        return OBJECT_MAPPER.createObjectNode().put("id", redemptionId).put("state", "submitted");
+    }
+
+    @Override
     public void cancelOrder(TransactionOrder order) {
         logger.warn("cybrilla_client mode='mock' operation='cancel_order' local_order_id='{}' external_order_id='{}'", order.getId(), order.getExternalOrderId());
     }

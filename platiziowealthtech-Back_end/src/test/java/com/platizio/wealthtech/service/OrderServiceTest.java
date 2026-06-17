@@ -281,7 +281,9 @@ class OrderServiceTest {
         RedemptionRecord record = orderService.createRedemption(orderId, distributorId);
 
         assertThat(record.getExternalRedemptionId()).isEqualTo("external-redemption-1");
-        assertThat(record.getRedemptionStatus()).isEqualTo(RedemptionStatus.CREATED);
+        // After FP create + consent/confirm, the record is SUBMITTED (no longer stuck at CREATED);
+        // the status sync later reconciles it to PROCESSING/SUCCESSFUL/FAILED.
+        assertThat(record.getRedemptionStatus()).isEqualTo(RedemptionStatus.SUBMITTED);
         assertThat(savedRedemptions).hasSize(1);
         assertThat(savedRedemptions.get(0).getOrderId()).isEqualTo(orderId);
         assertThat(auditCalls.get()).isEqualTo(1);
@@ -596,6 +598,11 @@ class OrderServiceTest {
                 new Class<?>[]{CybrillaClient.class},
                 (proxy, method, args) -> switch (method.getName()) {
                     case "createRedemption" -> "external-redemption-1";
+                    // The redemption lifecycle driver fetches authoritative FP state; return a
+                    // 'submitted' redemption so createRedemption advances the record to SUBMITTED.
+                    case "fetchRedemption", "updateRedemptionConsent", "confirmRedemption" ->
+                            com.fasterxml.jackson.databind.node.JsonNodeFactory.instance.objectNode()
+                                    .put("id", "external-redemption-1").put("state", "submitted");
                     default -> defaultValue(method.getReturnType());
                 }
         );

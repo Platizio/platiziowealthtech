@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.springframework.test.web.client.ExpectedCount.once;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.content;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.header;
+import static org.springframework.test.web.client.match.MockRestRequestMatchers.jsonPath;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.method;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.requestTo;
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withStatus;
@@ -537,10 +538,10 @@ class RealCybrillaClientTest {
                           "frequency": "monthly",
                           "installment_day": 1,
                           "number_of_installments": 12,
-                          "user_ip": "127.0.0.1",
-                          "gateway": "ondc"
+                          "user_ip": "127.0.0.1"
                         }
                         """.formatted(order.getId())))
+                .andExpect(jsonPath("$.gateway").doesNotExist())
                 .andRespond(withSuccess("{\"id\":\"mfpp_1\"}", MediaType.APPLICATION_JSON));
 
         String externalOrderId = fixture.client.createOrder(order, investor, productScheme);

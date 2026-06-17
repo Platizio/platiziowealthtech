@@ -268,6 +268,70 @@ public class OrderService {
         );
     }
 
+    /**
+     * BUG-047: idempotent webhook reconcile for FP {@code mandate.*} events. Finds the SIP order by its
+     * stored FP integer mandate id, fetches authoritative mandate state, and updates the order — an
+     * approved mandate is recorded as {@code APPROVED} (the SIP plan is then submitted via the
+     * investor-action confirm flow, which creates the plan once the mandate is approved); a
+     * rejected/failed/cancelled mandate fails the order. No local match → {@code ignored_*} no-op.
+     */
+    @Transactional
+    public ExternalOrderSyncResult handleMandateWebhook(String mandateId, String eventType) {
+        if (!StringUtils.hasText(mandateId)) {
+            return new ExternalOrderSyncResult("ignored_missing_mandate_id", eventType, mandateId, null, null);
+        }
+        Integer fpMandateId;
+        try {
+            fpMandateId = Integer.valueOf(mandateId.trim());
+        } catch (NumberFormatException ex) {
+            return new ExternalOrderSyncResult("ignored_unparseable_mandate_id", eventType, mandateId, null, null);
+        }
+        java.util.Optional<TransactionOrder> existing =
+                transactionOrderRepository.findFirstByExternalMandateId(fpMandateId);
+        if (existing.isEmpty()) {
+            return new ExternalOrderSyncResult("ignored_no_matching_mandate", eventType, mandateId, null, null);
+        }
+        TransactionOrder order = existing.get();
+        String state;
+        try {
+            JsonNode mandate = cybrillaClient.fetchMandate(fpMandateId);
+            state = mandate.path("mandate_status").asText("");
+        } catch (RuntimeException ex) {
+            logger.warn("mandate_webhook status='fetch_failed' order_id='{}' mandate_id='{}' reason='{}'",
+                    order.getId(), fpMandateId, ex.getMessage());
+            return new ExternalOrderSyncResult("error_fetching_mandate", eventType, mandateId, order.getId(), order.getOrderStatus());
+        }
+
+        String normalized = state == null ? "" : state.trim().toUpperCase(java.util.Locale.ROOT);
+        if ("APPROVED".equals(normalized)) {
+            order.setMandateStatus("APPROVED");
+            transactionOrderRepository.save(order);
+            auditService.log("ORDER", order.getId(), "MANDATE_APPROVED_WEBHOOK", order.getDistributorId(),
+                    "{\"mandateId\":" + fpMandateId + "}");
+            logger.info("mandate_webhook status='approved' order_id='{}' mandate_id='{}'", order.getId(), fpMandateId);
+            return new ExternalOrderSyncResult("mandate_approved", eventType, mandateId, order.getId(), order.getOrderStatus());
+        }
+        if ("REJECTED".equals(normalized) || "FAILED".equals(normalized) || "CANCELLED".equals(normalized)) {
+            order.setMandateStatus(normalized);
+            order.setOrderStatus(OrderStatus.FAILED);
+            order.setFailureReason("SIP mandate " + normalized.toLowerCase(java.util.Locale.ROOT));
+            order.setInvestorActionUrl(null);
+            transactionOrderRepository.save(order);
+            notificationService.createForDistributor(order.getDistributorId(), order.getInvestorId(),
+                    NotificationType.TRANSACTION_FAILED, "SIP mandate failed",
+                    "The SIP mandate was " + normalized.toLowerCase(java.util.Locale.ROOT) + ".");
+            logger.info("mandate_webhook status='failed' order_id='{}' mandate_id='{}' mandate_state='{}'",
+                    order.getId(), fpMandateId, normalized);
+            return new ExternalOrderSyncResult("mandate_failed", eventType, mandateId, order.getId(), OrderStatus.FAILED);
+        }
+        // Non-terminal state — keep the local mandate status in sync.
+        if (StringUtils.hasText(normalized)) {
+            order.setMandateStatus(normalized);
+            transactionOrderRepository.save(order);
+        }
+        return new ExternalOrderSyncResult("mandate_acknowledged", eventType, mandateId, order.getId(), order.getOrderStatus());
+    }
+
     /** Small reconcile result for {@link #handleOrderWebhook(String, String)} (mirrors ExternalKycSyncResponse). */
     public record ExternalOrderSyncResult(
             String status,
@@ -653,15 +717,171 @@ public class OrderService {
         record.setRedemptionStatus(RedemptionStatus.CREATED);
         record.setAmount(order.getAmount());
         record.setUnits(order.getUnits());
-        record.setExternalRedemptionId(cybrillaClient.createRedemption(order, investor, productScheme));
+
+        String externalRedemptionId = cybrillaClient.createRedemption(order, investor, productScheme);
+        record.setExternalRedemptionId(externalRedemptionId);
+        record.setRedemptionStatus(RedemptionStatus.CREATED);
+
+        // Advance the FP redemption lifecycle (under_review → pending → consent → confirmed →
+        // submitted → successful/failed). Per the FP cybrillapoa gateway, investor CONSENT is collected
+        // only once the redemption REVIEW has passed (state 'pending'); confirming/consenting earlier is
+        // premature. Best-effort here — if review is still in progress, the record stays CREATED and the
+        // status sync (POST /orders/{id}/redemptions/sync) drives consent→confirm→poll forward.
+        advanceRedemptionLifecycle(record, investor);
 
         RedemptionRecord saved = redemptionRecordRepository.save(record);
         logger.info(
-                "redemption_create status='completed' order_id='{}' redemption_id='{}' external_redemption_id='{}'",
-                orderId, saved.getId(), saved.getExternalRedemptionId());
-        auditService.log("REDEMPTION", saved.getId(), "REDEMPTION_CREATED", actorId, "{}");
+                "redemption_create status='completed' order_id='{}' redemption_id='{}' external_redemption_id='{}' redemption_status='{}'",
+                orderId, saved.getId(), saved.getExternalRedemptionId(), saved.getRedemptionStatus());
+        auditService.log("REDEMPTION", saved.getId(), "REDEMPTION_CREATED", actorId,
+                "{\"redemptionStatus\":\"" + saved.getRedemptionStatus() + "\"}");
         notificationService.createForDistributor(order.getDistributorId(), order.getInvestorId(), NotificationType.REDEMPTION_SUBMITTED, "Redemption submitted", "Redemption flow has started.");
         return saved;
+    }
+
+    /**
+     * Reconciles every redemption record for an order against the authoritative FP state
+     * ({@code GET /v2/mf_redemptions/:id}): created → submitted → processing → successful/failed →
+     * bank credit. Ownership-checked. Skips records that are already terminal or have no FP id.
+     */
+    public List<RedemptionRecord> syncRedemptionsForOrder(UUID orderId, JwtAuthPrincipal principal) {
+        TransactionOrder order = transactionOrderRepository.findById(orderId)
+                .orElseThrow(() -> new EntityNotFoundException("Order not found"));
+        assertOrderOwnership(order.getDistributorId(), principal);
+        List<RedemptionRecord> records = redemptionRecordRepository.findByOrderId(orderId);
+        boolean hasAdvanceable = records.stream().anyMatch(r ->
+                StringUtils.hasText(r.getExternalRedemptionId()) && !isTerminalRedemption(r.getRedemptionStatus()));
+        Investor investor = null;
+        if (hasAdvanceable) {
+            try {
+                investor = investorService.getInvestor(order.getInvestorId());
+            } catch (RuntimeException ex) {
+                logger.warn("redemption_sync status='investor_lookup_failed' order_id='{}' reason='{}'",
+                        orderId, ex.getMessage());
+            }
+        }
+        for (RedemptionRecord record : records) {
+            if (!StringUtils.hasText(record.getExternalRedemptionId())
+                    || isTerminalRedemption(record.getRedemptionStatus())) {
+                continue;
+            }
+            try {
+                RedemptionStatus before = record.getRedemptionStatus();
+                advanceRedemptionLifecycle(record, investor);
+                redemptionRecordRepository.save(record);
+                if (before != record.getRedemptionStatus()) {
+                    logger.info(
+                            "redemption_sync status='updated' order_id='{}' redemption_id='{}' from='{}' to='{}'",
+                            orderId, record.getId(), before, record.getRedemptionStatus());
+                    notifyRedemptionStatus(order, record);
+                }
+            } catch (CybrillaApiException ex) {
+                logger.warn(
+                        "redemption_sync status='failed' order_id='{}' redemption_id='{}' reason='{}'",
+                        orderId, record.getId(), ex.getMessage());
+            }
+        }
+        return records;
+    }
+
+    private java.util.Map<String, Object> redemptionConsentPayload(Investor investor) {
+        java.util.Map<String, Object> consent = new java.util.LinkedHashMap<>();
+        if (StringUtils.hasText(investor.getEmail())) {
+            consent.put("email", investor.getEmail().trim());
+        }
+        if (StringUtils.hasText(investor.getMobileNumber())) {
+            consent.put("isd_code", "91");
+            consent.put("mobile", investor.getMobileNumber().trim());
+        }
+        return consent;
+    }
+
+    /**
+     * Advances one redemption record through the FP cybrillapoa lifecycle and applies the resulting
+     * state. Per FP, investor CONSENT is collected only once the redemption review has passed (FP state
+     * {@code pending}); so we fetch the authoritative state and, if it is {@code pending}, submit
+     * consent + confirm (which moves it to {@code confirmed}/{@code submitted}), then apply the final
+     * state. Earlier states ({@code under_review}) are left for the next sync; terminal states are
+     * applied as-is. Best-effort — provider errors are logged, not thrown, so the next sync retries.
+     */
+    private void advanceRedemptionLifecycle(RedemptionRecord record, Investor investor) {
+        String redemptionId = record == null ? null : record.getExternalRedemptionId();
+        if (!StringUtils.hasText(redemptionId)) {
+            return;
+        }
+        try {
+            JsonNode fpRedemption = cybrillaClient.fetchRedemption(redemptionId);
+            if (fpRedemption == null) {
+                return;
+            }
+            String state = fpRedemption.path("state").asText("");
+            if ("pending".equalsIgnoreCase(state) && investor != null) {
+                cybrillaClient.updateRedemptionConsent(redemptionId, redemptionConsentPayload(investor));
+                cybrillaClient.confirmRedemption(redemptionId);
+                fpRedemption = cybrillaClient.fetchRedemption(redemptionId);
+            }
+            applyRedemptionState(record, fpRedemption);
+        } catch (CybrillaApiException ex) {
+            logger.warn("redemption_lifecycle status='deferred' redemption_id='{}' reason='{}'",
+                    redemptionId, ex.getMessage());
+        }
+    }
+
+    private void applyRedemptionState(RedemptionRecord record, JsonNode fpRedemption) {
+        if (record == null || fpRedemption == null) {
+            return;
+        }
+        RedemptionStatus mapped = mapRedemptionState(fpRedemption.path("state").asText(null));
+        if (mapped != null) {
+            record.setRedemptionStatus(mapped);
+        }
+        String bankCredit = fpRedemption.path("bank_credit_reference").asText(null);
+        if (StringUtils.hasText(bankCredit)) {
+            record.setBankCreditReference(bankCredit);
+        }
+        if (mapped == RedemptionStatus.FAILED) {
+            String reason = fpRedemption.path("failure_reason").asText(null);
+            if (!StringUtils.hasText(reason)) {
+                reason = fpRedemption.path("gateway_remarks").asText("Redemption failed at the provider");
+            }
+            record.setFailureReason(reason);
+        }
+    }
+
+    private RedemptionStatus mapRedemptionState(String state) {
+        if (!StringUtils.hasText(state)) {
+            return null;
+        }
+        return switch (state.trim().toLowerCase(java.util.Locale.ROOT)) {
+            // 'pending' in the FP redemption lifecycle = review passed, awaiting consent (pre-confirm).
+            case "created", "under_review", "pending", "pending_consent" -> RedemptionStatus.CREATED;
+            case "confirmed", "submitted" -> RedemptionStatus.SUBMITTED;
+            case "processing", "in_progress" -> RedemptionStatus.PROCESSING;
+            case "successful", "success", "completed" -> RedemptionStatus.SUCCESSFUL;
+            case "bank_credit_pending" -> RedemptionStatus.BANK_CREDIT_PENDING;
+            case "bank_credit_completed", "credited" -> RedemptionStatus.BANK_CREDIT_COMPLETED;
+            case "failed", "rejected", "cancelled" -> RedemptionStatus.FAILED;
+            default -> null;
+        };
+    }
+
+    private boolean isTerminalRedemption(RedemptionStatus status) {
+        return status == RedemptionStatus.SUCCESSFUL
+                || status == RedemptionStatus.FAILED
+                || status == RedemptionStatus.BANK_CREDIT_COMPLETED;
+    }
+
+    private void notifyRedemptionStatus(TransactionOrder order, RedemptionRecord record) {
+        RedemptionStatus status = record.getRedemptionStatus();
+        if (status == RedemptionStatus.SUCCESSFUL || status == RedemptionStatus.BANK_CREDIT_COMPLETED) {
+            notificationService.createForDistributor(order.getDistributorId(), order.getInvestorId(),
+                    NotificationType.REDEMPTION_SUBMITTED, "Redemption successful",
+                    "Redemption completed; proceeds are being credited to the investor's bank account.");
+        } else if (status == RedemptionStatus.FAILED) {
+            notificationService.createForDistributor(order.getDistributorId(), order.getInvestorId(),
+                    NotificationType.REDEMPTION_SUBMITTED, "Redemption failed",
+                    record.getFailureReason() == null ? "Redemption failed at the provider." : record.getFailureReason());
+        }
     }
 
     /**

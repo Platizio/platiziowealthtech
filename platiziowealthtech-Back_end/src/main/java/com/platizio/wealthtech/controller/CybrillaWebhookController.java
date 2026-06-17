@@ -62,16 +62,9 @@ public class CybrillaWebhookController {
             }
         }
         if (isMandateEvent(payload)) {
-            // Mandate reconcile is keyed by FP's int mandate id (not the order's externalOrderId)
-            // and would require substantial new lookup/apply logic, so acknowledge without
-            // reconciling here. Follow-up: wire a mandate reconcile (see BUG-009 summary).
-            return new ExternalKycSyncResponse(
-                    "acknowledged_no_reconcile",
-                    eventType(payload),
-                    externalObjectId(payload),
-                    null,
-                    null
-            );
+            // BUG-047: reconcile mandate.* events against authoritative FP mandate state (keyed by the
+            // FP integer mandate id stored on the SIP order).
+            return toKycSyncResponse(orderService.handleMandateWebhook(externalObjectId(payload), eventType(payload)));
         }
         if (isOrderEvent(payload)) {
             return toKycSyncResponse(orderService.handleOrderWebhook(externalObjectId(payload), eventType(payload)));

@@ -2,6 +2,7 @@ package com.platizio.wealthtech.init;
 
 import com.platizio.wealthtech.domain.OrderStatus;
 import com.platizio.wealthtech.domain.TransactionOrder;
+import com.platizio.wealthtech.domain.TransactionType;
 import com.platizio.wealthtech.repository.TransactionOrderRepository;
 import com.platizio.wealthtech.service.OrderService;
 import java.time.OffsetDateTime;
@@ -89,6 +90,31 @@ public class DemoOrderAdvancer {
             if (next == null) {
                 continue; // shouldn't happen given the query, but defensive
             }
+            // SIP orders must NOT be auto-advanced. A SIP sits in PAYMENT_PENDING awaiting e-mandate
+            // authorization; its real completion is driven by the mandate flow (sandbox "Simulate
+            // Mandate Approval" or the live e-mandate auth postback), which creates the FP purchase
+            // plan and moves the order to ACTIVE. Bumping it here skips mandate approval + plan
+            // creation, leaving a bogus SUCCESSFUL SIP with no FP plan and an unapproved mandate, and
+            // gates off the mandate-simulation step (which requires PAYMENT_PENDING).
+            if (order.getTransactionType() == TransactionType.SIP) {
+                logger.debug(
+                        "demo_order_advance status='skipped_sip' orderId='{}' currentStatus='{}' "
+                                + "note='SIP completes via mandate authorization, not the demo advancer'",
+                        order.getId(), current);
+                continue;
+            }
+            // Payment honesty (BUG-030): never auto-advance an order backed by a real Fintech Primitives
+            // id (mfp_ lumpsum / mfpp_ plan). Those complete through the real flow — the investor pays,
+            // or clicks "Simulate Payment Success (Sandbox)", which reconciles authoritative FP state.
+            // Only demo-stub orders (no FP id, or fp_/demo/sandbox stubs) are advanced by this timer, so
+            // the seeded demo dashboard still shows completed transactions without faking real payments.
+            if (isRealFpOrder(order.getExternalOrderId())) {
+                logger.debug(
+                        "demo_order_advance status='skipped_real_fp_order' orderId='{}' currentStatus='{}' "
+                                + "external_order_id='{}' note='completes via sandbox simulate-payment, not the demo advancer'",
+                        order.getId(), current, order.getExternalOrderId());
+                continue;
+            }
             try {
                 // actorId = the order's own distributor so the audit log
                 // attributes the simulated update to a real principal rather
@@ -103,5 +129,19 @@ public class DemoOrderAdvancer {
                         order.getId(), current, next, ex.getMessage());
             }
         }
+    }
+
+    /**
+     * A real Fintech Primitives-backed order ({@code mfp_} lumpsum purchase / {@code mfpp_} purchase
+     * plan). These are driven to completion by the live payment/mandate flow (or the sandbox simulate
+     * endpoints), so the demo timer must leave them alone. Demo-stub ids (null, {@code fp_*},
+     * {@code *_demo_*}, {@code sandbox*}) are not real FP orders and are still advanced.
+     */
+    private static boolean isRealFpOrder(String externalOrderId) {
+        if (externalOrderId == null) {
+            return false;
+        }
+        String id = externalOrderId.trim().toLowerCase(java.util.Locale.ROOT);
+        return id.startsWith("mfp_") || id.startsWith("mfpp_");
     }
 }
