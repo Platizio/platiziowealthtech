@@ -1275,14 +1275,14 @@ function TransactionModal({ fund, userData, onClose }: { fund: any; userData?: a
     try {
       const payload = {
         investorId: selectedInvestor.id,
-        productSchemeId: fund.id,
+        productSchemeId: isPersistedSchemeId(fund.id) ? fund.id : undefined,
         externalSchemeCode: fund.externalSchemeCode || undefined,
         externalIsin: fund.externalIsin || undefined,
         type: type === 'SIP' ? 'SIP' : 'LUMPSUM',
         transactionType: type === 'SIP' ? 'SIP' : 'LUMPSUM_PURCHASE',
         amount: amountNumber,
-        paymentMode: type === 'SIP' ? 'MANDATE' : 'BANK_TRANSFER',
-        mandateMode: type === 'SIP' ? 'AUTO_DEBIT' : 'BANK_TRANSFER',
+        paymentMode: type === 'SIP' ? 'MANDATE' : 'UPI',
+        mandateMode: type === 'SIP' ? 'AUTO_DEBIT' : undefined,
         sipFrequency: type === 'SIP' ? sipFrequency : undefined,
         sipStartDate: type === 'SIP' ? sipStartDate : undefined,
         sipInstalments: type === 'SIP' ? 12 : undefined,
@@ -1562,7 +1562,7 @@ function TransactionModal({ fund, userData, onClose }: { fund: any; userData?: a
                     )}
                     <div>
                       <p className="text-xs text-slate-400 font-semibold uppercase mb-1">Mode</p>
-                      <p className="font-medium text-slate-800">{type === 'SIP' ? 'UPI Mandate' : 'Bank Transfer'}</p>
+                      <p className="font-medium text-slate-800">{type === 'SIP' ? 'UPI Mandate' : 'UPI Payment'}</p>
                     </div>
                   </div>
                 </div>

@@ -15,6 +15,10 @@ export interface TransactionOrder {
   investorId?: string;
   distributorId?: string;
   productSchemeId?: string;
+  productSchemeName?: string;
+  productSchemeExternalCode?: string;
+  productSchemeIsin?: string;
+  productSchemeAmcName?: string;
   transactionType?: string;
   amount?: number;
   units?: number;

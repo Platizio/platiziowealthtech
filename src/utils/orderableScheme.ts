@@ -106,9 +106,8 @@ export const isPoaOrderableScheme = (scheme?: SchemeLike | null): boolean => {
   return true;
 };
 
-/** Safe for POST /orders — persisted UUID + ISIN + display name, not OMS. */
+/** Safe for POST /orders: ISIN + display name, not OMS. UUID is preferred but backend can resolve by external reference. */
 export const isTransactionReadyScheme = (scheme?: SchemeLike | null): boolean => {
-  if (!isPersistedSchemeId(scheme?.id)) return false;
   if (!isPoaOrderableScheme(scheme)) return false;
   return formatSchemeDisplayName(scheme) !== 'Unknown fund';
 };
