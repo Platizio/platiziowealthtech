@@ -1,0 +1,227 @@
+# =============================================================================
+# Render Blueprint — Platizio WealthTech BACKEND (Spring Boot, Docker)
+# -----------------------------------------------------------------------------
+# Service URL : https://platiziowealthtechh.onrender.com
+# Service ID  : srv-d8p5tdi8qa3s73binh50
+# Git         : Platizio/platiziowealthtech  branch=Back_end
+# App folder  : platiziowealthtech-Back_end/   (Root Directory on Render)
+#
+# This file lists EVERY environment variable the backend reads. Values shown are
+# the sandbox / production-profile defaults. Secrets are marked `sync: false`
+# (Render will not store them in the blueprint — set them in the dashboard).
+#
+# NOTE: The service already exists and was created from the dashboard. Applying
+# this blueprint only adopts the service if the `name` below matches it; if not,
+# Render creates a NEW service. If you are just configuring the existing service,
+# use the copy-paste env block in docs/DEPLOY_RENDER.md instead.
+# =============================================================================
+
+databases:
+  - name: platizio-postgres
+    databaseName: platizio
+    user: platizio
+    plan: free          # free Postgres is deleted ~30 days after creation — upgrade for prod
+    region: singapore   # match the web service region (closest to India)
+
+services:
+  - type: web
+    name: platiziowealthtechh        # must match the existing service name to adopt it
+    runtime: docker
+    repo: https://github.com/Platizio/platiziowealthtech
+    branch: Back_end
+    rootDir: platiziowealthtech-Back_end
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    plan: free                       # 512 MB RAM; upgrade to starter+ if the JVM OOMs
+    region: singapore
+    healthCheckPath: /actuator/health
+    autoDeploy: true
+
+    envVars:
+      # ---- Runtime / JVM -----------------------------------------------------
+      # PORT is injected automatically by Render — DO NOT set it. The Dockerfile
+      # entrypoint binds the app to ${PORT}.
+      - key: SPRING_PROFILES_ACTIVE
+        value: production             # MUST be non-"local" (local enables demo seeders, weak default secrets, Flyway clean)
+      - key: JAVA_OPTS
+        value: -XX:MaxRAMPercentage=70.0
+
+      # ---- Database (wired from the Render Postgres above) -------------------
+      # DB_URL must be JDBC form. Render exposes host/port/db separately but the
+      # blueprint cannot concatenate them, so set DB_URL once in the dashboard:
+      #   jdbc:postgresql://<internal-host>:<port>/<database>
+      - key: DB_URL
+        sync: false
+      - key: DB_USERNAME
+        fromDatabase:
+          name: platizio-postgres
+          property: user
+      - key: DB_PASSWORD
+        fromDatabase:
+          name: platizio-postgres
+          property: password
+
+      # ---- Auth / JWT (REQUIRED — app will not start without these) ---------
+      - key: JWT_SECRET                # generate: openssl rand -base64 48
+        sync: false
+      - key: AUTH_COOKIE_SECURE
+        value: "true"                  # HTTPS in prod — required, no default in base profile
+      - key: AUTH_COOKIE_SAME_SITE
+        value: None                    # FE and BE are on different origins → cross-site cookies
+      - key: AUTH_COOKIE_NAME
+        value: access_token
+      - key: AUTH_REFRESH_COOKIE_NAME
+        value: refresh_token
+      - key: AUTH_REFRESH_TOKEN_EXPIRATION_MS
+        value: "604800000"             # 7 days
+
+      # ---- CORS --------------------------------------------------------------
+      - key: CORS_ALLOWED_ORIGINS
+        value: https://<FRONTEND_URL>  # set to the deployed frontend origin (no trailing slash)
+
+      # ---- Cybrilla (SANDBOX) ------------------------------------------------
+      - key: CYBRILLA_ENVIRONMENT
+        value: sandbox
+      - key: CYBRILLA_REAL_CLIENT_ENABLED
+        value: "true"
+      - key: CYBRILLA_PRE_VERIFICATION_BASE_URL
+        value: https://api.sandbox.cybrilla.com
+      - key: CYBRILLA_PRE_VERIFICATION_TOKEN_URL
+        value: https://s.finprim.com/v2/auth/cybrillarta/token
+      - key: CYBRILLA_PRE_VERIFICATION_CLIENT_ID
+        sync: false                    # copy from your local .env
+      - key: CYBRILLA_PRE_VERIFICATION_CLIENT_SECRET
+        sync: false                    # copy from your local .env
+      - key: CYBRILLA_TOKEN_REFRESH_BUFFER_SECONDS
+        value: "120"
+      - key: CYBRILLA_WEBHOOK_SECRET    # required for KYC/order webhooks to be accepted (non-local profile)
+        sync: false
+      - key: CYBRILLA_PRODUCT_CATALOGUE_SOURCE
+        value: cybrilla
+      - key: CYBRILLA_PRODUCT_CATALOGUE_ENDPOINT
+        value: poa-mf
+      - key: CYBRILLA_KYC_FORM_CALLBACK_BASE_URL
+        value: https://<FRONTEND_URL>  # frontend origin investors return to after Digilocker/eSign
+      - key: CYBRILLA_IDENTITY_DOCUMENT_POSTBACK_PATH
+        value: /distributor/investor-onboarding
+      - key: CYBRILLA_ESIGN_POSTBACK_PATH
+        value: /distributor/investor-onboarding
+      # Optional Cybrilla tunables (defaults shown; uncomment to override):
+      # - key: CYBRILLA_ENFORCE_SANDBOX_PAN_PATTERNS   # unset = auto (enforced in sandbox)
+      #   value: ""
+      # - key: CYBRILLA_BOOTSTRAP_CATALOGUE_ON_STARTUP
+      #   value: "false"
+      # - key: CYBRILLA_CATALOGUE_REFRESH_MIN_INTERVAL_MINUTES
+      #   value: "25"
+      # - key: CYBRILLA_INVESTOR_DATA_SOURCE
+      #   value: cybrilla
+      # - key: CYBRILLA_INVESTOR_SYNC_MIN_INTERVAL_MINUTES
+      #   value: "5"
+      # - key: CYBRILLA_MANDATE_PROVIDER_NAME
+      #   value: CYBRILLAPOA
+      # - key: CYBRILLA_SANDBOX_SIMULATE_MANDATE_APPROVAL
+      #   value: "true"
+      # - key: CYBRILLA_SANDBOX_SIMULATE_PAYMENT
+      #   value: "true"
+      # - key: CYBRILLA_KYC_FORM_MOCK_FALLBACK
+      #   value: "false"
+
+      # ---- Finprim (SANDBOX) -------------------------------------------------
+      - key: FINPRIM_BASE_URL
+        value: https://s.finprim.com
+      - key: FINPRIM_TENANT_NAME
+        value: platizio
+      - key: FINPRIM_TENANT_ID
+        value: platizio
+      - key: FINPRIM_TENANT_TOKEN_URL
+        value: https://s.finprim.com/v2/auth/platizio/token
+      - key: FINPRIM_TENANT_CLIENT_ID
+        sync: false                    # copy from your local .env
+      - key: FINPRIM_TENANT_CLIENT_SECRET
+        sync: false                    # copy from your local .env
+      - key: FINPRIM_TOKEN_REFRESH_BUFFER_SECONDS
+        value: "120"
+
+      # ---- External-auth token cache / refresh -------------------------------
+      - key: EXTERNAL_AUTH_TOKEN_CACHE_ENABLED
+        value: "true"
+      - key: EXTERNAL_AUTH_AUTO_REFRESH_ENABLED
+        value: "true"
+      - key: EXTERNAL_AUTH_WARM_ON_STARTUP
+        value: "true"
+      - key: EXTERNAL_AUTH_AUTO_REFRESH_CHECK_INTERVAL_MS
+        value: "1800000"
+      - key: EXTERNAL_AUTH_AUTO_REFRESH_STARTUP_DELAY_MS
+        value: "1800000"
+      - key: EXTERNAL_AUTH_DEBUG_ENABLED
+        value: "false"
+      - key: EXTERNAL_AUTH_LOG_RAW_TOKENS
+        value: "false"                 # SECURITY: keep false in prod (local .env has it true)
+
+      # ---- ARN / KYD validation (mock until a real provider is configured) ---
+      - key: ARN_VALIDATION_REAL_CLIENT_ENABLED
+        value: "false"
+      # - key: ARN_VALIDATION_BASE_URL
+      #   value: ""
+      # - key: ARN_VALIDATION_LOOKUP_PATH
+      #   value: /arn/{arn}
+      # - key: ARN_VALIDATION_API_KEY
+      #   sync: false
+      # - key: ARN_VALIDATION_SOURCE
+      #   value: AMFI
+
+      # ---- Payment postback (FP posts order payment completion here) ---------
+      - key: PAYMENT_POSTBACK_URL
+        value: https://platiziowealthtechh.onrender.com/investor-actions/{token}/payment-complete
+
+      # ---- KYC / bank background sync ----------------------------------------
+      - key: KYC_SYNC_ENABLED
+        value: "true"
+      - key: KYC_SYNC_INTERVAL_MS
+        value: "180000"
+      - key: KYC_FORM_SYNC_ENABLED
+        value: "false"
+      # Optional sync tunables (defaults shown):
+      # - key: KYC_SYNC_BATCH_SIZE
+      #   value: "50"
+      # - key: KYC_SYNC_FAILURE_BACKOFF_MS
+      #   value: "900000"
+      # - key: KYC_PRE_VERIFICATION_POLL_MAX_ATTEMPTS
+      #   value: "15"
+      # - key: KYC_PRE_VERIFICATION_POLL_INTERVAL_MS
+      #   value: "2000"
+      # - key: KYC_FORM_SYNC_INTERVAL_MS
+      #   value: "180000"
+      # - key: KYC_FORM_SYNC_BATCH_SIZE
+      #   value: "50"
+      # - key: BANK_SYNC_FAILURE_BACKOFF_MS
+      #   value: "900000"
+
+      # ---- Email OTP (SMTP) --------------------------------------------------
+      # In the production profile the OTP is NOT returned in the API response. If
+      # MAIL_HOST is left empty the code is only logged server-side, so real users
+      # cannot receive it — configure SMTP for live login/signup.
+      - key: MAIL_HOST
+        sync: false                    # e.g. smtp.gmail.com / smtp-relay.brevo.com (leave blank to log-only)
+      - key: MAIL_PORT
+        value: "587"
+      - key: MAIL_USERNAME
+        sync: false
+      - key: MAIL_PASSWORD
+        sync: false
+      - key: MAIL_SMTP_AUTH
+        value: "true"
+      - key: MAIL_SMTP_STARTTLS
+        value: "true"
+      - key: MAIL_FROM
+        value: no-reply@platizio.local
+      - key: MAIL_FROM_NAME
+        value: Platizio
+      - key: OTP_LENGTH
+        value: "6"
+      - key: OTP_EXPIRATION_MINUTES
+        value: "5"
+      - key: OTP_MAX_ATTEMPTS
+        value: "5"
+      - key: OTP_RESEND_COOLDOWN_SECONDS
+        value: "30"
