@@ -1,0 +1,51 @@
+# Rendered at container start: envsubst fills ${PORT} and ${BACKEND_URL}.
+# nginx runtime variables ($host, $uri, ...) are preserved (NGINX_ENVSUBST_FILTER).
+
+server {
+    listen ${PORT};
+    server_name _;
+
+    root /usr/share/nginx/html;
+    index index.html;
+
+    gzip on;
+    gzip_types text/css application/javascript application/json image/svg+xml;
+    gzip_min_length 1024;
+
+    # Hashed Vite build assets — content-addressed, safe to cache forever.
+    location /assets/ {
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+        try_files $uri =404;
+    }
+
+    # Same-origin API proxy → keeps HttpOnly SameSite=Lax auth cookies working,
+    # exactly like the Vite dev proxy. ${BACKEND_URL} becomes a literal at
+    # startup (e.g. https://platizio-backend.onrender.com), so nginx derives the
+    # upstream Host from it — required for Render to route to the backend.
+    location /api/v1/ {
+        proxy_pass ${BACKEND_URL};
+        proxy_http_version 1.1;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_ssl_server_name on;                 # SNI for the HTTPS backend
+
+        # Bind the backend's Set-Cookie to the FRONTEND host so the browser
+        # accepts and stores the HttpOnly auth cookies on this origin.
+        proxy_cookie_domain ~.* $host;
+        proxy_cookie_path / /;
+
+        proxy_read_timeout 60s;
+    }
+
+    # SPA client-side routing fallback (react-router-dom).
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+
+    # Never cache the HTML shell, so new deploys are picked up immediately.
+    location = /index.html {
+        add_header Cache-Control "no-store, must-revalidate";
+    }
+}

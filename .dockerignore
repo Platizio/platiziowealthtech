@@ -1,0 +1,22 @@
+# Build context hygiene — keep the image small and avoid leaking dev config.
+node_modules
+dist
+.git
+.gitignore
+
+# Dev env files carry localhost backend URLs; prod values come from build args.
+.env
+.env.*
+
+# Logs, caches, tooling, editor/agent dirs
+*.log
+.vite
+.playwright-mcp
+.claude
+.cursor
+.agents
+.vscode
+
+# Docs / screenshots not needed in the image
+*.md
+*.png
