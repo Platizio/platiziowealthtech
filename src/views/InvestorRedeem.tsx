@@ -129,7 +129,7 @@ export default function InvestorRedeem({ userData: _userData }: { userData?: any
       if (!response.ok) {
         const body = await response.json().catch(() => null);
         if (response.status === 502 || response.status === 503) {
-          throw new Error('Cybrilla is temporarily unavailable. Your request was not submitted — please try again in a few minutes.');
+          throw new Error('Platizio is temporarily unavailable. Your request was not submitted — please try again in a few minutes.');
         }
         const message = body?.message || `Redemption failed (HTTP ${response.status}).`;
         if (/mf investment account|investor profile|occupation/i.test(message)) {
@@ -139,7 +139,7 @@ export default function InvestorRedeem({ userData: _userData }: { userData?: any
         }
         if (/fintech primitives purchase id|externalorderid/i.test(message)) {
           throw new Error(
-            'This holding was not purchased through live Cybrilla POA (demo-only order). Place a real purchase first, then redeem that order.',
+            'This holding was not purchased through live Platizio POA (demo-only order). Place a real purchase first, then redeem that order.',
           );
         }
         throw new Error(message);
@@ -171,7 +171,7 @@ export default function InvestorRedeem({ userData: _userData }: { userData?: any
         <div>
           <h1 className="text-2xl font-semibold tracking-tight text-slate-800">Redeem Holdings</h1>
           <p className="text-slate-500 text-sm mt-1">
-            {investorName ? `Sell mutual-fund holdings for ${investorName}` : 'Sell an investor\u2019s mutual-fund holdings'} via Cybrilla.
+            {investorName ? `Sell mutual-fund holdings for ${investorName}` : 'Sell an investor\u2019s mutual-fund holdings'} via Platizio.
           </p>
         </div>
         <button

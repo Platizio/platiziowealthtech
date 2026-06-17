@@ -398,7 +398,7 @@ function BankAccountsPanel({
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <p className="text-sm font-semibold text-slate-800">Bank Verification</p>
-          <p className="mt-0.5 text-xs text-slate-500">FP bank accounts and verification status.</p>
+          <p className="mt-0.5 text-xs text-slate-500">Platizio bank accounts and verification status.</p>
         </div>
         <div className="flex flex-wrap gap-2">
           <button
@@ -502,7 +502,7 @@ function BankAccountsPanel({
                       {account.bankName || 'Bank'} <span className="font-mono text-xs text-slate-500">{maskAccountNumber(account.accountNumber)}</span>
                     </p>
                     <p className="mt-1 text-xs text-slate-500">
-                      IFSC {account.ifscCode || 'Currently unavailable'} · FP bank {account.cybrillaBankId || 'Currently unavailable'}
+                      IFSC {account.ifscCode || 'Currently unavailable'} · Platizio bank {account.cybrillaBankId || 'Currently unavailable'}
                     </p>
                     <p className="mt-1 text-xs text-slate-500">
                       Verification {account.cybrillaBankVerificationStatus || status}
@@ -646,7 +646,7 @@ export default function Investors({
 
       const restoredCount = Number(result?.restored ?? 0) + targetedRestored.length;
       const baseMessage = result?.message
-        || `Finprim sync completed. Restored ${restoredCount}, updated ${Number(result?.updated ?? 0)}.`;
+        || `Platizio sync completed. Restored ${restoredCount}, updated ${Number(result?.updated ?? 0)}.`;
 
       if (targetedRestored.length > 0) {
         setInvestorActionNotice(
@@ -654,7 +654,7 @@ export default function Investors({
         );
       } else if (Number(result?.restored ?? 0) === 0 && Number(result?.skippedUnlinked ?? 0) > 0) {
         setInvestorActionNotice(
-          `${baseMessage} Finprim has ${Number(result?.providerCount ?? 0)} profile(s) with no local link. `
+          `${baseMessage} Platizio has ${Number(result?.providerCount ?? 0)} profile(s) with no local link. `
           + 'If you deleted a row from PostgreSQL directly, archive the investor in the UI first next time, '
           + 'or restore by PAN via support — recently archived investors are re-linked automatically.',
         );
@@ -672,7 +672,7 @@ export default function Investors({
       setInvestorActionError(
         err instanceof Error
           ? err.message
-          : 'Could not sync investors from Cybrilla. Restart the backend (port 8081) and retry.',
+          : 'Could not sync investors from Platizio. Restart the backend (port 8081) and retry.',
       );
     } finally {
       setInvestorSyncLoading(false);
@@ -830,7 +830,7 @@ export default function Investors({
     const name = investor.fullName || 'this investor';
     const confirmed = window.confirm(
       `Archive ${name}? This removes the investor from your local Platizio list only. `
-      + 'Their Finprim/Cybrilla profile is not deleted. Use "Restore from Cybrilla" to bring them back into your list.',
+      + 'Their Platizio profile is not deleted. Use "Restore from Platizio" to bring them back into your list.',
     );
     if (!confirmed) return false;
 
@@ -854,7 +854,7 @@ export default function Investors({
       removeInvestorFromState(investor.id);
       setInvestorActionNotice(
         data?.message
-          || `${name} archived locally. Finprim cannot delete investor profiles via API — click "Restore from Cybrilla" to bring them back.`,
+          || `${name} archived locally. Platizio cannot delete investor profiles via API — click "Restore from Platizio" to bring them back.`,
       );
       return true;
     } catch (err) {
@@ -939,7 +939,7 @@ export default function Investors({
 
   const refreshVisibleKycStatuses = async () => {
     if (syncableVisibleInvestors.length === 0) {
-      setKycRefreshNotice('No visible investors have saved Cybrilla KYC IDs to refresh.');
+      setKycRefreshNotice('No visible investors have saved Platizio KYC IDs to refresh.');
       return;
     }
     setBulkKycRefreshing(true);
@@ -996,16 +996,16 @@ export default function Investors({
             onClick={syncInvestorsFromCybrilla}
             disabled={investorSyncLoading}
             className="inline-flex items-center gap-2 rounded-lg border border-violet-200 bg-violet-50 px-4 py-2 text-sm font-semibold text-violet-700 transition-colors hover:bg-violet-100 disabled:cursor-not-allowed disabled:opacity-50"
-            title="Investor list already refreshes from Finprim GET /v2/investor_profiles on load. Use this to restore investors you archived in the UI."
+            title="Investor list already refreshes from Platizio GET /v2/investor_profiles on load. Use this to restore investors you archived in the UI."
           >
             <RefreshCw className={`h-4 w-4 ${investorSyncLoading ? 'animate-spin' : ''}`} />
-            {investorSyncLoading ? 'Restoring…' : 'Restore from Cybrilla'}
+            {investorSyncLoading ? 'Restoring…' : 'Restore from Platizio'}
           </button>
           <button
             onClick={refreshVisibleKycStatuses}
             disabled={bulkKycRefreshing || syncableVisibleInvestors.length === 0}
             className="inline-flex items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700 transition-colors hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50"
-            title="Fetch latest KYC status from Cybrilla for the currently visible investors"
+            title="Fetch latest KYC status from Platizio for the currently visible investors"
           >
             <RefreshCw className={`h-4 w-4 ${bulkKycRefreshing ? 'animate-spin' : ''}`} />
             Refresh visible KYC
@@ -1172,7 +1172,7 @@ export default function Investors({
                               }}
                               disabled={Boolean(kycRefreshingIds[inv.id])}
                               className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-700 border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors disabled:opacity-50"
-                              title="Fetch latest KYC status from Cybrilla and update this investor"
+                              title="Fetch latest KYC status from Platizio and update this investor"
                             >
                               <RefreshCw className={`w-3.5 h-3.5 ${kycRefreshingIds[inv.id] ? 'animate-spin' : ''}`} />
                               KYC
@@ -1201,7 +1201,7 @@ export default function Investors({
                                 openModifyKyc(inv);
                               }}
                               className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-indigo-700 border border-indigo-200 rounded-lg hover:bg-indigo-50 transition-colors"
-                              title="Modify this investor's verified KYC record via Cybrilla (Aadhaar + eSign)"
+                              title="Modify this investor's verified KYC record via Platizio (Aadhaar + eSign)"
                             >
                               <Pencil className="w-3.5 h-3.5" /> Modify KYC
                             </button>
@@ -1228,7 +1228,7 @@ export default function Investors({
                             <button
                               onClick={() => navigate(`/distributor/investors/${inv.id}/redeem`, { state: { investor: inv } })}
                               className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-amber-700 border border-amber-200 rounded-lg hover:bg-amber-50 transition-colors"
-                              title="Redeem (sell) this investor's mutual-fund holdings via Cybrilla"
+                              title="Redeem (sell) this investor's mutual-fund holdings via Platizio"
                             >
                               <TrendingDown className="w-3.5 h-3.5" /> Redeem
                             </button>
@@ -1685,7 +1685,7 @@ function InvestorDetail({
       await loadKycFlowStatus();
       setKycActionMessage(
         esign?.completed
-          ? 'eSign completed. Cybrilla KYC application has been submitted.'
+          ? 'eSign completed. Platizio KYC application has been submitted.'
           : 'eSign is still pending. Ask the investor to complete signing.',
       );
     } catch (err) {
@@ -1846,11 +1846,11 @@ function InvestorDetail({
         }
         updatedInvestor = applyKycActionData(requestData) || updatedInvestor;
         setCybrillaApiWarnings(extractCybrillaWarningsFromPayload(requestData));
-        message = 'POA says fresh KYC is required, so a Cybrilla KYC request was created and saved.';
+        message = 'POA says fresh KYC is required, so a Platizio KYC request was created and saved.';
       }
 
       if (updatedInvestor?.kycStatus === 'COMPLETED') {
-        message = 'KYC verified by Cybrilla and saved in your database.';
+        message = 'KYC verified by Platizio and saved in your database.';
       }
       setKycActionMessage(message);
       await loadKycFlowStatus();
@@ -2216,7 +2216,7 @@ function InvestorDetail({
 
             <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
               <div className="mb-4 rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-3">
-                <p className="text-xs font-semibold text-indigo-900">Cybrilla KYC flow (fresh onboarding)</p>
+                <p className="text-xs font-semibold text-indigo-900">Platizio KYC flow (fresh onboarding)</p>
                 <p className="mt-1 text-xs leading-5 text-indigo-800">
                   Use the checklist below for pre-verification → Aadhaar Digilocker → eSign.
                   For investors still in onboarding, prefer <span className="font-semibold">Continue Onboarding</span> (Step 3).
@@ -2285,14 +2285,14 @@ function InvestorDetail({
                   }, { force: true })}
                   className="mt-2 font-semibold text-indigo-700 underline-offset-2 hover:underline"
                 >
-                  View all Cybrilla details
+                  View all Platizio details
                 </button>
               </div>
 
               {cybrillaKycWarnings.length > 0 && (
                 <CybrillaKycWarnings
                   warnings={cybrillaKycWarnings}
-                  title="Warnings from Cybrilla"
+                  title="Warnings from Platizio"
                   className="mt-4"
                 />
               )}
@@ -2301,7 +2301,7 @@ function InvestorDetail({
                 <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-4 text-xs text-amber-800">
                   <p className="font-semibold text-amber-900">PAN–Aadhaar link required</p>
                   <p className="mt-1 leading-5">
-                    Cybrilla returned <span className="font-mono">aadhaar_not_linked</span>.
+                    Platizio returned <span className="font-mono">aadhaar_not_linked</span>.
                     Link PAN with Aadhaar on the Income Tax portal, then re-run pre-verification.
                   </p>
                 </div>
@@ -2373,7 +2373,7 @@ function InvestorDetail({
                     onClick={simulateKycRequest}
                     disabled={Boolean(kycActionLoading)}
                     className="rounded-lg border border-amber-200 px-3 py-2 text-xs font-semibold text-amber-700 transition-colors hover:bg-amber-50 disabled:opacity-50"
-                    title="Sandbox only — calls Cybrilla /v2/kyc_requests/:id/simulate"
+                    title="Sandbox only — calls Platizio /v2/kyc_requests/:id/simulate"
                   >
                     Simulate success
                   </button>

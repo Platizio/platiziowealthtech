@@ -377,7 +377,7 @@ export const PAN_REGEX = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
 export const POA_SANDBOX_PAN_REGEX = /^[A-Z]{3}P[A-Z][0-9]{4}[A-Z]$/;
 export const INDIAN_PAN_FORMAT_MESSAGE = 'Enter a valid PAN in AAAAA9999A format.';
 export const POA_SANDBOX_PAN_HINT =
-  'Optional Cybrilla simulator patterns (for testing specific outcomes only): '
+  'Optional Platizio simulator patterns (for testing specific outcomes only): '
   + 'XXXPX3751X = KYC-ready, XXXPX3753X = KYC unavailable, XXXPINNNNX = invalid, '
   + 'XXXPANNNNX = Aadhaar not linked. Any valid PAN (AAAAA9999A) works for normal tenant sandbox use.';
 /** @deprecated Use POA_SANDBOX_PAN_REGEX */
@@ -435,7 +435,7 @@ export const validatePanBeforePoaApi = (
       return 'Strict simulator mode: use a XXXPXNNNNX pattern PAN (4th character P). '
         + 'Set VITE_CYBRILLA_SANDBOX_STRICT_SIMULATOR=false to allow any valid PAN.';
     }
-    return `Cybrilla sandbox requires a simulator PAN (pattern XXXPXNNNNX, 4th character P). ${POA_SANDBOX_PAN_HINT}`;
+    return `Platizio sandbox requires a simulator PAN (pattern XXXPXNNNNX, 4th character P). ${POA_SANDBOX_PAN_HINT}`;
   }
   return null;
 };
@@ -499,7 +499,7 @@ export const validateInvestorIdentityForKyc = (
     } else if (parsedDate.getFullYear() < 1900) {
       errors.dob = 'Enter a realistic date of birth.';
     } else if (isCybrillaStrictSimulatorMode() && dob === SANDBOX_DOB_MISMATCH) {
-      errors.dob = 'Strict simulator mode: Cybrilla treats 2000-01-01 as a DOB mismatch test case.';
+      errors.dob = 'Strict simulator mode: Platizio treats 2000-01-01 as a DOB mismatch test case.';
     } else {
       const minimumAgeError = validateInvestorMinimumAge(dob, {
         relationshipType: identity.relationshipType,
@@ -839,7 +839,7 @@ export const getPreVerificationDecision = (
     return {
       state: status === 'accepted' ? 'accepted' : 'pending',
       title: 'Pre-verification in progress',
-      message: 'Cybrilla accepted the request. Refresh the status after a short interval.',
+      message: 'Platizio accepted the request. Refresh the status after a short interval.',
       canProceed: false,
       requiresFreshKyc: false,
       requiresPanAadhaarLink: false,
@@ -879,7 +879,7 @@ export const getPreVerificationDecision = (
       return {
         state: 'retry',
         title: 'Verification needs retry',
-        message: readinessReason || 'Cybrilla could not reach the upstream KYC source. Retry the pre-verification.',
+        message: readinessReason || 'Platizio could not reach the upstream KYC source. Retry the pre-verification.',
         canProceed: false,
         requiresFreshKyc: false,
         requiresPanAadhaarLink: false,
@@ -999,7 +999,7 @@ export const buildKycReasonDialogContent = (
 
   if (errorMessage) {
     return {
-      title: 'Cybrilla KYC error',
+      title: 'Platizio KYC error',
       variant: 'error',
       summary: errorMessage,
       warnings,
@@ -1022,7 +1022,7 @@ export const buildKycReasonDialogContent = (
           : 'info';
 
   const title = decision?.title
-    || (warnings.length > 0 ? 'Cybrilla KYC details' : 'KYC status update');
+    || (warnings.length > 0 ? 'Platizio KYC details' : 'KYC status update');
   const summary = decision?.message || flowMessage || undefined;
 
   const shouldShow = Boolean(

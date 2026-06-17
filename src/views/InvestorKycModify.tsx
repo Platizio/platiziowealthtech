@@ -196,7 +196,7 @@ export default function InvestorKycModify() {
         throw new Error(await readApiError(response, 'Unable to simulate eSign.'));
       }
       setData(data);
-      setInfo('eSign simulated locally (sandbox). Cybrilla would submit to the KRA next.');
+      setInfo('eSign simulated locally (sandbox). Platizio would submit to the KRA next.');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to simulate eSign.');
     } finally {
@@ -363,7 +363,7 @@ export default function InvestorKycModify() {
         </div>
         <div>
           <h1 className="text-2xl font-semibold tracking-tight text-slate-800">Modify KYC</h1>
-          <p className="text-slate-500 text-sm">Cybrilla POA KYC Forms — update an already-verified KYC record.</p>
+          <p className="text-slate-500 text-sm">Platizio POA KYC Forms — update an already-verified KYC record.</p>
         </div>
       </div>
 
@@ -387,8 +387,8 @@ export default function InvestorKycModify() {
           <Fingerprint className="w-10 h-10 text-indigo-500 mx-auto mb-3" />
           <h2 className="text-lg font-semibold text-slate-800">Start a KYC modification</h2>
           <p className="text-slate-500 text-sm mt-2 max-w-md mx-auto">
-            This creates a Cybrilla <code className="text-xs">kyc_form</code> with
-            <span className="font-medium"> type = modify</span>. Cybrilla checks eligibility
+            This creates a Platizio <code className="text-xs">kyc_form</code> with
+            <span className="font-medium"> type = modify</span>. Platizio checks eligibility
             (KYC must be validated / verified / registered / onhold). The investor then completes
             an Aadhaar (Digilocker) fetch, signature upload and eSign.
           </p>
@@ -429,7 +429,7 @@ export default function InvestorKycModify() {
           {status === 'under_review' && (
             <div className="rounded-2xl border border-amber-200 bg-amber-50 p-5 text-sm text-amber-800 flex items-center gap-2">
               <Loader2 className="w-4 h-4 animate-spin" />
-              Cybrilla is checking the investor's eligibility for KYC modification…
+              Platizio is checking the investor's eligibility for KYC modification…
             </div>
           )}
 
@@ -455,7 +455,7 @@ export default function InvestorKycModify() {
 
           {status === 'awaiting_submission' && (
             <div className="rounded-2xl border border-violet-200 bg-violet-50 p-5 text-sm text-violet-800 flex items-center gap-2">
-              <Loader2 className="w-4 h-4 animate-spin" /> eSign complete. Cybrilla is submitting the form to the KRA…
+              <Loader2 className="w-4 h-4 animate-spin" /> eSign complete. Platizio is submitting the form to the KRA…
             </div>
           )}
 
@@ -555,7 +555,7 @@ export default function InvestorKycModify() {
                 </div>
                 {fieldsNeeded.length > 0 && (
                   <p className="text-xs text-slate-500 mb-3">
-                    Still required by Cybrilla: <span className="font-medium">{fieldsNeeded.join(', ')}</span>
+                    Still required by Platizio: <span className="font-medium">{fieldsNeeded.join(', ')}</span>
                   </p>
                 )}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">

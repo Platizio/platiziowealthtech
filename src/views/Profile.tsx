@@ -49,7 +49,10 @@ export default function Profile({ userData }: { userData?: any }) {
   };
 
   const arnExpiry = profileData?.arnExpiryDate || profileData?.arn_expiry_date;
-  const arnExpired = isExpired(arnExpiry);
+  // ARN expiry is no longer a blocking/expired status; pin to false so it never gates
+  // (compliance item stays 'active', the 'ARN & NISM' done-check reduces to requiring an ARN number).
+  // The ARN number and expiry date are still displayed below.
+  const arnExpired = false;
 
   const complianceItems = [
     { label: 'ARN Number', value: profileData?.arnNumber || '—', expiry: arnExpiry || '31 Dec 2025', status: (arnExpired ? 'expired' : 'active') as any },

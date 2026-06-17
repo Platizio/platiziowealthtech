@@ -353,12 +353,6 @@ export default function Onboarding({ onComplete, onBack }: { onComplete: () => v
         e.confirmPassword = 'Passwords do not match';
     }
     if (s === 2) {
-      if (!/^ARN-\d+$/i.test(data.arn.trim()))
-        e.arn = 'Enter a valid ARN (e.g. ARN-102943)';
-      if (!data.arnExpiryDate)
-        e.arnExpiryDate = 'Required';
-      else if (data.arnExpiryDate <= new Date().toISOString().split('T')[0])
-        e.arnExpiryDate = 'ARN expiry date must be in the future';
       if (!data.nismCertificateNumber.trim())
         e.nismCertificateNumber = 'Required';
       if (!data.nismExpiryDate)
@@ -740,7 +734,7 @@ export default function Onboarding({ onComplete, onBack }: { onComplete: () => v
                 <div className="space-y-6">
                   <div className="grid grid-cols-2 gap-4">
                     <div>
-                      <label className={CLS_LABEL}>ARN Number <span className="text-red-400">*</span></label>
+                      <label className={CLS_LABEL}>ARN Number</label>
                       <input type="text" value={data.arn} placeholder="e.g. ARN-102943"
                         onChange={e => set('arn', e.target.value)}
                         className={CLS_INPUT + (errors.arn ? ' border-red-300 ring-1 ring-red-200' : '')} />
@@ -749,9 +743,8 @@ export default function Onboarding({ onComplete, onBack }: { onComplete: () => v
                         : <p className="text-[11px] text-slate-400 mt-1">Format: ARN- followed by digits</p>}
                     </div>
                     <div>
-                      <label className={CLS_LABEL}>ARN Expiry Date <span className="text-red-400">*</span></label>
+                      <label className={CLS_LABEL}>ARN Expiry Date</label>
                       <input type="date" value={data.arnExpiryDate}
-                        min={new Date().toISOString().split('T')[0]}
                         onChange={e => set('arnExpiryDate', e.target.value)}
                         className={CLS_INPUT + (errors.arnExpiryDate ? ' border-red-300 ring-1 ring-red-200' : '')} />
                       {errors.arnExpiryDate && <p className={CLS_ERR}><AlertCircle className="w-3 h-3" />{errors.arnExpiryDate}</p>}

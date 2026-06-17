@@ -45,7 +45,7 @@ const isActionable = (action?: KycFlowNextAction) =>
 const DEFAULT_FLOW: KycFlowStatusView = {
   stage: 'PRE_VERIFICATION_REQUIRED',
   nextAction: 'RUN_PRE_VERIFICATION',
-  message: 'Run pre-verification to start the Cybrilla KYC flow (PAN check → KYC request → Aadhaar → eSign).',
+  message: 'Run pre-verification to start the Platizio KYC flow (PAN check → KYC request → Aadhaar → eSign).',
 };
 
 export default function KycFlowPanel({
@@ -71,7 +71,7 @@ export default function KycFlowPanel({
     <div className="mt-5 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
       <div className="mb-4 flex items-start justify-between gap-3">
         <div>
-          <h4 className="text-sm font-semibold text-slate-800">Cybrilla KYC flow</h4>
+          <h4 className="text-sm font-semibold text-slate-800">Platizio KYC flow</h4>
           <p className="mt-1 text-xs leading-5 text-slate-500">
             {loading && !flow
               ? 'Loading KYC flow status from Platizio backend…'
@@ -153,7 +153,7 @@ export default function KycFlowPanel({
 
       {complete && (
         <p className="mt-3 flex items-center gap-1.5 text-xs font-medium text-green-700">
-          <CheckCircle2 className="h-3.5 w-3.5" /> Cybrilla KYC flow is complete. Continue onboarding.
+          <CheckCircle2 className="h-3.5 w-3.5" /> Platizio KYC flow is complete. Continue onboarding.
         </p>
       )}
     </div>

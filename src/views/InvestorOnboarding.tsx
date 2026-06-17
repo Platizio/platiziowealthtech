@@ -11,6 +11,7 @@ import KycFlowPanel from '../components/KycFlowPanel';
 import KycProviderLink from '../components/KycProviderLink';
 import PincodeCityFields from '../components/PincodeCityFields';
 import SandboxDemoGuide from '../components/SandboxDemoGuide';
+import ContactVerification from '../components/ContactVerification';
 import { fetchIfscDetails } from '../utils/referenceLookup';
 import {
   listInvestorDocuments,
@@ -244,7 +245,7 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
     dob: resumeInvestor?.dateOfBirth || resumeInvestor?.dob || prospect?.dob || '',
     mobile: resumeInvestor?.mobileNumber || resumeInvestor?.mobile || prospect?.mobile || '',
     email: resumeInvestor?.email || prospect?.email || '',
-    relationshipType: resumeInvestor?.relationshipType || 'SELF',
+    relationshipType: resumeInvestor?.relationshipType || '', // DF-09: no auto-populated default; distributor must choose
     householdName: resumeInvestor?.householdName || '',
     guardianPan: resumeInvestor?.guardianPan || '',
   });
@@ -290,7 +291,7 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
     gender: noteValue(resumeInvestor?.onboardingNotes, 'gender'),
     occupation: noteValue(resumeInvestor?.onboardingNotes, 'occupation'),
     income: noteValue(resumeInvestor?.onboardingNotes, 'income'),
-    contactOwner: noteValue(resumeInvestor?.onboardingNotes, 'contact_owner') || 'Self',
+    contactOwner: noteValue(resumeInvestor?.onboardingNotes, 'contact_owner') || '', // DF-09: no default
     addressLine1: resumeInvestor?.addressLine1 || '',
     addressLine2: resumeInvestor?.addressLine2 || '',
     city: resumeInvestor?.city || '',
@@ -314,11 +315,12 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
 
   // ── Step 6 — FATCA ───────────────────────────────────────────────────────────
   const [s6, setS6] = useState({
-    taxResidency: noteValue(resumeInvestor?.onboardingNotes, 'tax_residency') || 'India',
+    taxResidency: noteValue(resumeInvestor?.onboardingNotes, 'tax_residency') || '', // DF-09: no default
     taxCountry: '',
     incomeSlab: '',
-    politicalExp: noteValue(resumeInvestor?.onboardingNotes, 'pep') || 'No',
+    politicalExp: noteValue(resumeInvestor?.onboardingNotes, 'pep') || '', // DF-09: no default
     declared: false,
+    termsAccepted: false, // Task 4 / DF-10: T&C acceptance, separate from FATCA declaration
   });
 
   // ── Step 7 — Documents ───────────────────────────────────────────────────────
@@ -529,7 +531,7 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
       dob: investor.dateOfBirth || investor.dob || '',
       mobile: investor.mobileNumber || investor.mobile || '',
       email: investor.email || '',
-      relationshipType: investor.relationshipType || 'SELF',
+      relationshipType: investor.relationshipType || '', // DF-09: reflect saved value, no fabricated default
       householdName: investor.householdName || '',
       guardianPan: investor.guardianPan || '',
     });
@@ -537,7 +539,7 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
       gender: noteValue(investor.onboardingNotes, 'gender'),
       occupation: noteValue(investor.onboardingNotes, 'occupation'),
       income: noteValue(investor.onboardingNotes, 'income'),
-      contactOwner: noteValue(investor.onboardingNotes, 'contact_owner') || 'Self',
+      contactOwner: noteValue(investor.onboardingNotes, 'contact_owner') || '', // DF-09
       addressLine1: investor.addressLine1 || '',
       addressLine2: investor.addressLine2 || '',
       city: investor.city || '',
@@ -546,11 +548,12 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
     });
     const incomeFromNotes = noteValue(investor.onboardingNotes, 'income');
     setS6({
-      taxResidency: noteValue(investor.onboardingNotes, 'tax_residency') || 'India',
+      taxResidency: noteValue(investor.onboardingNotes, 'tax_residency') || '', // DF-09
       taxCountry: '',
       incomeSlab: incomeFromNotes || noteValue(investor.onboardingNotes, 'income_slab') || '',
-      politicalExp: noteValue(investor.onboardingNotes, 'pep') || 'No',
+      politicalExp: noteValue(investor.onboardingNotes, 'pep') || '', // DF-09
       declared: false,
+      termsAccepted: false, // re-confirmed below from GET /terms on resume
     });
     setDraftInvestor(investor);
     setDraftIdentityFingerprint('');
@@ -725,6 +728,22 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
     return () => { cancelled = true; };
   }, [investorIdForBank]);
 
+  // Task 4 / DF-10: on resume, pre-check the T&C box if the investor already accepted.
+  useEffect(() => {
+    if (!investorIdForBank) return;
+    let cancelled = false;
+    apiFetch(`/investors/${investorIdForBank}/terms`)
+      .then(res => (res.ok ? res.json() : []))
+      .then((rows: any[]) => {
+        if (cancelled) return;
+        if (Array.isArray(rows) && rows.some(r => r?.documentKey === 'investor_tnc')) {
+          setS6(prev => ({ ...prev, termsAccepted: true }));
+        }
+      })
+      .catch(() => { /* non-fatal: leave the box unchecked */ });
+    return () => { cancelled = true; };
+  }, [investorIdForBank]);
+
   const startBankEdit = () => {
     if (verifiedBank) {
       const rawAccount = String(verifiedBank.accountNumber || '');
@@ -766,12 +785,13 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
         email: s1.email,
         relationshipType: s1.relationshipType,
         guardianPan: s1.guardianPan,
-      })).length === 0;
+      })).length === 0 && !!s1.relationshipType; // DF-09: relationship must be chosen
       case 2: return consentAcknowledged;
       case 3: return !!(
         s4.gender
         && s4.occupation
         && s4.income
+        && s4.contactOwner          // DF-09: must choose, no default
         && s4.addressLine1.trim()
         && s4.city.trim()
         && s4.state.trim()
@@ -799,7 +819,7 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
           && IFSC_REGEX.test(s5.ifsc)
           && Boolean(bankName)
           && !ifscLookupLoading;
-      case 6: return !!(s6.incomeSlab && s6.declared);
+      case 6: return !!(s6.taxResidency && s6.politicalExp && s6.incomeSlab && s6.declared && s6.termsAccepted);
       case 7: return allRequiredDocumentsSaved;
       default: return true;
     }
@@ -827,9 +847,9 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
 
   const bankVerificationStatusText = (bank: any) => {
     const status = normalizeStatus(bank?.verificationStatus || bank?.cybrillaBankVerificationStatus);
-    if (status === 'VERIFIED' || status === 'COMPLETED') return 'Bank account verified by Cybrilla.';
+    if (status === 'VERIFIED' || status === 'COMPLETED') return 'Bank account verified by Platizio.';
     if (status === 'VERIFICATION_FAILED' || status === 'FAILED') return 'Bank verification failed. Collect a corrected bank account or retry.';
-    if (bank?.cybrillaBankVerificationId) return 'Cybrilla bank verification is in progress.';
+    if (bank?.cybrillaBankVerificationId) return 'Platizio bank verification is in progress.';
     if (bank?.externalSyncPending) return bank.externalSyncMessage || 'Bank details were saved locally and will be retried.';
     return 'Bank details saved. Verification will start after KYC is completed.';
   };
@@ -1506,7 +1526,7 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
       await loadKycFlowStatus(investor.id);
       setKycActionMessage(
         esign?.completed
-          ? 'eSign completed. Cybrilla KYC application has been submitted.'
+          ? 'eSign completed. Platizio KYC application has been submitted.'
           : 'eSign is still pending. Ask the investor to complete signing.',
       );
     } catch (err) {
@@ -1698,7 +1718,7 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unable to apply KYC workflow';
       console.warn('step_1a_apply_kyc_external_sync=', message);
-      appendExternalSyncWarning(`Unable to apply KYC workflow through Cybrilla/Fintech Primitives: ${message}`);
+      appendExternalSyncWarning(`Unable to apply KYC workflow through Platizio: ${message}`);
       return createdInvestor;
     }
   };
@@ -1765,7 +1785,7 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unable to refresh bank verification';
       console.warn('step_2b_refresh_bank_verification_error=', message);
-      appendExternalSyncWarning(`Bank verification was started but the latest Cybrilla status could not be fetched: ${message}`);
+      appendExternalSyncWarning(`Bank verification was started but the latest Platizio status could not be fetched: ${message}`);
       return bank;
     }
   };
@@ -1831,7 +1851,7 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
 
     const kycDone = isKycComplete(investor);
     if (kycDone && bankResult?.cybrillaBankVerificationId) {
-      setBankStepMessage('Verifying bank account with Cybrilla…');
+      setBankStepMessage('Verifying bank account with Platizio…');
       finalBank = await pollBankVerification(investorId, bankResult);
       setExistingBanks(prev => {
         const withoutDup = prev.filter(bank => bank.id !== finalBank?.id);
@@ -1845,11 +1865,11 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
         throw new Error('Bank verification is still in progress. Wait a moment and click Continue again.');
       }
       setBankEditMode(false);
-      setBankStepMessage('Bank account verified by Cybrilla.');
+      setBankStepMessage('Bank account verified by Platizio.');
     } else if (kycDone) {
       setBankStepMessage(bankVerificationStatusText(bankResult));
     } else {
-      setBankStepMessage('Bank details saved. Cybrilla verification will start automatically after KYC completes.');
+      setBankStepMessage('Bank details saved. Platizio verification will start automatically after KYC completes.');
     }
 
     return finalBank;
@@ -1996,7 +2016,7 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
       setExternalSyncPending(pendingExternalProfile);
       if (pendingExternalProfile) {
         const message = investorResult?.externalSyncMessage
-          || 'Unable to post investor data to Cybrilla/Fintech Primitives. The investor was saved locally with KYC PENDING.';
+          || 'Unable to post investor data to Platizio. The investor was saved locally with KYC PENDING.';
         setExternalSyncMessage(message);
         setShowExternalSyncNotice(true);
         console.warn('step_1_create_investor_external_sync=', message);
@@ -2012,8 +2032,20 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
         investorResult = await runInitialKycApis(investorResult);
       }
       setDraftInvestor(investorResult);
+      // Task 4 / DF-10: persist the T&C acceptance now that the investor exists.
+      if (s6.termsAccepted && investorResult?.id) {
+        try {
+          await apiFetch(`/investors/${investorResult.id}/terms/accept`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ documentKey: 'investor_tnc', version: 'v1.0' }),
+          });
+        } catch (termsError) {
+          console.warn('terms_accept_failed=', termsError);
+        }
+      }
       if (!isKycComplete(investorResult)) {
-        appendExternalSyncWarning('KYC is not complete yet. Bank verification will start automatically after Cybrilla marks KYC as completed.');
+        appendExternalSyncWarning('KYC is not complete yet. Bank verification will start automatically after Platizio marks KYC as completed.');
       }
 
       console.log('step_1b_upload_documents_request=', {
@@ -2085,7 +2117,7 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
 
       if (Boolean(finalBankResult?.externalSyncPending) || (isKycComplete(investorResult) && !finalBankResult?.cybrillaBankId)) {
         const message = finalBankResult?.externalSyncMessage
-          || 'Unable to post bank data to Cybrilla/Fintech Primitives. Bank details were saved locally for retry.';
+          || 'Unable to post bank data to Platizio. Bank details were saved locally for retry.';
         setExternalSyncPending(true);
         setExternalSyncMessage(prev => prev ? `${prev}\n${message}` : message);
         setShowExternalSyncNotice(true);
@@ -2182,13 +2214,13 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
     const bankVerificationFailed = normalizedBankStatus === 'VERIFICATION_FAILED' || normalizedBankStatus === 'FAILED';
     const bankVerificationSub = bankVerificationMessage
       || (bankVerificationResult?.cybrillaBankVerificationId
-        ? 'Cybrilla bank verification is in progress'
+        ? 'Platizio bank verification is in progress'
         : 'Bank verification will start after KYC completes');
     const submittedKycComplete = isKycComplete(draftInvestor);
     const statusRows = externalSyncPending
       ? [
           { label: 'Investor Saved', sub: 'Local profile created successfully', color: 'green', done: true },
-          { label: 'KYC Status', sub: submittedKycComplete ? 'KYC completed through Cybrilla' : 'PAN/external verification will be retried later', color: submittedKycComplete ? 'green' : 'amber', done: submittedKycComplete },
+          { label: 'KYC Status', sub: submittedKycComplete ? 'KYC completed through Platizio' : 'PAN/external verification will be retried later', color: submittedKycComplete ? 'green' : 'amber', done: submittedKycComplete },
           { label: 'Bank Verification', sub: bankVerificationSub, color: bankVerificationFailed ? 'red' : 'amber', done: bankVerificationDone },
           { label: 'Compliance Review', sub: 'FATCA & PMLA check in queue', color: 'blue', done: false },
         ]
@@ -2284,7 +2316,7 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
                           Investor created, KYC incomplete
                         </h2>
                         <div className="mt-1 space-y-2 text-sm leading-6 text-slate-600">
-                          {(externalSyncMessage || 'Unable to post data to Cybrilla/Fintech Primitives. The record was saved locally for retry.')
+                          {(externalSyncMessage || 'Unable to post data to Platizio. The record was saved locally for retry.')
                             .split('\n')
                             .map((line, index) => <p key={`${line}-${index}`}>{line}</p>)}
                         </div>
@@ -2352,7 +2384,7 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
       {/* ── Progress stepper ──────────────────────────────────────────────── */}
       {isResumeMode && !resumeError && (
         <div className="mb-6 rounded-xl border border-emerald-100 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-700">
-          Continuing saved onboarding for this investor. Changes will update the existing local and Cybrilla-linked record.
+          Continuing saved onboarding for this investor. Changes will update the existing local and Platizio-linked record.
         </div>
       )}
       {resumeError && (
@@ -2447,6 +2479,7 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
                     onChange={e => setIdentityField('relationshipType', e.target.value, ['relationshipType', 'guardianPan'])}
                     className={sel}
                   >
+                    <option value="" disabled>Select relationship</option>
                     <option value="SELF">Self / Primary</option>
                     <option value="SPOUSE">Spouse / Joint holder</option>
                     <option value="MINOR">Minor folio</option>
@@ -2474,9 +2507,25 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
                 )}
                 <Field label="Mobile Number" required error={serverErrors.mobile}>
                   <input value={s1.mobile} onChange={e => setIdentityField('mobile', e.target.value.replace(/\D/g, ''), ['mobile', 'mobileNumber'])} placeholder="9876543210" maxLength={13} className={inp} />
+                  <ContactVerification
+                    investorId={draftInvestor?.id || resumeInvestor?.id || resumeInvestorId || null}
+                    channel="mobile"
+                    value={s1.mobile}
+                    verified={draftInvestor?.mobileVerified ?? resumeInvestor?.mobileVerified}
+                    method={draftInvestor?.mobileVerificationMethod ?? resumeInvestor?.mobileVerificationMethod}
+                    belongsTo={draftInvestor?.mobileBelongsTo ?? resumeInvestor?.mobileBelongsTo}
+                  />
                 </Field>
                 <Field label="Email Address" required error={serverErrors.email}>
                   <input type="email" value={s1.email} onChange={e => setIdentityField('email', e.target.value, ['email'])} placeholder="investor@email.com" className={inp} />
+                  <ContactVerification
+                    investorId={draftInvestor?.id || resumeInvestor?.id || resumeInvestorId || null}
+                    channel="email"
+                    value={s1.email}
+                    verified={draftInvestor?.emailVerified ?? resumeInvestor?.emailVerified}
+                    method={draftInvestor?.emailVerificationMethod ?? resumeInvestor?.emailVerificationMethod}
+                    belongsTo={draftInvestor?.emailBelongsTo ?? resumeInvestor?.emailBelongsTo}
+                  />
                 </Field>
               </div>
             </div>
@@ -2487,8 +2536,8 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
             <div className="max-w-lg">
               <h2 className="text-lg font-semibold text-slate-800 mb-1">Investor Consent</h2>
               <p className="text-sm text-slate-500 mb-5">
-                Record consent before Cybrilla KYC. Aadhaar OTP and biometric verification happen on the official
-                Cybrilla Digilocker redirect in the next step — not on this screen.
+                Record consent before Platizio KYC. Aadhaar OTP and biometric verification happen on the official
+                Platizio Digilocker redirect in the next step — not on this screen.
               </p>
 
               <div className="mb-5 rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-3 text-sm text-indigo-900">
@@ -2496,7 +2545,7 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
                   <Fingerprint className="mt-0.5 h-4 w-4 shrink-0" />
                   <p>
                     When pre-verification returns <span className="font-mono">kyc_unavailable</span>, Platizio calls
-                    Cybrilla <span className="font-mono">POST /v2/identity_documents</span> and opens the
+                    <span className="font-mono">POST /v2/identity_documents</span> and opens the
                     <span className="font-semibold"> Digilocker redirect URL</span> for the investor. That is the real
                     Aadhaar authentication step.
                   </p>
@@ -2513,7 +2562,7 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
                   />
                   <span className="text-sm text-slate-700">
                     The investor consents to collection and processing of PAN, bank, and KYC data for mutual fund
-                    onboarding through Cybrilla / Fintech Primitives.
+                    onboarding through Platizio.
                   </span>
                 </label>
 
@@ -2525,8 +2574,8 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
                     className="mt-1 h-4 w-4 rounded border-slate-300 text-[#0B1B3E] focus:ring-blue-200"
                   />
                   <span className="text-sm text-slate-700">
-                    The investor agrees to complete Cybrilla KYC when required, including Aadhaar fetch via Digilocker
-                    and eSign on Cybrilla-hosted pages.
+                    The investor agrees to complete Platizio KYC when required, including Aadhaar fetch via Digilocker
+                    and eSign on Platizio-hosted pages.
                   </span>
                 </label>
               </div>
@@ -2537,7 +2586,7 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
                   animate={{ opacity: 1, y: 0 }}
                   className="mt-4 flex items-center gap-2 text-sm font-semibold text-green-600"
                 >
-                  <CheckCircle2 className="h-4 w-4" /> Consent recorded — continue to Cybrilla KYC
+                  <CheckCircle2 className="h-4 w-4" /> Consent recorded — continue to Platizio KYC
                 </motion.p>
               )}
             </div>
@@ -2547,7 +2596,7 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
           {step === 4 && (
             <div className="py-6">
               <div className="text-center">
-                <h2 className="text-lg font-semibold text-slate-800 mb-1">Cybrilla KYC</h2>
+                <h2 className="text-lg font-semibold text-slate-800 mb-1">Platizio KYC</h2>
                 <p className="text-sm text-slate-500 mb-6">
                   Pre-verification, Aadhaar Digilocker, and eSign — all through Platizio backend APIs.
                 </p>
@@ -2563,14 +2612,14 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
                   <CybrillaKycWarnings
                     warnings={cybrillaKycWarnings}
                     title={kycDecision.requiresFreshKyc || kycDecision.state === 'failed' || kycDecision.state === 'retry'
-                      ? 'Cybrilla investor readiness'
-                      : 'Warnings from Cybrilla'}
+                      ? 'Platizio investor readiness'
+                      : 'Warnings from Platizio'}
                     className="mx-auto mb-4 max-w-2xl"
                   />
                 )}
 
                 <div className="mx-auto mb-4 max-w-2xl rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-3 text-left">
-                  <p className="text-xs font-semibold text-indigo-900">Guided Cybrilla KYC flow</p>
+                  <p className="text-xs font-semibold text-indigo-900">Guided Platizio KYC flow</p>
                   <p className="mt-1 text-xs leading-5 text-indigo-800">
                     Use the checklist below — each step calls Platizio APIs (pre-verification → KYC request → Aadhaar → eSign).
                     When the flow shows complete, click <span className="font-semibold">Continue</span> to move to Bank verification.
@@ -2623,7 +2672,7 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
                           }, { force: true })}
                           className="mt-2 text-[11px] font-semibold text-indigo-700 underline-offset-2 hover:underline"
                         >
-                          View all Cybrilla details
+                          View all Platizio details
                         </button>
                       )}
                     </div>
@@ -2696,7 +2745,7 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
                 {freshKycRequestAllowed && (
                   <div className="mt-5 flex flex-col gap-3 rounded-xl border border-amber-100 bg-amber-50 p-4 sm:flex-row sm:items-center sm:justify-between">
                     <div className="min-w-0">
-                      <p className="text-xs font-semibold text-amber-900">Cybrilla investor readiness</p>
+                      <p className="text-xs font-semibold text-amber-900">Platizio investor readiness</p>
                       <p className="mt-1 text-xs font-medium leading-5 text-amber-800">
                         {kycDecision.message}
                       </p>
@@ -2733,7 +2782,7 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
                       <div className="min-w-0 flex-1">
                         <p className="text-sm font-semibold text-amber-900">PAN–Aadhaar link required</p>
                         <p className="mt-1 text-xs leading-5 text-amber-800">
-                          Cybrilla reported code <span className="font-mono">aadhaar_not_linked</span>.
+                          Platizio reported code <span className="font-mono">aadhaar_not_linked</span>.
                           The investor must link PAN with Aadhaar on the Income Tax portal, then run pre-verification again.
                         </p>
                         {isCybrillaSandboxMode() && (
@@ -2824,7 +2873,7 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
                       <div>
                         <h4 className="text-sm font-semibold text-slate-800">eSign KYC application</h4>
                         <p className="mt-1 text-xs leading-5 text-slate-600">
-                          After Aadhaar proofs are attached, the investor must eSign to submit the Cybrilla KYC application.
+                          After Aadhaar proofs are attached, the investor must eSign to submit the Platizio KYC application.
                         </p>
                       </div>
                       <div className="flex flex-wrap gap-2">
@@ -2871,7 +2920,7 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
             <div>
               <h2 className="text-lg font-semibold text-slate-800 mb-1">Personal Details</h2>
               <p className="text-sm text-slate-500 mb-6">
-                Address and profile data required by Fintech Primitives before KYC and transactions.
+                Address and profile data required by Platizio before KYC and transactions.
               </p>
               <div className="grid grid-cols-2 gap-5 mb-5">
                 <Field label="Address Line 1" required>
@@ -2911,8 +2960,9 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
                     {['Below ₹1 L', '₹1–5 L', '₹5–10 L', '₹10–25 L', '₹25–50 L', 'Above ₹50 L'].map(r => <option key={r}>{r}</option>)}
                   </select>
                 </Field>
-                <Field label="Contact Ownership">
+                <Field label="Contact Ownership" required>
                   <select value={s4.contactOwner} onChange={e => setS4({ ...s4, contactOwner: e.target.value })} className={sel}>
+                    <option value="" disabled>Select owner</option>
                     {['Self', 'Spouse', 'Guardian', 'Other'].map(c => <option key={c}>{c}</option>)}
                   </select>
                 </Field>
@@ -2965,7 +3015,7 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
               <p className="text-sm text-slate-500 mb-2">
                 {showBankReadOnly
                   ? "Review the investor's verified bank account."
-                  : "Link the investor's bank account for Cybrilla bank pre-verification."}
+                  : "Link the investor's bank account for Platizio bank pre-verification."}
               </p>
               <p className="mb-6 text-xs text-slate-400">
                 Sandbox tip: account numbers ending in <span className="font-semibold text-slate-600">1193</span> verify successfully;
@@ -3003,7 +3053,7 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
                         </span>
                       </div>
                       <p className="mt-1 text-xs text-slate-500">
-                        This bank account is verified by Cybrilla and is ready for transactions.
+                        This bank account is verified by Platizio and is ready for transactions.
                       </p>
                     </div>
                   </div>
@@ -3043,7 +3093,7 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
                   {verifiedBank && bankEditMode && (
                     <div className="mb-4 flex flex-col gap-2 rounded-xl border border-amber-100 bg-amber-50 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
                       <p className="text-xs font-medium leading-5 text-amber-800">
-                        Editing bank details. Saving replaces the current verified account and starts a new Cybrilla verification.
+                        Editing bank details. Saving replaces the current verified account and starts a new Platizio verification.
                       </p>
                       <button
                         type="button"
@@ -3144,24 +3194,26 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
               <h2 className="text-lg font-semibold text-slate-800 mb-1">FATCA Declaration</h2>
               <p className="text-sm text-slate-500 mb-6">Foreign Account Tax Compliance Act — mandatory for all investors</p>
               <div className="grid grid-cols-2 gap-5">
-                <Field label="Country of Tax Residency">
+                <Field label="Country of Tax Residency" required>
                   <select value={s6.taxResidency} onChange={e => setS6({ ...s6, taxResidency: e.target.value })} className={sel}>
+                    <option value="" disabled>Select country</option>
                     {['India', 'USA', 'UK', 'Canada', 'Australia', 'UAE', 'Singapore', 'Other'].map(c => <option key={c}>{c}</option>)}
                   </select>
                 </Field>
-                {s6.taxResidency !== 'India' && (
+                {s6.taxResidency && s6.taxResidency !== 'India' && (
                   <Field label="Overseas Tax ID / TIN">
                     <input value={s6.taxCountry} onChange={e => setS6({ ...s6, taxCountry: e.target.value })} placeholder="Tax identification number" className={inp} />
                   </Field>
                 )}
                 <Field label="Annual Income Slab" required>
                   <select value={s6.incomeSlab} onChange={e => setS6({ ...s6, incomeSlab: e.target.value })} className={sel}>
-                    <option value="">Select slab</option>
+                    <option value="" disabled>Select slab</option>
                     {['Below ₹1 L', '₹1–5 L', '₹5–10 L', '₹10–25 L', '₹25–50 L', 'Above ₹50 L', 'Above ₹1 Cr'].map(r => <option key={r}>{r}</option>)}
                   </select>
                 </Field>
-                <Field label="Politically Exposed Person (PEP)">
+                <Field label="Politically Exposed Person (PEP)" required>
                   <select value={s6.politicalExp} onChange={e => setS6({ ...s6, politicalExp: e.target.value })} className={sel}>
+                    <option value="" disabled>Select</option>
                     {['No', 'Yes', 'Related to PEP'].map(v => <option key={v}>{v}</option>)}
                   </select>
                 </Field>
@@ -3184,6 +3236,26 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
                   </span>
                 </label>
               </div>
+
+              {/* Task 4 / DF-10 — Terms & Conditions acceptance (separate from FATCA) */}
+              <div className="mt-4 bg-slate-50 rounded-xl border border-slate-200 p-4">
+                <p className="text-xs text-slate-600 leading-relaxed mb-4">
+                  The investor has read and accepted the Platizio Terms &amp; Conditions (v1.0), including the
+                  schedule of charges, the risk disclosures, and the privacy policy.
+                </p>
+                <label
+                  className="flex items-start gap-3 cursor-pointer"
+                  onClick={() => setS6({ ...s6, termsAccepted: !s6.termsAccepted })}
+                >
+                  <div className={`w-5 h-5 rounded border-2 flex items-center justify-center mt-0.5 transition-all flex-shrink-0 ${s6.termsAccepted ? 'bg-[#0B1B3E] border-[#0B1B3E]' : 'border-slate-300 bg-white'
+                    }`}>
+                    {s6.termsAccepted && <Check className="w-3 h-3 text-white" />}
+                  </div>
+                  <span className="text-sm font-semibold text-slate-700 select-none">
+                    The investor accepts the Terms &amp; Conditions (v1.0)
+                  </span>
+                </label>
+              </div>
             </div>
           )}
 
@@ -3193,7 +3265,7 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
               <h2 className="text-lg font-semibold text-slate-800 mb-1">Document Upload</h2>
               <p className="text-sm text-slate-500 mb-2">
                 Upload self-attested PAN, address proof, and signature. Each file is saved immediately to Platizio
-                (PostgreSQL backup) — Cybrilla digital KYC already collects Aadhaar proofs on step 4.
+                (PostgreSQL backup) — Platizio digital KYC already collects Aadhaar proofs on step 4.
               </p>
               <p className="text-xs text-slate-400 mb-6">
                 Supported: PDF, JPG, PNG (max 5 MB). Sandbox test files: see <span className="font-mono">docs/investor-document-upload-guide.md</span> in the backend repo.

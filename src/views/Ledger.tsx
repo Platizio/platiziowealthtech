@@ -182,7 +182,7 @@ export default function Ledger({ userData }: { userData?: any }) {
         if (cachedActive.length > 0) {
           setError('Showing locally cached products because the live POA catalogue is temporarily unavailable. Invest Now may be disabled until refresh succeeds.');
         } else {
-          setError('Failed to load products from Cybrilla. Please try again later.');
+          setError('Failed to load products from Platizio. Please try again later.');
         }
       } catch (fallbackError) {
         console.error('Fallback product scheme fetch failed:', fallbackError);
@@ -265,7 +265,7 @@ export default function Ledger({ userData }: { userData?: any }) {
             className="flex items-center gap-2 px-3 py-2 text-xs font-semibold bg-white border border-slate-200 text-slate-600 rounded-lg hover:bg-slate-50 transition-colors disabled:opacity-50"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? 'animate-spin' : ''}`} />
-            {refreshing ? 'Syncing...' : 'Sync from Cybrilla'}
+            {refreshing ? 'Syncing...' : 'Sync from Platizio'}
           </button>
         </div>
       </div>
@@ -353,7 +353,7 @@ export default function Ledger({ userData }: { userData?: any }) {
           <p className="text-sm mt-1">
             {filtersActive
               ? 'Try a different MF/SIF, category, type, or search filter.'
-              : 'No products found. Sync from Cybrilla to load the live fund catalogue.'}
+              : 'No products found. Sync from Platizio to load the live fund catalogue.'}
           </p>
           <button
             onClick={() => {
@@ -368,7 +368,7 @@ export default function Ledger({ userData }: { userData?: any }) {
             ) : (
               <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />
             )}
-            {filtersActive ? 'Clear filters' : refreshing ? 'Syncing...' : 'Sync from Cybrilla'}
+            {filtersActive ? 'Clear filters' : refreshing ? 'Syncing...' : 'Sync from Platizio'}
           </button>
         </div>
       ) : (
@@ -1264,7 +1264,7 @@ function TransactionModal({ fund, userData, onClose }: { fund: any; userData?: a
   const submitOrder = async () => {
     if (!selectedInvestor || !amountValid || orderSubmitting) return;
     if (!isTransactionReadyScheme(fund)) {
-      setOrderError('This fund is not POA-orderable. Sync the Cybrilla POA catalogue and pick a fund with a valid ISIN.');
+      setOrderError('This fund is not POA-orderable. Sync the Platizio POA catalogue and pick a fund with a valid ISIN.');
       return;
     }
 
@@ -1311,7 +1311,7 @@ function TransactionModal({ fund, userData, onClose }: { fund: any; userData?: a
         }
         if (response.status === 400 && /investor profile|mf investment account|fintech primitives/i.test(baseMessage)) {
           throw new Error(
-            `${baseMessage} Use Investors → Sync from Cybrilla for this investor, or select Anita Verma (demo-ready) and retry.`,
+            `${baseMessage} Use Investors → Sync from Platizio for this investor, or select Anita Verma (demo-ready) and retry.`,
           );
         }
         throw new Error(baseMessage);
@@ -1321,7 +1321,7 @@ function TransactionModal({ fund, userData, onClose }: { fund: any; userData?: a
     } catch (err: any) {
       if (err?.name === 'AbortError') {
         setOrderError(
-          'Order creation is taking longer than expected. Cybrilla may still be preparing the investor profile — check Transactions in a moment, then retry if no order appears.',
+          'Order creation is taking longer than expected. Platizio may still be preparing the investor profile — check Transactions in a moment, then retry if no order appears.',
         );
       } else {
         setOrderError(err?.message || 'Order creation failed. Please try again.');
@@ -1599,7 +1599,7 @@ function TransactionModal({ fund, userData, onClose }: { fund: any; userData?: a
           </div>
           {step === 3 && orderSubmitting && (
             <p className="mt-3 text-center text-xs text-slate-500">
-              Syncing with Cybrilla (profile, bank, purchase). First order for an investor can take up to 2 minutes.
+              Syncing with Platizio (profile, bank, purchase). First order for an investor can take up to 2 minutes.
             </p>
           )}
           </>

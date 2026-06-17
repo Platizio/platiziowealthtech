@@ -651,7 +651,7 @@ export default function BackendFundDetailModal({
           <button
             onClick={() => onInvest(scheme)}
             disabled={!isPersistedSchemeId(scheme?.id)}
-            title={!isPersistedSchemeId(scheme?.id) ? 'Sync products from Cybrilla before placing an order' : undefined}
+            title={!isPersistedSchemeId(scheme?.id) ? 'Sync products from Platizio before placing an order' : undefined}
             className="flex-1 py-2.5 bg-[#0B1B3E] text-white text-sm font-semibold rounded-xl hover:bg-[#1A3066] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             Invest Now

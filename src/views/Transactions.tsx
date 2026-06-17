@@ -559,7 +559,7 @@ function TransactionDetail({
       {confirmCancel && (
         <ConfirmModal
           title="Cancel SIP?"
-          message="This calls Fintech Primitives POST /v2/mf_purchase_plans/{id}/cancel and records the SIP as Cancelled (Cybrilla keeps cancelled plans on record)."
+          message="This calls Platizio POST /v2/mf_purchase_plans/{id}/cancel and records the SIP as Cancelled (Platizio keeps cancelled plans on record)."
           confirmLabel={cancelling ? 'Cancelling...' : 'Cancel SIP'}
           disabled={cancelling}
           onCancel={() => setConfirmCancel(false)}

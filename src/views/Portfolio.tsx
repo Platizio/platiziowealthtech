@@ -166,7 +166,7 @@ export default function Portfolio({ userData }: { userData?: any }) {
         <div>
           <h1 className="text-xl font-bold text-slate-800">Portfolio</h1>
           <p className="text-sm text-slate-500 mt-0.5">
-            Live holdings from completed orders (Cybrilla POA). Unknown funds show as payment failed.
+            Live holdings from completed orders (Platizio POA). Unknown funds show as payment failed.
           </p>
         </div>
         <div className="flex gap-1 bg-slate-100 p-1 rounded-lg text-[10px] font-bold uppercase tracking-wider">
@@ -342,7 +342,7 @@ export default function Portfolio({ userData }: { userData?: any }) {
       <div className="bg-white rounded-2xl p-5 border border-indigo-100 shadow-sm">
         <h2 className="text-sm font-semibold text-slate-700 mb-1">SIP Mandates</h2>
         <p className="text-xs text-slate-500 mb-4">
-          Mandate registration and plan setup — per Cybrilla flow, the SIP plan is created only after mandate approval.
+          Mandate registration and plan setup — per Platizio flow, the SIP plan is created only after mandate approval.
         </p>
         {sipMandates.length === 0 ? (
           <div className="h-20 flex items-center justify-center text-sm text-slate-400">

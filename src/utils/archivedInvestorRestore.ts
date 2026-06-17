@@ -67,7 +67,7 @@ export async function restoreArchivedInvestorRef(
   params.set('distributorId', entry.distributorId);
   if (entry.cybrillaInvestorId) params.set('cybrillaInvestorId', entry.cybrillaInvestorId);
   else if (entry.pan) params.set('pan', entry.pan);
-  else return { ok: false, name, error: 'No Finprim identifier saved for restore' };
+  else return { ok: false, name, error: 'No Platizio identifier saved for restore' };
 
   const response = await apiFetchFn(`/investors/restore-from-cybrilla?${params.toString()}`, { method: 'POST' });
   const body = await response.json().catch(() => null);

@@ -40,7 +40,7 @@ export const SANDBOX_DEMO_SCENARIOS: SandboxDemoScenario[] = [
   {
     id: 'DEMO-B-FULL-KYC',
     label: '★ Full demo — kyc_unavailable',
-    description: 'Primary Cybrilla demo: pre-verification → fresh KYC → Digilocker → eSign → bank → order.',
+    description: 'Primary Platizio demo: pre-verification → fresh KYC → Digilocker → eSign → bank → order.',
     path: 'full-kyc',
     priority: 'high',
     firstName: 'Priya',
