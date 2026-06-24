@@ -8,6 +8,7 @@ import jakarta.persistence.Enumerated;
 import jakarta.persistence.Index;
 import jakarta.persistence.Table;
 import java.time.OffsetDateTime;
+import java.util.UUID;
 
 /**
  * A single email one-time passcode challenge. The plaintext code is never
@@ -38,6 +39,15 @@ public class EmailOtp extends BaseEntity {
     private int attempts;
 
     private OffsetDateTime consumedAt;
+
+    /**
+     * Optional binding to a specific subject (e.g. a transaction-approval
+     * challenge id). When set, request/verify are scoped to this reference so two
+     * concurrent challenges sharing the same (email, purpose) cannot cross-consume
+     * each other's code. {@code null} for the login/signup flows (purpose alone
+     * isolates them).
+     */
+    private UUID referenceId;
 
     public String getEmail() {
         return email;
@@ -85,5 +95,13 @@ public class EmailOtp extends BaseEntity {
 
     public void setConsumedAt(OffsetDateTime consumedAt) {
         this.consumedAt = consumedAt;
+    }
+
+    public UUID getReferenceId() {
+        return referenceId;
+    }
+
+    public void setReferenceId(UUID referenceId) {
+        this.referenceId = referenceId;
     }
 }

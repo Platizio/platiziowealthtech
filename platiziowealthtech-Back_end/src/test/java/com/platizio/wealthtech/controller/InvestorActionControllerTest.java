@@ -87,7 +87,7 @@ class InvestorActionControllerTest {
     private static class FixedInvestorActionService extends InvestorActionService {
 
         FixedInvestorActionService() {
-            super(null, null, null, null, null, null, null, null, "http://localhost/payment-complete", "sandbox", "CYBRILLAPOA", true, true);
+            super(null, null, null, null, null, null, null, null, null, "http://localhost/payment-complete", "sandbox", "CYBRILLAPOA", true, true);
         }
 
         @Override

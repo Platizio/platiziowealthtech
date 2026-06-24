@@ -16,8 +16,6 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.core.env.Environment;
-import org.springframework.core.env.Profiles;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -33,8 +31,16 @@ public class PasswordResetService {
     private final PasswordEncoder passwordEncoder;
     private final AuditService auditService;
     private final RefreshTokenService refreshTokenService;
-    private final Environment environment;
     private final long expirationMinutes;
+
+    /**
+     * When true (and only ever on the local dev profile) the raw reset token is
+     * echoed in the response so developers can reset without email. Defaults to
+     * {@code false} via {@code app.password-reset.expose-dev-token}; it must stay
+     * {@code false} in every deployed/demo environment — same leak class as
+     * DF-13's OTP devCode.
+     */
+    private final boolean exposeDevToken;
 
     public PasswordResetService(
             DistributorRepository distributorRepository,
@@ -42,16 +48,16 @@ public class PasswordResetService {
             PasswordEncoder passwordEncoder,
             AuditService auditService,
             RefreshTokenService refreshTokenService,
-            Environment environment,
-            @Value("${app.auth.password-reset-expiration-minutes:15}") long expirationMinutes
+            @Value("${app.auth.password-reset-expiration-minutes:15}") long expirationMinutes,
+            @Value("${app.password-reset.expose-dev-token:false}") boolean exposeDevToken
     ) {
         this.distributorRepository = distributorRepository;
         this.passwordResetTokenRepository = passwordResetTokenRepository;
         this.passwordEncoder = passwordEncoder;
         this.auditService = auditService;
         this.refreshTokenService = refreshTokenService;
-        this.environment = environment;
         this.expirationMinutes = expirationMinutes;
+        this.exposeDevToken = exposeDevToken;
     }
 
     @Transactional
@@ -102,7 +108,7 @@ public class PasswordResetService {
         passwordResetTokenRepository.save(resetToken);
 
         auditService.log("DISTRIBUTOR", distributor.getId(), "PASSWORD_RESET_REQUESTED", distributor.getId(), "{}");
-        return new ForgotPasswordResponse(GENERIC_RESET_MESSAGE, isLocalProfile() ? rawToken.toString() : null);
+        return new ForgotPasswordResponse(GENERIC_RESET_MESSAGE, exposeDevToken ? rawToken.toString() : null);
     }
 
     private UUID parseToken(String rawToken) {
@@ -119,10 +125,6 @@ public class PasswordResetService {
 
     private String normalizeEmail(String email) {
         return email == null ? "" : email.trim().toLowerCase(Locale.ROOT);
-    }
-
-    private boolean isLocalProfile() {
-        return environment.acceptsProfiles(Profiles.of("local"));
     }
 
     private String sha256(String value) {

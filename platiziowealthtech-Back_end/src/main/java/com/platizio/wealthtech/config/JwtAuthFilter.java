@@ -2,9 +2,11 @@ package com.platizio.wealthtech.config;
 
 import com.platizio.wealthtech.domain.DistributorRole;
 import com.platizio.wealthtech.security.AuthenticatedDistributorPrincipal;
+import com.platizio.wealthtech.security.AuthenticatedInvestorPrincipal;
 import com.platizio.wealthtech.service.AuthCookieService;
 import com.platizio.wealthtech.service.BlockedTokenService;
 import com.platizio.wealthtech.service.JwtService;
+import org.springframework.security.core.userdetails.UserDetails;
 import io.jsonwebtoken.Claims;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
@@ -54,7 +56,8 @@ public class JwtAuthFilter extends OncePerRequestFilter {
             return;
         }
 
-        Optional<String> tokenOptional = extractToken(request);
+        boolean investorContext = isInvestorPath(path);
+        Optional<String> tokenOptional = extractToken(request, investorContext);
         if (tokenOptional.isEmpty()) {
             filterChain.doFilter(request, response);
             return;
@@ -83,7 +86,9 @@ public class JwtAuthFilter extends OncePerRequestFilter {
             return;
         }
 
-        AuthenticatedDistributorPrincipal principal = principalFromClaims(claims);
+        UserDetails principal = investorContext
+                ? investorPrincipalFromClaims(claims)
+                : distributorPrincipalFromClaims(claims);
         if (principal != null && SecurityContextHolder.getContext().getAuthentication() == null) {
             UsernamePasswordAuthenticationToken authToken =
                     new UsernamePasswordAuthenticationToken(principal, null, principal.getAuthorities());
@@ -95,7 +100,10 @@ public class JwtAuthFilter extends OncePerRequestFilter {
         filterChain.doFilter(request, response);
     }
 
-    private AuthenticatedDistributorPrincipal principalFromClaims(Claims claims) {
+    private UserDetails distributorPrincipalFromClaims(Claims claims) {
+        if (JwtService.TYPE_INVESTOR.equals(claims.get("typ", String.class))) {
+            return null; // an investor token can never authenticate a distributor route
+        }
         try {
             UUID distributorId = UUID.fromString(claims.getSubject());
             String email = claims.get("email", String.class);
@@ -112,7 +120,28 @@ public class JwtAuthFilter extends OncePerRequestFilter {
         }
     }
 
-    private Optional<String> extractToken(HttpServletRequest request) {
-        return authCookieService.readAccessToken(request);
+    private UserDetails investorPrincipalFromClaims(Claims claims) {
+        if (!JwtService.TYPE_INVESTOR.equals(claims.get("typ", String.class))) {
+            return null; // only a typ=INVESTOR token authenticates an investor route
+        }
+        try {
+            UUID accountId = UUID.fromString(claims.getSubject());
+            String email = claims.get("email", String.class);
+            return new AuthenticatedInvestorPrincipal(accountId, email);
+        } catch (RuntimeException ex) {
+            logger.warn("JWT token is missing required investor claims");
+            return null;
+        }
+    }
+
+    private boolean isInvestorPath(String path) {
+        return path != null
+                && (path.startsWith("/api/v1/investor/") || path.startsWith("/api/v1/investor-auth"));
+    }
+
+    private Optional<String> extractToken(HttpServletRequest request, boolean investorContext) {
+        return investorContext
+                ? authCookieService.readInvestorAccessToken(request)
+                : authCookieService.readAccessToken(request);
     }
 }

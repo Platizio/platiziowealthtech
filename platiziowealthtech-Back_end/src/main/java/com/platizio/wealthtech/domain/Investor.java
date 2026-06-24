@@ -4,6 +4,7 @@ import com.platizio.wealthtech.common.BaseEntity;
 import jakarta.persistence.*;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
 import java.util.UUID;
 import org.hibernate.annotations.SQLRestriction;
 
@@ -109,6 +110,22 @@ public class Investor extends BaseEntity {
     private Boolean isDeleted = Boolean.FALSE;
     private LocalDateTime deletedAt;
 
+    // Contact verification / self-declaration (Tier 2). Each channel is verified
+    // via an OTP round-trip (Supabase Auth) or distributor self-declaration.
+    // method = OTP | SELF_DECLARED; belongsTo = self | spouse | dependent_child |
+    // dependent_parent | guardian (forwarded to FP as belongs_to).
+    @Column(nullable = false)
+    private Boolean emailVerified = Boolean.FALSE;
+    private OffsetDateTime emailVerifiedAt;
+    private String emailVerificationMethod;
+    private String emailBelongsTo;
+
+    @Column(nullable = false)
+    private Boolean mobileVerified = Boolean.FALSE;
+    private OffsetDateTime mobileVerifiedAt;
+    private String mobileVerificationMethod;
+    private String mobileBelongsTo;
+
     public UUID getDistributorId() { return distributorId; }
     public void setDistributorId(UUID distributorId) { this.distributorId = distributorId; }
     public String getFullName() { return fullName; }
@@ -213,4 +230,20 @@ public class Investor extends BaseEntity {
     public void setIsDeleted(Boolean isDeleted) { this.isDeleted = isDeleted; }
     public LocalDateTime getDeletedAt() { return deletedAt; }
     public void setDeletedAt(LocalDateTime deletedAt) { this.deletedAt = deletedAt; }
+    public Boolean getEmailVerified() { return emailVerified; }
+    public void setEmailVerified(Boolean emailVerified) { this.emailVerified = emailVerified; }
+    public OffsetDateTime getEmailVerifiedAt() { return emailVerifiedAt; }
+    public void setEmailVerifiedAt(OffsetDateTime emailVerifiedAt) { this.emailVerifiedAt = emailVerifiedAt; }
+    public String getEmailVerificationMethod() { return emailVerificationMethod; }
+    public void setEmailVerificationMethod(String emailVerificationMethod) { this.emailVerificationMethod = emailVerificationMethod; }
+    public String getEmailBelongsTo() { return emailBelongsTo; }
+    public void setEmailBelongsTo(String emailBelongsTo) { this.emailBelongsTo = emailBelongsTo; }
+    public Boolean getMobileVerified() { return mobileVerified; }
+    public void setMobileVerified(Boolean mobileVerified) { this.mobileVerified = mobileVerified; }
+    public OffsetDateTime getMobileVerifiedAt() { return mobileVerifiedAt; }
+    public void setMobileVerifiedAt(OffsetDateTime mobileVerifiedAt) { this.mobileVerifiedAt = mobileVerifiedAt; }
+    public String getMobileVerificationMethod() { return mobileVerificationMethod; }
+    public void setMobileVerificationMethod(String mobileVerificationMethod) { this.mobileVerificationMethod = mobileVerificationMethod; }
+    public String getMobileBelongsTo() { return mobileBelongsTo; }
+    public void setMobileBelongsTo(String mobileBelongsTo) { this.mobileBelongsTo = mobileBelongsTo; }
 }

@@ -70,8 +70,10 @@ class InvestorKycServiceTest {
         assertThat(payloadCaptor.getValue())
                 .containsEntry("pan", Map.of("value", "AAAPA3751A"))
                 .containsEntry("name", Map.of("value", "Rani Gupta"))
-                .containsEntry("date_of_birth", Map.of("value", "1955-10-25"));
-        assertThat(payloadCaptor.getValue()).doesNotContainKey("investor_identifier");
+                .containsEntry("date_of_birth", Map.of("value", "1955-10-25"))
+                // Task 5: parity with the onboarding payload — the readiness lookup
+                // takes investor_identifier as a plain-string PAN (POA pre-verifications).
+                .containsEntry("investor_identifier", "AAAPA3751A");
         verify(investorRepository, never()).findById(any());
         assertThat(response.externalResponse().path("id").asText()).isEqualTo("pv_payload");
     }

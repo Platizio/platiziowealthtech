@@ -1280,6 +1280,20 @@ public class InvestorService implements BankVerificationStarter {
         return investor;
     }
 
+    /**
+     * Marks an investor READY_FOR_TRANSACTIONS after the investor-approval gate has
+     * passed (SRS FR-ONB-003). Additive — the caller (InvestorController.finalize)
+     * is responsible for first asserting the onboarding submission is finalizable.
+     */
+    @Transactional
+    public Investor markReadyAfterInvestorApproval(UUID investorId, UUID actorId) {
+        Investor investor = getInvestor(investorId, actorId);
+        investor.setInvestorStatus(InvestorStatus.READY_FOR_TRANSACTIONS);
+        Investor saved = investorRepository.save(investor);
+        auditService.log("INVESTOR", saved.getId(), "ONBOARDING_FINALIZED", actorId, "{}");
+        return saved;
+    }
+
     @Transactional(readOnly = true)
     public InvestorOnboardingResumeResponse getOnboardingResume(UUID investorId, UUID actorId) {
         Investor investor = getInvestor(investorId, actorId);

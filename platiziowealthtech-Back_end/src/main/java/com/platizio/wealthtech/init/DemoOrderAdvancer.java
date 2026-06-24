@@ -11,6 +11,7 @@ import java.util.Map;
 import java.util.Set;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Profile;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
@@ -24,10 +25,12 @@ import org.springframework.stereotype.Component;
  * dead-ends at PAYMENT_PENDING and the user never sees the happy-path
  * "Order Completed" notification, so the most critical flow looks broken.
  *
- * <p>This bean runs only when {@code spring.profiles.active=local} (or
- * {@code SPRING_PROFILES_ACTIVE} unset, since the default profile is "local"
- * per {@code application.yml}). It polls every 5 seconds and advances any
- * order whose updatedAt is older than {@link #ADVANCE_AGE_SECONDS} seconds:
+ * <p>This bean runs on the {@code local} or {@code demo} profile AND only when
+ * {@code app.demo.order-advancer-enabled=true} (DF-12). The local profile turns
+ * it on by default; the demo profile turns it on so the happy path completes on
+ * screen, but it can be switched off ({@code DEMO_ORDER_ADVANCER_ENABLED=false})
+ * to walk the real payment flow manually. It polls every 5 seconds and advances
+ * any order whose updatedAt is older than {@link #ADVANCE_AGE_SECONDS} seconds:
  *
  * <pre>
  *   PAYMENT_PENDING → SUBMITTED  → PROCESSING → SUCCESSFUL
@@ -45,7 +48,8 @@ import org.springframework.stereotype.Component;
  * the documented manual fallback while the real webhook is on the roadmap.
  */
 @Component
-@Profile("local")
+@Profile({"local", "demo"})
+@ConditionalOnProperty(name = "app.demo.order-advancer-enabled", havingValue = "true", matchIfMissing = false)
 public class DemoOrderAdvancer {
 
     private static final Logger logger = LoggerFactory.getLogger(DemoOrderAdvancer.class);

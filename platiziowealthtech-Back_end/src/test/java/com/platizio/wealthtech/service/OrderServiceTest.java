@@ -2,6 +2,14 @@ package com.platizio.wealthtech.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doNothing;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 import com.platizio.wealthtech.domain.BankVerificationStatus;
 import com.platizio.wealthtech.domain.Investor;
@@ -17,6 +25,7 @@ import com.platizio.wealthtech.domain.TransactionOrder;
 import com.platizio.wealthtech.domain.TransactionType;
 import com.platizio.wealthtech.dto.BulkOrderCreateRequest;
 import com.platizio.wealthtech.dto.OrderCreateRequest;
+import com.platizio.wealthtech.dto.WithdrawalRequest;
 import com.platizio.wealthtech.integration.CybrillaApiException;
 import com.platizio.wealthtech.integration.CybrillaClient;
 import com.platizio.wealthtech.repository.ProductSchemeRepository;
@@ -56,6 +65,8 @@ class OrderServiceTest {
                 null,
                 null,
                 new FixedInvestorService(investor),
+                null,
+                null,
                 null,
                 null,
                 null,
@@ -103,7 +114,9 @@ class OrderServiceTest {
                 new CountingNotificationService(new AtomicInteger()),
                 actionUrlCybrillaClient(),
                 null,
-                productSchemeRepository()
+                productSchemeRepository(),
+                null,
+                null
         );
         OrderCreateRequest request = new OrderCreateRequest(
                 UUID.randomUUID(),
@@ -139,7 +152,9 @@ class OrderServiceTest {
                 new CountingNotificationService(new AtomicInteger()),
                 actionUrlCybrillaClient(),
                 null,
-                productSchemeRepository()
+                productSchemeRepository(),
+                null,
+                null
         );
 
         for (BigDecimal amount : Arrays.asList(null, BigDecimal.ZERO, new BigDecimal("-100"))) {
@@ -180,7 +195,9 @@ class OrderServiceTest {
                 new CountingNotificationService(new AtomicInteger()),
                 apiErrorCybrillaClient(),
                 null,
-                productSchemeRepository()
+                productSchemeRepository(),
+                null,
+                null
         );
         OrderCreateRequest request = new OrderCreateRequest(
                 UUID.randomUUID(),
@@ -210,7 +227,7 @@ class OrderServiceTest {
     }
 
     @Test
-    void createRedemptionSavesRecordWithoutRequiringTransactionManager() {
+    void createRedemptionDraftPersistsPendingActionWithoutCallingProvider() {
         UUID distributorId = UUID.randomUUID();
         UUID investorId = UUID.randomUUID();
         UUID orderId = UUID.randomUUID();
@@ -223,26 +240,253 @@ class OrderServiceTest {
         List<RedemptionRecord> savedRedemptions = new ArrayList<>();
         AtomicInteger auditCalls = new AtomicInteger();
         AtomicInteger notificationCalls = new AtomicInteger();
+        CybrillaClient cybrillaClient = mock(CybrillaClient.class);
         OrderService orderService = new OrderService(
                 singleOrderRepository(order),
                 savingRedemptionRepository(savedRedemptions),
                 new FixedInvestorService(verifiedInvestor(distributorId)),
                 new CountingAuditService(auditCalls),
                 new CountingNotificationService(notificationCalls),
-                redemptionCybrillaClient(),
-                // No transaction manager: the FP pre-flight + provider call must not need one.
+                cybrillaClient,
                 null,
-                productSchemeRepository()
+                productSchemeRepository(),
+                approvedApprovalService(),
+                null
         );
 
-        RedemptionRecord record = orderService.createRedemption(orderId, distributorId);
+        RedemptionRecord draft = orderService.createRedemptionDraft(orderId, distributorId);
 
-        assertThat(record.getExternalRedemptionId()).isEqualTo("external-redemption-1");
-        assertThat(record.getRedemptionStatus()).isEqualTo(RedemptionStatus.CREATED);
+        // Draft persists in PENDING_INVESTOR_ACTION and performs NO provider redemption.
+        assertThat(draft.getRedemptionStatus()).isEqualTo(RedemptionStatus.PENDING_INVESTOR_ACTION);
+        assertThat(draft.getExternalRedemptionId()).isNull();
         assertThat(savedRedemptions).hasSize(1);
         assertThat(savedRedemptions.get(0).getOrderId()).isEqualTo(orderId);
+        verify(cybrillaClient, never()).createRedemption(any(), any(), any());
         assertThat(auditCalls.get()).isEqualTo(1);
         assertThat(notificationCalls.get()).isEqualTo(1);
+    }
+
+    @Test
+    void createRedemptionDraftHonorsPartialAmountInsteadOfFullOrder() {
+        // FIX 4: a partial AMOUNT request must persist exactly the requested value on the
+        // draft (and leave units null for the provider to quote) — NOT the full order amount.
+        UUID distributorId = UUID.randomUUID();
+        UUID investorId = UUID.randomUUID();
+        UUID orderId = UUID.randomUUID();
+        TransactionOrder order = new TransactionOrder();
+        order.setDistributorId(distributorId);
+        order.setInvestorId(investorId);
+        order.setProductSchemeId(UUID.randomUUID());
+        order.setExternalOrderId("mfp-external-1");
+        order.setAmount(new BigDecimal("25000"));
+        order.setUnits(new BigDecimal("1000"));
+        List<RedemptionRecord> savedRedemptions = new ArrayList<>();
+        CybrillaClient cybrillaClient = mock(CybrillaClient.class);
+        OrderService orderService = new OrderService(
+                singleOrderRepository(order),
+                savingRedemptionRepository(savedRedemptions),
+                new FixedInvestorService(verifiedInvestor(distributorId)),
+                new CountingAuditService(new AtomicInteger()),
+                new CountingNotificationService(new AtomicInteger()),
+                cybrillaClient,
+                null,
+                productSchemeRepository(),
+                approvedApprovalService(),
+                null
+        );
+
+        RedemptionRecord draft = orderService.createRedemptionDraft(
+                orderId, distributorId, WithdrawalRequest.WithdrawalMode.AMOUNT, new BigDecimal("5000"), false);
+
+        assertThat(draft.getAmount()).isEqualByComparingTo(new BigDecimal("5000"));
+        assertThat(draft.getUnits()).isNull();
+        assertThat(savedRedemptions).hasSize(1);
+        verify(cybrillaClient, never()).createRedemption(any(), any(), any());
+    }
+
+    @Test
+    void createRedemptionDraftHonorsPartialUnits() {
+        // FIX 4: a partial UNITS request persists the requested units (amount left null).
+        UUID distributorId = UUID.randomUUID();
+        UUID orderId = UUID.randomUUID();
+        TransactionOrder order = new TransactionOrder();
+        order.setDistributorId(distributorId);
+        order.setInvestorId(UUID.randomUUID());
+        order.setProductSchemeId(UUID.randomUUID());
+        order.setExternalOrderId("mfp-external-1");
+        order.setAmount(new BigDecimal("25000"));
+        order.setUnits(new BigDecimal("1000"));
+        List<RedemptionRecord> savedRedemptions = new ArrayList<>();
+        OrderService orderService = new OrderService(
+                singleOrderRepository(order),
+                savingRedemptionRepository(savedRedemptions),
+                new FixedInvestorService(verifiedInvestor(distributorId)),
+                new CountingAuditService(new AtomicInteger()),
+                new CountingNotificationService(new AtomicInteger()),
+                mock(CybrillaClient.class),
+                null,
+                productSchemeRepository(),
+                approvedApprovalService(),
+                null
+        );
+
+        RedemptionRecord draft = orderService.createRedemptionDraft(
+                orderId, distributorId, WithdrawalRequest.WithdrawalMode.UNITS, new BigDecimal("250"), false);
+
+        assertThat(draft.getUnits()).isEqualByComparingTo(new BigDecimal("250"));
+        assertThat(draft.getAmount()).isNull();
+    }
+
+    @Test
+    void createRedemptionDraftFullRedemptionCopiesWholeHolding() {
+        // FIX 4: fullRedemption=true copies the order's amount AND units (value ignored).
+        UUID distributorId = UUID.randomUUID();
+        UUID orderId = UUID.randomUUID();
+        TransactionOrder order = new TransactionOrder();
+        order.setDistributorId(distributorId);
+        order.setInvestorId(UUID.randomUUID());
+        order.setProductSchemeId(UUID.randomUUID());
+        order.setExternalOrderId("mfp-external-1");
+        order.setAmount(new BigDecimal("25000"));
+        order.setUnits(new BigDecimal("1000"));
+        List<RedemptionRecord> savedRedemptions = new ArrayList<>();
+        OrderService orderService = new OrderService(
+                singleOrderRepository(order),
+                savingRedemptionRepository(savedRedemptions),
+                new FixedInvestorService(verifiedInvestor(distributorId)),
+                new CountingAuditService(new AtomicInteger()),
+                new CountingNotificationService(new AtomicInteger()),
+                mock(CybrillaClient.class),
+                null,
+                productSchemeRepository(),
+                approvedApprovalService(),
+                null
+        );
+
+        RedemptionRecord draft = orderService.createRedemptionDraft(
+                orderId, distributorId, WithdrawalRequest.WithdrawalMode.AMOUNT, null, true);
+
+        assertThat(draft.getAmount()).isEqualByComparingTo(new BigDecimal("25000"));
+        assertThat(draft.getUnits()).isEqualByComparingTo(new BigDecimal("1000"));
+    }
+
+    @Test
+    void createRedemptionDraftRejectsNonPositivePartialValue() {
+        // FIX 4: a non-full redemption with a missing/zero value is a 400 (IllegalArgumentException).
+        UUID distributorId = UUID.randomUUID();
+        UUID orderId = UUID.randomUUID();
+        TransactionOrder order = new TransactionOrder();
+        order.setDistributorId(distributorId);
+        order.setInvestorId(UUID.randomUUID());
+        order.setProductSchemeId(UUID.randomUUID());
+        order.setExternalOrderId("mfp-external-1");
+        order.setAmount(new BigDecimal("25000"));
+        OrderService orderService = new OrderService(
+                singleOrderRepository(order),
+                savingRedemptionRepository(new ArrayList<>()),
+                new FixedInvestorService(verifiedInvestor(distributorId)),
+                new CountingAuditService(new AtomicInteger()),
+                new CountingNotificationService(new AtomicInteger()),
+                mock(CybrillaClient.class),
+                null,
+                productSchemeRepository(),
+                approvedApprovalService(),
+                null
+        );
+
+        assertThatThrownBy(() -> orderService.createRedemptionDraft(
+                orderId, distributorId, WithdrawalRequest.WithdrawalMode.AMOUNT, BigDecimal.ZERO, false))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void submitRedemptionToProviderAssertsGateThenCallsProvider() {
+        UUID distributorId = UUID.randomUUID();
+        UUID investorId = UUID.randomUUID();
+        UUID orderId = UUID.randomUUID();
+        UUID redemptionId = UUID.randomUUID();
+        TransactionOrder order = new TransactionOrder();
+        order.setDistributorId(distributorId);
+        order.setInvestorId(investorId);
+        order.setProductSchemeId(UUID.randomUUID());
+        order.setExternalOrderId("mfp-external-1");
+        order.setAmount(BigDecimal.TEN);
+        RedemptionRecord draft = new RedemptionRecord();
+        org.springframework.test.util.ReflectionTestUtils.setField(draft, "id", redemptionId);
+        draft.setOrderId(orderId);
+        draft.setInvestorId(investorId);
+        draft.setRedemptionStatus(RedemptionStatus.PENDING_INVESTOR_ACTION);
+        draft.setAmount(BigDecimal.TEN);
+
+        List<RedemptionRecord> savedRedemptions = new ArrayList<>();
+        CybrillaClient cybrillaClient = mock(CybrillaClient.class);
+        when(cybrillaClient.createRedemption(any(), any(), any())).thenReturn("external-redemption-1");
+        TransactionApprovalService approvalService = approvedApprovalService();
+
+        OrderService orderService = new OrderService(
+                orderByIdRepository(order),
+                findByIdRedemptionRepository(draft, savedRedemptions),
+                new FixedInvestorService(verifiedInvestor(distributorId)),
+                new CountingAuditService(new AtomicInteger()),
+                new CountingNotificationService(new AtomicInteger()),
+                cybrillaClient,
+                null,
+                productSchemeRepository(),
+                approvalService,
+                null
+        );
+
+        RedemptionRecord submitted = orderService.submitRedemptionToProvider(redemptionId);
+
+        // The gate is consulted (and consumed) BEFORE the provider redemption fires.
+        verify(approvalService).assertApprovedAndConsume(eq(redemptionId), any());
+        verify(cybrillaClient).createRedemption(any(), any(), any());
+        assertThat(submitted.getExternalRedemptionId()).isEqualTo("external-redemption-1");
+        assertThat(submitted.getRedemptionStatus()).isEqualTo(RedemptionStatus.SUBMITTED);
+    }
+
+    @Test
+    void submitRedemptionToProviderBlockedByGateNeverCallsProvider() {
+        UUID distributorId = UUID.randomUUID();
+        UUID investorId = UUID.randomUUID();
+        UUID orderId = UUID.randomUUID();
+        UUID redemptionId = UUID.randomUUID();
+        TransactionOrder order = new TransactionOrder();
+        order.setDistributorId(distributorId);
+        order.setInvestorId(investorId);
+        order.setProductSchemeId(UUID.randomUUID());
+        order.setExternalOrderId("mfp-external-1");
+        order.setAmount(BigDecimal.TEN);
+        RedemptionRecord draft = new RedemptionRecord();
+        org.springframework.test.util.ReflectionTestUtils.setField(draft, "id", redemptionId);
+        draft.setOrderId(orderId);
+        draft.setInvestorId(investorId);
+        draft.setRedemptionStatus(RedemptionStatus.PENDING_INVESTOR_ACTION);
+
+        CybrillaClient cybrillaClient = mock(CybrillaClient.class);
+        TransactionApprovalService approvalService = mock(TransactionApprovalService.class);
+        doThrow(new IllegalStateException(
+                "Investor 2FA approval required: no approved approval exists for this transaction."))
+                .when(approvalService).assertApprovedAndConsume(any(), any());
+
+        OrderService orderService = new OrderService(
+                orderByIdRepository(order),
+                findByIdRedemptionRepository(draft, new ArrayList<>()),
+                new FixedInvestorService(verifiedInvestor(distributorId)),
+                new CountingAuditService(new AtomicInteger()),
+                new CountingNotificationService(new AtomicInteger()),
+                cybrillaClient,
+                null,
+                productSchemeRepository(),
+                approvalService,
+                null
+        );
+
+        assertThatThrownBy(() -> orderService.submitRedemptionToProvider(redemptionId))
+                .isInstanceOf(IllegalStateException.class);
+
+        // Gate blocked → the real Cybrilla redemption must never fire.
+        verify(cybrillaClient, never()).createRedemption(any(), any(), any());
     }
 
     @Test
@@ -259,6 +503,8 @@ class OrderServiceTest {
                 null,
                 null,
                 new CapturingAuditService(auditDetails),
+                null,
+                null,
                 null,
                 null,
                 null,
@@ -303,7 +549,9 @@ class OrderServiceTest {
                 new CountingNotificationService(notificationCalls),
                 failingCybrillaClient(externalCreateCalls, 3),
                 transactionManager,
-                productSchemeRepository()
+                productSchemeRepository(),
+                null,
+                null
         );
 
         assertThatThrownBy(() -> orderService.createOrders(request, distributorId))
@@ -315,6 +563,13 @@ class OrderServiceTest {
         assertThat(externalCreateCalls.get()).isEqualTo(3);
         assertThat(auditCalls.get()).isEqualTo(2);
         assertThat(notificationCalls.get()).isEqualTo(2);
+    }
+
+    /** A 2FA engine whose gate passes (challenge APPROVED) so the provider submit proceeds. */
+    private TransactionApprovalService approvedApprovalService() {
+        TransactionApprovalService service = mock(TransactionApprovalService.class);
+        doNothing().when(service).assertApprovedAndConsume(any(), any());
+        return service;
     }
 
     private static class FixedInvestorService extends InvestorService {
@@ -472,12 +727,33 @@ class OrderServiceTest {
         );
     }
 
-    private CybrillaClient redemptionCybrillaClient() {
-        return (CybrillaClient) Proxy.newProxyInstance(
-                CybrillaClient.class.getClassLoader(),
-                new Class<?>[]{CybrillaClient.class},
+    /** Order repository that returns the supplied order for any findById. */
+    private TransactionOrderRepository orderByIdRepository(TransactionOrder order) {
+        return (TransactionOrderRepository) Proxy.newProxyInstance(
+                TransactionOrderRepository.class.getClassLoader(),
+                new Class<?>[]{TransactionOrderRepository.class},
                 (proxy, method, args) -> switch (method.getName()) {
-                    case "createRedemption" -> "external-redemption-1";
+                    case "findById" -> Optional.of(order);
+                    case "save" -> args[0];
+                    default -> defaultValue(method.getReturnType());
+                }
+        );
+    }
+
+    /** Redemption repository whose findById returns the drafted record (for submit). */
+    private RedemptionRecordRepository findByIdRedemptionRepository(
+            RedemptionRecord draft, List<RedemptionRecord> savedRedemptions) {
+        return (RedemptionRecordRepository) Proxy.newProxyInstance(
+                RedemptionRecordRepository.class.getClassLoader(),
+                new Class<?>[]{RedemptionRecordRepository.class},
+                (proxy, method, args) -> switch (method.getName()) {
+                    case "findById" -> Optional.of(draft);
+                    case "save" -> {
+                        RedemptionRecord record = (RedemptionRecord) args[0];
+                        savedRedemptions.add(record);
+                        yield record;
+                    }
+                    case "findByOrderId" -> List.of();
                     default -> defaultValue(method.getReturnType());
                 }
         );

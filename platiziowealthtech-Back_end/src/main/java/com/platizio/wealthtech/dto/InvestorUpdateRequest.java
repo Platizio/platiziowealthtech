@@ -1,6 +1,7 @@
 package com.platizio.wealthtech.dto;
 
 import com.platizio.wealthtech.domain.InvestorRelationshipType;
+import com.platizio.wealthtech.validation.MobileFormat;
 import com.platizio.wealthtech.validation.PanFormat;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
@@ -9,6 +10,7 @@ import java.util.UUID;
 
 public record InvestorUpdateRequest(
         String fullName,
+        @Pattern(regexp = MobileFormat.INDIAN_MOBILE_REGEX, message = MobileFormat.INDIAN_MOBILE_MESSAGE)
         String mobileNumber,
         String email,
         @Size(min = 10, max = 10, message = "PAN must be exactly 10 characters")

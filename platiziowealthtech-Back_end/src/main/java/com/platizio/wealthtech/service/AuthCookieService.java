@@ -21,25 +21,74 @@ public class AuthCookieService {
 
     private final String cookieName;
     private final String refreshCookieName;
+    private final String investorCookieName;
     private final boolean secure;
     private final String sameSite;
     private final long expirationMs;
     private final long refreshExpirationMs;
+    private final long investorExpirationMs;
 
     public AuthCookieService(
             @Value("${app.auth.cookie-name:access_token}") String cookieName,
             @Value("${app.auth.refresh-cookie-name:refresh_token}") String refreshCookieName,
+            @Value("${app.auth.investor-cookie-name:investor_access_token}") String investorCookieName,
             @Value("${app.auth.cookie-secure}") boolean secure,
             @Value("${app.auth.cookie-same-site:Lax}") String sameSite,
             @Value("${jwt.expiration-ms}") long expirationMs,
-            @Value("${app.auth.refresh-token-expiration-ms}") long refreshExpirationMs
+            @Value("${app.auth.refresh-token-expiration-ms}") long refreshExpirationMs,
+            @Value("${app.auth.investor-access-expiration-ms:3600000}") long investorExpirationMs
     ) {
         this.cookieName = cookieName;
         this.refreshCookieName = refreshCookieName;
+        this.investorCookieName = investorCookieName;
         this.secure = secure;
         this.sameSite = resolveSameSite(sameSite, secure);
         this.expirationMs = expirationMs;
         this.refreshExpirationMs = refreshExpirationMs;
+        this.investorExpirationMs = investorExpirationMs;
+    }
+
+    public String investorCookieName() {
+        return investorCookieName;
+    }
+
+    /** Read the investor access token from its dedicated cookie (or Bearer header). */
+    public Optional<String> readInvestorAccessToken(HttpServletRequest request) {
+        String authHeader = request.getHeader("Authorization");
+        if (authHeader != null && authHeader.startsWith("Bearer ")) {
+            return Optional.of(authHeader.substring(7));
+        }
+        Cookie[] cookies = request.getCookies();
+        if (cookies == null) {
+            return Optional.empty();
+        }
+        return Arrays.stream(cookies)
+                .filter(cookie -> investorCookieName.equals(cookie.getName()))
+                .map(Cookie::getValue)
+                .filter(value -> value != null && !value.isBlank())
+                .findFirst();
+    }
+
+    public void writeInvestorAccessToken(HttpServletResponse response, String token) {
+        ResponseCookie cookie = ResponseCookie.from(investorCookieName, token)
+                .httpOnly(true)
+                .secure(secure)
+                .sameSite(sameSite)
+                .path("/")
+                .maxAge(Duration.ofMillis(investorExpirationMs))
+                .build();
+        response.addHeader(HttpHeaders.SET_COOKIE, cookie.toString());
+    }
+
+    public void clearInvestorAccessToken(HttpServletResponse response) {
+        ResponseCookie cookie = ResponseCookie.from(investorCookieName, "")
+                .httpOnly(true)
+                .secure(secure)
+                .sameSite(sameSite)
+                .path("/")
+                .maxAge(Duration.ZERO)
+                .build();
+        response.addHeader(HttpHeaders.SET_COOKIE, cookie.toString());
     }
 
     private static String resolveSameSite(String configured, boolean secure) {

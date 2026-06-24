@@ -4,10 +4,15 @@ import com.platizio.wealthtech.domain.*;
 import com.platizio.wealthtech.dto.BulkOrderCreateRequest;
 import com.platizio.wealthtech.dto.OrderCreateRequest;
 import com.platizio.wealthtech.dto.SipCancelRequest;
+import com.platizio.wealthtech.dto.WithdrawalRequest;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.platizio.wealthtech.integration.CybrillaApiException;
 import com.platizio.wealthtech.integration.CybrillaClient;
 import com.platizio.wealthtech.integration.CybrillaUnavailableException;
+import com.platizio.wealthtech.domain.InvestorAccount;
+import com.platizio.wealthtech.domain.TransactionApprovalChallenge;
+import com.platizio.wealthtech.dto.OtpRequestResponse;
+import com.platizio.wealthtech.repository.InvestorAccountRepository;
 import com.platizio.wealthtech.repository.ProductSchemeRepository;
 import com.platizio.wealthtech.repository.RedemptionRecordRepository;
 import com.platizio.wealthtech.repository.TransactionOrderRepository;
@@ -52,6 +57,8 @@ public class OrderService {
     private final CybrillaClient cybrillaClient;
     private final TransactionTemplate transactionTemplate;
     private final ProductSchemeRepository productSchemeRepository;
+    private final TransactionApprovalService transactionApprovalService;
+    private final InvestorAccountRepository investorAccountRepository;
 
     public OrderService(
             TransactionOrderRepository transactionOrderRepository,
@@ -61,7 +68,9 @@ public class OrderService {
             NotificationService notificationService,
             CybrillaClient cybrillaClient,
             PlatformTransactionManager transactionManager,
-            ProductSchemeRepository productSchemeRepository
+            ProductSchemeRepository productSchemeRepository,
+            TransactionApprovalService transactionApprovalService,
+            InvestorAccountRepository investorAccountRepository
     ) {
         this.transactionOrderRepository = transactionOrderRepository;
         this.redemptionRecordRepository = redemptionRecordRepository;
@@ -71,6 +80,8 @@ public class OrderService {
         this.cybrillaClient = cybrillaClient;
         this.transactionTemplate = transactionManager == null ? null : perOrderTransactionTemplate(transactionManager);
         this.productSchemeRepository = productSchemeRepository;
+        this.transactionApprovalService = transactionApprovalService;
+        this.investorAccountRepository = investorAccountRepository;
     }
 
     public List<TransactionOrder> listOrdersByInvestor(UUID investorId) {
@@ -622,13 +633,126 @@ public class OrderService {
     }
 
     /**
-     * Intentionally not {@code @Transactional} (mirrors {@link #createOrder}): the FP pre-flight
-     * {@code ensureMfInvestmentAccount} and {@code cybrillaClient.createRedemption} are a 30–90s
-     * provider round-trip. A surrounding transaction would hold a DB connection for that entire
-     * round-trip. The only DB write here is the single {@code redemptionRecordRepository.save},
-     * so there is no multi-write atomicity requirement to protect.
+     * Distributor-initiated request that the investor approve a purchase / SIP order
+     * with 2FA (Phase-2 plan §"Endpoint contract" {@code POST /orders/{id}/request-investor-approval}).
+     * Ownership-checked, then freezes a {@link TransactionApprovalChallenge} against the
+     * order's resolved {@link InvestorAccount}, flips the order to
+     * {@link OrderStatus#PENDING_INVESTOR_ACTION}, and audits. NEVER sends or returns an
+     * OTP — the investor requests the code themselves from the Approval Center; this only
+     * creates the challenge.
      */
-    public RedemptionRecord createRedemption(UUID orderId, UUID actorId) {
+    @Transactional
+    public ApprovalRequestResult requestInvestorApproval(UUID orderId, JwtAuthPrincipal principal) {
+        TransactionOrder order = transactionOrderRepository.findById(orderId)
+                .orElseThrow(() -> new EntityNotFoundException("Order not found"));
+        assertOrderOwnership(order.getDistributorId(), principal);
+
+        InvestorAccount account = resolveInvestorAccount(order.getInvestorId());
+        TransactionType challengeType = challengeTypeFor(order);
+
+        TransactionApprovalChallenge challenge =
+                transactionApprovalService.createChallenge(orderId, challengeType, account.getId());
+
+        order.setOrderStatus(OrderStatus.PENDING_INVESTOR_ACTION);
+        transactionOrderRepository.save(order);
+
+        auditService.log("ORDER", orderId, "INVESTOR_APPROVAL_REQUESTED", principal.getDistributorId(),
+                "{\"challengeId\":\"" + challenge.getId() + "\",\"type\":\"" + challengeType
+                        + "\",\"investorAccountId\":\"" + account.getId() + "\"}");
+        notificationService.createForDistributor(order.getDistributorId(), order.getInvestorId(),
+                NotificationType.PAYMENT_PENDING, "Approval requested",
+                "Investor 2FA approval requested for this order.");
+
+        // Challenge summary only — NEVER the OTP.
+        return new ApprovalRequestResult(
+                challenge.getId(),
+                orderId,
+                challengeType.name(),
+                challenge.getStatus().name(),
+                challenge.getMaskedDestination());
+    }
+
+    /**
+     * Distributor resend of the approval link/code for an existing challenge
+     * (Phase-2 plan §"Endpoint contract" {@code POST /orders/{id}/resend-approval-link}).
+     * Ownership-checked, then delegates to
+     * {@link TransactionApprovalService#requestApprovalOtp} with {@code isDistributorResend=true}.
+     * The returned {@link OtpRequestResponse} already hides the live code (DF-13).
+     */
+    @Transactional
+    public OtpRequestResponse resendApprovalLink(UUID orderId, UUID challengeId, JwtAuthPrincipal principal) {
+        TransactionOrder order = transactionOrderRepository.findById(orderId)
+                .orElseThrow(() -> new EntityNotFoundException("Order not found"));
+        assertOrderOwnership(order.getDistributorId(), principal);
+        OtpRequestResponse response = transactionApprovalService.requestApprovalOtp(
+                challengeId, principal.getDistributorId(), true);
+        auditService.log("ORDER", orderId, "INVESTOR_APPROVAL_LINK_RESENT", principal.getDistributorId(),
+                "{\"challengeId\":\"" + challengeId + "\"}");
+        return response;
+    }
+
+    private InvestorAccount resolveInvestorAccount(UUID investorId) {
+        if (investorId == null) {
+            throw new IllegalStateException(
+                    "This order has no investor; cannot request investor approval.");
+        }
+        return investorAccountRepository.findByInvestorId(investorId)
+                .orElseThrow(() -> new EntityNotFoundException(
+                        "No self-service investor account is linked to this order's investor. "
+                                + "The investor must register and confirm their profile before approving."));
+    }
+
+    /** Maps an order's transaction type to the approval challenge type (PURCHASE | SIP). */
+    private static TransactionType challengeTypeFor(TransactionOrder order) {
+        return order.getTransactionType() == TransactionType.SIP
+                ? TransactionType.SIP
+                : TransactionType.PURCHASE;
+    }
+
+    /** Challenge summary for the distributor request endpoint — NEVER carries an OTP. */
+    public record ApprovalRequestResult(
+            UUID challengeId,
+            UUID orderId,
+            String transactionType,
+            String status,
+            String maskedDestination) {}
+
+    /**
+     * GATE C, part 1 — draft only. Persists the {@link RedemptionRecord} in
+     * {@link RedemptionStatus#PENDING_INVESTOR_ACTION} with NO provider call, so the
+     * investor can then authorize it (2FA) before any money moves. Returns the draft;
+     * a {@link TransactionApprovalChallenge} is created against {@code saved.getId()}
+     * and, once APPROVED, {@link #submitRedemptionToProvider(UUID)} performs the real
+     * Cybrilla redemption (locked decision #2).
+     */
+    @Transactional
+    public RedemptionRecord createRedemptionDraft(UUID orderId, UUID actorId) {
+        // No partial spec supplied (e.g. distributor "request to distributor" path which
+        // carries no WithdrawalRequest): redeem the whole holding, preserving prior behavior.
+        return createRedemptionDraft(orderId, actorId, null, null, true);
+    }
+
+    /**
+     * GATE C, part 1 — draft only, honoring the investor-requested redemption shape.
+     * Persists the {@link RedemptionRecord} in {@link RedemptionStatus#PENDING_INVESTOR_ACTION}
+     * with NO provider call. When {@code fullRedemption} is true (or no {@code value} is given)
+     * the whole holding is redeemed; otherwise the draft records exactly the requested
+     * {@code value} as an AMOUNT or UNITS partial (the other dimension is left null so the
+     * provider quotes it). The frozen 2FA snapshot is computed from this draft, so the
+     * investor approves the exact partial they requested.
+     *
+     * @param mode           AMOUNT or UNITS; ignored when fullRedemption is true
+     * @param value          rupee amount or unit count; must be &gt; 0 unless full-redemption
+     * @param fullRedemption when true, redeem the entire order holding
+     * @throws IllegalArgumentException (→ 400) when a non-full redemption omits a positive value
+     */
+    @Transactional
+    public RedemptionRecord createRedemptionDraft(
+            UUID orderId,
+            UUID actorId,
+            WithdrawalRequest.WithdrawalMode mode,
+            BigDecimal value,
+            boolean fullRedemption) {
         TransactionOrder order = transactionOrderRepository.findById(orderId)
                 .orElseThrow(() -> new EntityNotFoundException("Order not found"));
         if (!StringUtils.hasText(order.getExternalOrderId())) {
@@ -636,33 +760,96 @@ public class OrderService {
                     "This holding has no Fintech Primitives purchase id. Redemption requires a purchase that was "
                             + "submitted through Cybrilla POA (not demo-only local rows).");
         }
-        Investor investor = investorService.ensureMfInvestmentAccount(order.getInvestorId());
-        ProductScheme productScheme = getProductSchemeById(order.getProductSchemeId());
 
         RedemptionRecord record = new RedemptionRecord();
         record.setOrderId(orderId);
         record.setInvestorId(order.getInvestorId());
-        record.setRedemptionStatus(RedemptionStatus.CREATED);
-        record.setAmount(order.getAmount());
-        record.setUnits(order.getUnits());
-        record.setExternalRedemptionId(cybrillaClient.createRedemption(order, investor, productScheme));
+        record.setRedemptionStatus(RedemptionStatus.PENDING_INVESTOR_ACTION);
+
+        if (fullRedemption) {
+            // Whole-holding redemption: copy the order's amount and units.
+            record.setAmount(order.getAmount());
+            record.setUnits(order.getUnits());
+        } else {
+            if (value == null || value.compareTo(BigDecimal.ZERO) <= 0) {
+                throw new IllegalArgumentException(
+                        "A withdrawal value greater than 0 is required unless redeeming the full holding.");
+            }
+            if (mode == WithdrawalRequest.WithdrawalMode.UNITS) {
+                record.setUnits(value);
+            } else {
+                // Default to AMOUNT when mode is AMOUNT or unspecified.
+                record.setAmount(value);
+            }
+        }
 
         RedemptionRecord saved = redemptionRecordRepository.save(record);
-        auditService.log("REDEMPTION", saved.getId(), "REDEMPTION_CREATED", actorId, "{}");
-        notificationService.createForDistributor(order.getDistributorId(), order.getInvestorId(), NotificationType.REDEMPTION_SUBMITTED, "Redemption submitted", "Redemption flow has started.");
+        auditService.log("REDEMPTION", saved.getId(), "REDEMPTION_DRAFTED", actorId, "{}");
+        notificationService.createForDistributor(order.getDistributorId(), order.getInvestorId(), NotificationType.REDEMPTION_SUBMITTED, "Redemption pending approval", "Redemption draft created and waiting for investor 2FA approval.");
         return saved;
     }
 
     /**
+     * GATE C, part 2 — gated provider submit. {@code @Transactional} at the method
+     * boundary so the gate's CONSUMED flip joins THIS transaction and rolls back together
+     * with the redemption row if {@code cybrillaClient.createRedemption} throws — matching
+     * the retry-safe guarantee documented for Gate A/B and
+     * {@link TransactionApprovalService#assertApprovedAndConsume}: a provider failure leaves
+     * the challenge APPROVED for a genuine retry, while a successful call commits CONSUMED
+     * so any replay is blocked (exactly-once). {@code assertApprovedAndConsume} is the FIRST
+     * provider-touching statement: it throws (→ 400) unless a live APPROVED 2FA challenge
+     * exists for this redemption whose frozen snapshot still matches, then burns it. Only
+     * then does the real Cybrilla redemption fire and the status flips.
+     */
+    @Transactional
+    public RedemptionRecord submitRedemptionToProvider(UUID redemptionId) {
+        RedemptionRecord record = redemptionRecordRepository.findById(redemptionId)
+                .orElseThrow(() -> new EntityNotFoundException("Redemption not found"));
+        TransactionOrder order = transactionOrderRepository.findById(record.getOrderId())
+                .orElseThrow(() -> new EntityNotFoundException("Order not found"));
+        if (!StringUtils.hasText(order.getExternalOrderId())) {
+            throw new IllegalStateException(
+                    "This holding has no Fintech Primitives purchase id. Redemption requires a purchase that was "
+                            + "submitted through Cybrilla POA (not demo-only local rows).");
+        }
+
+        // GATE C: atomic 2FA gate before the provider write (retry-safe + exactly-once).
+        transactionApprovalService.assertApprovedAndConsume(
+                record.getId(),
+                ConsentRecordService.sha256(transactionApprovalService.renderRedemptionSnapshot(record)));
+
+        Investor investor = investorService.ensureMfInvestmentAccount(order.getInvestorId());
+        ProductScheme productScheme = getProductSchemeById(order.getProductSchemeId());
+
+        record.setExternalRedemptionId(cybrillaClient.createRedemption(order, investor, productScheme));
+        record.setRedemptionStatus(RedemptionStatus.SUBMITTED);
+
+        RedemptionRecord saved = redemptionRecordRepository.save(record);
+        auditService.log("REDEMPTION", saved.getId(), "REDEMPTION_SUBMITTED", order.getInvestorId(), "{}");
+        notificationService.createForDistributor(order.getDistributorId(), order.getInvestorId(), NotificationType.REDEMPTION_SUBMITTED, "Redemption submitted", "Redemption submitted to Fintech Primitives after investor approval.");
+        return saved;
+    }
+
+    /**
+     * Distributor-initiated redemption draft (the non-2FA "request to distributor"
+     * alternative, locked decision #2). Creates the draft only; the actual provider
+     * redemption still requires a 2FA-approved {@link #submitRedemptionToProvider(UUID)}.
+     * No longer performs a provider write directly (gate principle).
+     */
+    public RedemptionRecord createRedemption(UUID orderId, UUID actorId) {
+        return createRedemptionDraft(orderId, actorId);
+    }
+
+    /**
      * Ownership-checked variant: rejects callers that are not the order's distributor (or ADMIN)
-     * BEFORE calling the FP provider. Closes BUG-003 — the previous path used actorId only for the
-     * audit log, leaving a real IDOR.
+     * BEFORE touching anything. Closes BUG-003. Creates a draft only — no provider write
+     * fires without the 2FA-gated {@link #submitRedemptionToProvider(UUID)}.
      */
     public RedemptionRecord createRedemption(UUID orderId, JwtAuthPrincipal principal) {
         TransactionOrder order = transactionOrderRepository.findById(orderId)
                 .orElseThrow(() -> new EntityNotFoundException("Order not found"));
         assertOrderOwnership(order.getDistributorId(), principal);
-        return createRedemption(orderId, principal.getDistributorId());
+        return createRedemptionDraft(orderId, principal.getDistributorId());
     }
 
     private static final Set<OrderStatus> CANCELLABLE_SIP_STATUSES = Set.of(

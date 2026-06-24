@@ -121,6 +121,8 @@ public class AuthService {
         return switch (purpose) {
             case LOGIN -> registered;
             case SIGNUP -> !registered;
+            // Investor-portal + transaction-approval purposes are handled elsewhere, never here.
+            case INVESTOR_LOGIN, INVESTOR_SIGNUP, TRANSACTION_APPROVAL -> false;
         };
     }
 

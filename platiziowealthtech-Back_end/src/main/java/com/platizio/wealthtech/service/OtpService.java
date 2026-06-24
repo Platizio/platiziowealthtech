@@ -14,11 +14,10 @@ import java.util.HexFormat;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
+import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.core.env.Environment;
-import org.springframework.core.env.Profiles;
 import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -48,7 +47,6 @@ public class OtpService {
 
     private final EmailOtpRepository otpRepository;
     private final EmailService emailService;
-    private final Environment environment;
     private final SecureRandom random = new SecureRandom();
 
     private final int length;
@@ -56,33 +54,56 @@ public class OtpService {
     private final int maxAttempts;
     private final long resendCooldownSeconds;
 
+    /**
+     * When true (and email delivery is disabled) the live code is echoed in the
+     * API response so developers can test the flow without SMTP. Defaults to
+     * {@code false}; enabled only via {@code app.otp.expose-dev-code} on the
+     * local profile. It must stay {@code false} in every deployed/demo
+     * environment — see DF-13.
+     */
+    private final boolean exposeDevCode;
+
     public OtpService(
             EmailOtpRepository otpRepository,
             EmailService emailService,
-            Environment environment,
             @Value("${app.otp.length:6}") int length,
             @Value("${app.otp.expiration-minutes:5}") long expirationMinutes,
             @Value("${app.otp.max-attempts:5}") int maxAttempts,
-            @Value("${app.otp.resend-cooldown-seconds:30}") long resendCooldownSeconds
+            @Value("${app.otp.resend-cooldown-seconds:30}") long resendCooldownSeconds,
+            @Value("${app.otp.expose-dev-code:false}") boolean exposeDevCode
     ) {
         this.otpRepository = otpRepository;
         this.emailService = emailService;
-        this.environment = environment;
         this.length = Math.max(4, length);
         this.expirationMinutes = expirationMinutes;
         this.maxAttempts = Math.max(1, maxAttempts);
         this.resendCooldownSeconds = resendCooldownSeconds;
+        this.exposeDevCode = exposeDevCode;
     }
 
     @Transactional
     public OtpRequestResponse requestOtp(String rawEmail, OtpPurpose purpose) {
+        return requestOtp(rawEmail, purpose, null);
+    }
+
+    /**
+     * Reference-scoped variant. When {@code referenceId} is non-null, the cooldown,
+     * invalidation and storage are all scoped to {@code (email, purpose, referenceId)}
+     * so a second concurrent challenge for the same email+purpose cannot invalidate
+     * or be confused with this one. {@code null} reproduces the legacy login/signup
+     * behaviour (purpose alone isolates those flows).
+     */
+    @Transactional
+    public OtpRequestResponse requestOtp(String rawEmail, OtpPurpose purpose, UUID referenceId) {
         String email = normalizeEmail(rawEmail);
         if (!isValidEmail(email)) {
             throw new IllegalArgumentException("Please enter a valid email address.");
         }
 
         OffsetDateTime now = OffsetDateTime.now();
-        List<EmailOtp> active = otpRepository.findByEmailAndPurposeAndConsumedAtIsNull(email, purpose);
+        List<EmailOtp> active = referenceId == null
+                ? otpRepository.findByEmailAndPurposeAndConsumedAtIsNull(email, purpose)
+                : otpRepository.findByEmailAndPurposeAndReferenceIdAndConsumedAtIsNull(email, purpose, referenceId);
 
         // Resend cooldown: block if the most recent code is still within the window.
         active.stream()
@@ -105,6 +126,7 @@ public class OtpService {
         EmailOtp otp = new EmailOtp();
         otp.setEmail(email);
         otp.setPurpose(purpose);
+        otp.setReferenceId(referenceId);
         otp.setCodeHash(hash(email, code));
         otp.setExpiresAt(now.plusMinutes(expirationMinutes));
         otp.setAttempts(0);
@@ -115,7 +137,7 @@ public class OtpService {
             logger.info("OTP for {} (purpose={}) is {} (email delivery disabled)", email, purpose, code);
         }
 
-        String devCode = (!delivered && isLocalProfile()) ? code : null;
+        String devCode = (!delivered && exposeDevCode) ? code : null;
         return new OtpRequestResponse(
                 GENERIC_SENT_MESSAGE,
                 expirationMinutes * 60,
@@ -129,11 +151,23 @@ public class OtpService {
      */
     @Transactional
     public void verify(String rawEmail, OtpPurpose purpose, String rawCode) {
+        verify(rawEmail, purpose, rawCode, null);
+    }
+
+    /**
+     * Reference-scoped verify. When {@code referenceId} is non-null only the code
+     * bound to that reference can match — a sibling challenge's code (same
+     * email+purpose, different reference) is never returned, closing cross-consume.
+     */
+    @Transactional
+    public void verify(String rawEmail, OtpPurpose purpose, String rawCode, UUID referenceId) {
         String email = normalizeEmail(rawEmail);
         String code = rawCode == null ? "" : rawCode.trim();
 
-        EmailOtp otp = otpRepository
-                .findFirstByEmailAndPurposeAndConsumedAtIsNullOrderByCreatedAtDesc(email, purpose)
+        EmailOtp otp = (referenceId == null
+                ? otpRepository.findFirstByEmailAndPurposeAndConsumedAtIsNullOrderByCreatedAtDesc(email, purpose)
+                : otpRepository.findFirstByEmailAndPurposeAndReferenceIdAndConsumedAtIsNullOrderByCreatedAtDesc(
+                        email, purpose, referenceId))
                 .orElseThrow(() -> new BadCredentialsException(INVALID_CODE_MESSAGE));
 
         OffsetDateTime now = OffsetDateTime.now();
@@ -168,7 +202,15 @@ public class OtpService {
     }
 
     private String buildEmailBody(String code, OtpPurpose purpose) {
-        String action = purpose == OtpPurpose.SIGNUP ? "complete your sign up" : "sign in";
+        boolean signup = purpose == OtpPurpose.SIGNUP || purpose == OtpPurpose.INVESTOR_SIGNUP;
+        String action;
+        if (purpose == OtpPurpose.TRANSACTION_APPROVAL) {
+            action = "approve your transaction";
+        } else if (signup) {
+            action = "complete your sign up";
+        } else {
+            action = "sign in";
+        }
         return """
                 <div style="font-family:Arial,Helvetica,sans-serif;max-width:480px;margin:auto;color:#0B1B3E">
                   <h2 style="margin-bottom:4px">Platizio</h2>
@@ -192,10 +234,6 @@ public class OtpService {
 
     private boolean isValidEmail(String email) {
         return email.matches("^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$");
-    }
-
-    private boolean isLocalProfile() {
-        return environment.acceptsProfiles(Profiles.of("local"));
     }
 
     private boolean constantTimeEquals(String a, String b) {

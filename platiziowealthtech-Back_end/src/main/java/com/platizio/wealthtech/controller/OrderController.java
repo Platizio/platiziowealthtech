@@ -8,6 +8,7 @@ import com.platizio.wealthtech.dto.BulkOrderExecutionPlatform;
 import com.platizio.wealthtech.dto.BulkOrderCreateRequest;
 import com.platizio.wealthtech.dto.BulkOrderUploadResponse;
 import com.platizio.wealthtech.dto.OrderCreateRequest;
+import com.platizio.wealthtech.dto.OtpRequestResponse;
 import com.platizio.wealthtech.dto.SipCancelRequest;
 import com.platizio.wealthtech.security.AuthenticatedDistributorPrincipal;
 import com.platizio.wealthtech.security.JwtAuthPrincipal;
@@ -134,6 +135,29 @@ public class OrderController {
     @PostMapping("/{orderId}/redemption")
     public RedemptionRecord createRedemption(@PathVariable UUID orderId, Authentication auth) {
         return orderService.createRedemption(orderId, actorPrincipal(auth));
+    }
+
+    /**
+     * Distributor asks the investor to approve this purchase/SIP order with 2FA
+     * (Phase-2). Creates the approval challenge and flips the order to
+     * PENDING_INVESTOR_ACTION. The response is a challenge summary — NEVER an OTP.
+     */
+    @PostMapping("/{orderId}/request-investor-approval")
+    public OrderService.ApprovalRequestResult requestInvestorApproval(
+            @PathVariable UUID orderId, Authentication auth) {
+        return orderService.requestInvestorApproval(orderId, actorPrincipal(auth));
+    }
+
+    /**
+     * Distributor resends the approval link/code for an existing challenge (Phase-2).
+     * The response hides the live OTP code (DF-13).
+     */
+    @PostMapping("/{orderId}/resend-approval-link")
+    public OtpRequestResponse resendApprovalLink(
+            @PathVariable UUID orderId,
+            @RequestParam UUID challengeId,
+            Authentication auth) {
+        return orderService.resendApprovalLink(orderId, challengeId, actorPrincipal(auth));
     }
 
     @PostMapping("/{orderId}/cancel")

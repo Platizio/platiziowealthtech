@@ -86,7 +86,7 @@ public interface TransactionOrderRepository extends JpaRepository<TransactionOrd
             OffsetDateTime createdAtBefore);
 
     /**
-     * Used by DemoOrderAdvancer (@Profile("local") only) to find orders that
+     * Used by DemoOrderAdvancer (@Profile({"local","demo"}) + app.demo.order-advancer-enabled) to find orders that
      * have been sitting in a "waiting for provider" state long enough that the
      * demo scheduler should advance them. updatedAt is bumped by BaseEntity's
      * @PreUpdate hook on every save, so once OrderService.updateOrderStatus

@@ -92,7 +92,7 @@ class DashboardControllerTest {
 
     private static class RecordingPortfolioService extends PortfolioService {
         RecordingPortfolioService() {
-            super(null, null, null, null);
+            super(null, null, null, null, null);
         }
 
         @Override

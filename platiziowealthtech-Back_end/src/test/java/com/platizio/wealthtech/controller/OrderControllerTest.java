@@ -79,7 +79,7 @@ class OrderControllerTest {
         private UUID createOrdersDistributorId;
 
         RecordingOrderService() {
-            super(null, null, null, null, null, null, null, null);
+            super(null, null, null, null, null, null, null, null, null, null);
         }
 
         @Override

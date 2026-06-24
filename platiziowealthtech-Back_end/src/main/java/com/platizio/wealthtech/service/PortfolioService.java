@@ -13,11 +13,16 @@ import com.platizio.wealthtech.dto.PortfolioDto.PortfolioHoldingDto;
 import com.platizio.wealthtech.dto.PortfolioDto.PortfolioInvestorAumDto;
 import com.platizio.wealthtech.dto.PortfolioDto.PortfolioSchemeAumDto;
 import com.platizio.wealthtech.dto.PortfolioDto.PortfolioSummaryDto;
+import com.platizio.wealthtech.domain.BankVerificationStatus;
+import com.platizio.wealthtech.domain.InvestorBankAccount;
+import com.platizio.wealthtech.dto.HoldingResponse;
+import com.platizio.wealthtech.repository.InvestorBankAccountRepository;
 import com.platizio.wealthtech.repository.InvestorRepository;
 import com.platizio.wealthtech.repository.ProductSchemeRepository;
 import com.platizio.wealthtech.repository.TransactionOrderRepository;
 import com.platizio.wealthtech.service.ProductSchemeOrderSupport;
 import java.math.BigDecimal;
+import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -30,6 +35,7 @@ import java.util.UUID;
 import java.util.stream.Collectors;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.StringUtils;
 
 @Service
 public class PortfolioService {
@@ -43,17 +49,20 @@ public class PortfolioService {
     private final TransactionOrderRepository orderRepository;
     private final InvestorRepository investorRepository;
     private final ProductSchemeRepository schemeRepository;
+    private final InvestorBankAccountRepository bankAccountRepository;
     private final ObjectMapper objectMapper;
 
     public PortfolioService(
             TransactionOrderRepository orderRepository,
             InvestorRepository investorRepository,
             ProductSchemeRepository schemeRepository,
+            InvestorBankAccountRepository bankAccountRepository,
             ObjectMapper objectMapper
     ) {
         this.orderRepository = orderRepository;
         this.investorRepository = investorRepository;
         this.schemeRepository = schemeRepository;
+        this.bankAccountRepository = bankAccountRepository;
         this.objectMapper = objectMapper;
     }
 
@@ -206,6 +215,160 @@ public class PortfolioService {
         );
 
         return new PortfolioDto(summary, holdings, sipMandates, investors, schemes);
+    }
+
+    /**
+     * Investor-scoped holdings for the withdrawal disclosures (Phase-2 plan
+     * §"Endpoint contract" {@code GET /investor/holdings}; FR-HLD/FR-RED). Scoped by
+     * {@code investorId} (the authenticated investor's linked profile), NOT by
+     * distributor — so it never reuses or weakens the distributor-scoped
+     * {@link #getPortfolio(UUID, String)} path.
+     *
+     * <p>Valuation reuses the same scheme-metadata NAV the distributor UI reads
+     * (DF-07 canonical {@code nav}). When NAV or units are unavailable the row is
+     * surfaced with {@code dataQuality=UNAVAILABLE} and {@code currentValue=null} —
+     * never a fall back to the order amount or zero (locked decision #4). A NAV that
+     * carries no fresh as-of timestamp is reported {@code STALE}.
+     */
+    @Transactional(readOnly = true)
+    public List<HoldingResponse> getInvestorHoldings(UUID investorId) {
+        if (investorId == null) {
+            return List.of();
+        }
+        List<TransactionOrder> orders = orderRepository.findByInvestorId(investorId);
+
+        Set<UUID> schemeIds = orders.stream()
+                .map(TransactionOrder::getProductSchemeId)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toSet());
+        Map<UUID, ProductScheme> schemeMap = schemeIds.isEmpty()
+                ? Map.of()
+                : schemeRepository.findAllById(schemeIds).stream()
+                        .collect(Collectors.toMap(ProductScheme::getId, s -> s));
+
+        String maskedPayoutBank = resolveMaskedPayoutBank(investorId);
+
+        List<HoldingResponse> holdings = new ArrayList<>();
+        for (TransactionOrder order : orders) {
+            if (!isHoldingOrder(order)) {
+                continue;
+            }
+            ProductScheme scheme = order.getProductSchemeId() == null
+                    ? null : schemeMap.get(order.getProductSchemeId());
+            boolean schemeKnown = scheme != null;
+
+            NavSnapshot nav = resolveNav(scheme);
+            BigDecimal units = positiveOrNull(order.getUnits());
+
+            BigDecimal currentValue;
+            HoldingResponse.DataQuality quality;
+            if (units == null || nav.value == null) {
+                // FR-HLD-005 / locked decision #4: never fall back to order amount/zero.
+                currentValue = null;
+                quality = HoldingResponse.DataQuality.UNAVAILABLE;
+            } else if (nav.asOf == null) {
+                currentValue = nav.value.multiply(units);
+                quality = HoldingResponse.DataQuality.STALE;
+            } else {
+                currentValue = nav.value.multiply(units);
+                quality = HoldingResponse.DataQuality.OK;
+            }
+
+            boolean redeemable = schemeKnown
+                    && StringUtils.hasText(order.getExternalOrderId())
+                    && order.getOrderStatus() != OrderStatus.CANCELLED;
+
+            holdings.add(new HoldingResponse(
+                    order.getId(),
+                    order.getExternalOrderId(),
+                    order.getProductSchemeId(),
+                    schemeKnown ? ProductSchemeOrderSupport.displayName(scheme) : "Unknown fund",
+                    schemeKnown ? scheme.getAmcName() : "—",
+                    resolveCategory(order, scheme),
+                    units,
+                    BigDecimal.ZERO,
+                    nav.value,
+                    nav.asOf,
+                    currentValue,
+                    maskedPayoutBank,
+                    quality,
+                    redeemable));
+        }
+
+        holdings.sort(Comparator.comparing(HoldingResponse::orderId,
+                Comparator.nullsLast(Comparator.reverseOrder())));
+        return holdings;
+    }
+
+    /** Only settled, non-SIP-pending holdings are withdrawable disclosures. */
+    private static boolean isHoldingOrder(TransactionOrder order) {
+        if (order.getProductSchemeId() == null) {
+            return false;
+        }
+        boolean isSip = order.getTransactionType() == TransactionType.SIP;
+        if (isSip && order.getOrderStatus() != OrderStatus.ACTIVE) {
+            return false;
+        }
+        return AUM_STATUSES.contains(order.getOrderStatus());
+    }
+
+    private String resolveMaskedPayoutBank(UUID investorId) {
+        return bankAccountRepository.findByInvestorId(investorId).stream()
+                .filter(b -> b.getVerificationStatus() == BankVerificationStatus.VERIFIED)
+                .findFirst()
+                .or(() -> bankAccountRepository.findByInvestorId(investorId).stream().findFirst())
+                .map(PortfolioService::maskBank)
+                .orElse(null);
+    }
+
+    private static String maskBank(InvestorBankAccount bank) {
+        String account = bank.getAccountNumber();
+        String masked = "account on file";
+        if (StringUtils.hasText(account)) {
+            String trimmed = account.trim();
+            String last4 = trimmed.length() <= 4 ? trimmed : trimmed.substring(trimmed.length() - 4);
+            masked = "••••" + last4;
+        }
+        return StringUtils.hasText(bank.getBankName()) ? bank.getBankName() + " " + masked : masked;
+    }
+
+    private NavSnapshot resolveNav(ProductScheme scheme) {
+        if (scheme == null || !StringUtils.hasText(scheme.getMetadataJson())) {
+            return NavSnapshot.EMPTY;
+        }
+        try {
+            JsonNode root = objectMapper.readTree(scheme.getMetadataJson());
+            BigDecimal nav = decimalOrNull(root, "nav");
+            if (nav == null || nav.signum() <= 0) {
+                return NavSnapshot.EMPTY;
+            }
+            OffsetDateTime asOf = parseAsOf(root);
+            return new NavSnapshot(nav, asOf);
+        } catch (Exception ex) {
+            return NavSnapshot.EMPTY;
+        }
+    }
+
+    private static OffsetDateTime parseAsOf(JsonNode root) {
+        for (String field : List.of("nav_date", "navDate", "nav_as_of", "navAsOf", "as_of")) {
+            JsonNode node = root.path(field);
+            if (node.isTextual() && StringUtils.hasText(node.asText())) {
+                try {
+                    return OffsetDateTime.parse(node.asText().trim());
+                } catch (RuntimeException ignored) {
+                    return null;
+                }
+            }
+        }
+        return null;
+    }
+
+    private static BigDecimal positiveOrNull(BigDecimal value) {
+        return value != null && value.signum() > 0 ? value : null;
+    }
+
+    private record NavSnapshot(BigDecimal value, OffsetDateTime asOf) {
+        private static final NavSnapshot EMPTY = new NavSnapshot(null, null);
     }
 
     private static String resolveSipSetupStatus(TransactionOrder order) {

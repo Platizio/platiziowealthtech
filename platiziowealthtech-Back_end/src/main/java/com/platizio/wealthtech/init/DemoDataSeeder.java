@@ -7,30 +7,29 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
 /**
- * Re-inserts the demo seed rows that V34__remove_demo_seed.sql wipes out.
+ * Seeds the showcase demo data (Bob Investor, his bank account, five
+ * transaction orders, a redemption, a notification, the Charlie lead +
+ * interaction, the Alice signup audit event, the a@a.com Test Distributor and
+ * the additional showcase investors) so the dashboard has something to show.
  *
- * <p>V1, V10 and V23 historically inserted demo data (Bob Investor, his bank
- * account, five transaction orders, a redemption, a notification, the
- * Charlie lead + interaction, the Alice signup audit event, and the
- * a@a.com Test Distributor) so the dashboard had something to show during
- * frontend development. That pollution must never reach production, so V34
- * deletes the rows in every environment after migrations run.
+ * <p>Gated by {@code @Profile({"local", "demo"})}: it runs on the developer's
+ * local profile and on the dedicated {@code demo} profile, but NOT on
+ * production or any other deployed profile, so production stays clean. Rows are
+ * inserted with {@code INSERT ... ON CONFLICT DO NOTHING} (idempotent across
+ * boots).
  *
- * <p>On local dev the developer still wants the demo state, so this
- * CommandLineRunner — gated by {@code @Profile("local")} — re-inserts the
- * exact same rows (same UUIDs as the originating migrations) using
- * {@code INSERT ... ON CONFLICT DO NOTHING}, making it idempotent across
- * boots.
+ * <p>Note: the base seed migration {@code V3__seed_data.sql} also inserts a
+ * subset of these rows on every profile. Removing that demo data from
+ * production is tracked separately as DF-08 (a forward {@code DELETE}
+ * migration); this seeder only adds the richer showcase state for the
+ * local/demo dashboards.
  *
- * <p>Production deploys set {@code SPRING_PROFILES_ACTIVE=production}, so
- * this component is not instantiated there and the database stays clean.
- *
- * <p>Note on Alice (d9b2d63d-...) and the three product schemes: those are
- * canonical demo entities the codebase relies on (frontend demo login, NAV
- * seed in V33, etc.) and are NOT touched by V34 or this seeder.
+ * <p>Alice ({@code d9b2d63d-...}) and the three product schemes are canonical
+ * entities the app relies on (frontend demo login, scheme catalogue) and are
+ * seeded by V3 on all profiles.
  */
 @Component
-@Profile("local")
+@Profile({"local", "demo"})
 @Order(0)
 public class DemoDataSeeder implements CommandLineRunner {
 

@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import jakarta.validation.Validation;
 import jakarta.validation.Validator;
 import jakarta.validation.ValidatorFactory;
+import com.platizio.wealthtech.validation.MobileFormat;
 import com.platizio.wealthtech.validation.PanFormat;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
@@ -63,10 +64,38 @@ class InvestorCreateRequestValidationTest {
         assertThat(recordComponentNames(AuthSignupRequest.class)).doesNotContain("pan");
     }
 
+    @Test
+    void acceptsValidIndianMobile() {
+        assertThat(messagesFor(requestWithMobile("9876543210")))
+                .doesNotContain(MobileFormat.INDIAN_MOBILE_MESSAGE);
+    }
+
+    @Test
+    void rejectsMobileStartingBelowSix() {
+        assertThat(messagesFor(requestWithMobile("1234567890")))
+                .contains(MobileFormat.INDIAN_MOBILE_MESSAGE);
+    }
+
+    @Test
+    void rejectsMobileOfWrongLength() {
+        assertThat(messagesFor(requestWithMobile("98765")))
+                .contains(MobileFormat.INDIAN_MOBILE_MESSAGE);
+    }
+
     private static Set<String> messagesFor(InvestorCreateRequest request) {
         return VALIDATOR.validate(request).stream()
                 .map(violation -> violation.getMessage())
                 .collect(Collectors.toSet());
+    }
+
+    private static InvestorCreateRequest requestWithMobile(String mobile) {
+        return new InvestorCreateRequest(
+                UUID.randomUUID(),
+                "Priya Sharma",
+                mobile,
+                "priya@example.com",
+                "ABCDE1234F",
+                null, null, null, null, null, null, null, null, null, null, null, null, null, null);
     }
 
     private static InvestorCreateRequest requestWithPan(String pan) {
