@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useNavigate } from 'react-router-dom';
-import { Search, Filter, ChevronLeft, CheckCircle2, Clock, XCircle, AlertCircle, RefreshCw, ArrowDown, ArrowUp, ArrowUpDown, Inbox, Pencil, TrendingDown } from 'lucide-react';
+import { Search, Filter, ChevronLeft, CheckCircle2, Clock, XCircle, AlertCircle, RefreshCw, ArrowDown, ArrowUp, ArrowUpDown, Inbox, Pencil, TrendingDown, ShieldCheck, Send } from 'lucide-react';
 import { apiFetch } from '../config/api';
 import InvestorActionLink from '../components/InvestorActionLink';
 import Pagination from '../components/Pagination';
@@ -503,6 +503,13 @@ function TransactionDetail({
   const [redeemed, setRedeemed] = useState(false);
   const [redeemMsg, setRedeemMsg] = useState('');
   const [redeemError, setRedeemError] = useState('');
+  // Phase-2: submit this order for investor 2FA approval, and resend the secure
+  // link. The distributor surface NEVER shows an OTP input — only the challenge
+  // status + delivery-attempt count are visible here.
+  const [approval, setApproval] = useState<{ status?: string; deliveryAttempts?: number } | null>(null);
+  const [approvalBusy, setApprovalBusy] = useState<'request' | 'resend' | null>(null);
+  const [approvalMsg, setApprovalMsg] = useState('');
+  const [approvalError, setApprovalError] = useState('');
   const isSipOrder = String(liveTx.type || '').toUpperCase() === 'SIP';
   const actionUrl = buildInvestorActionUrl(liveTx.investorActionUrl);
   const awaitingAction =
@@ -644,6 +651,57 @@ function TransactionDetail({
     setRedeeming(false);
   };
 
+  // Phase-2: create the investor 2FA challenge for this order. The response
+  // carries the challenge status + delivery-attempt count — never an OTP.
+  const requestInvestorApproval = async () => {
+    if (approvalBusy) return;
+    setApprovalBusy('request');
+    setApprovalMsg('');
+    setApprovalError('');
+    try {
+      const response = await apiFetch(`/orders/${liveTx.id}/request-investor-approval`, { method: 'POST' });
+      const body = await response.json().catch(() => null);
+      if (!response.ok) {
+        throw new Error(body?.message || `Could not submit for investor approval (HTTP ${response.status}).`);
+      }
+      setApproval({
+        status: body?.status,
+        deliveryAttempts: typeof body?.deliveryAttempts === 'number' ? body.deliveryAttempts : 1,
+      });
+      setApprovalMsg('Submitted for investor approval. A secure link was sent for them to approve with a one-time passcode.');
+    } catch (err: any) {
+      setApprovalError(err?.message || 'Could not submit for investor approval. Please try again.');
+    } finally {
+      setApprovalBusy(null);
+    }
+  };
+
+  const resendApprovalLink = async () => {
+    if (approvalBusy) return;
+    setApprovalBusy('resend');
+    setApprovalMsg('');
+    setApprovalError('');
+    try {
+      const response = await apiFetch(`/orders/${liveTx.id}/resend-approval-link`, { method: 'POST' });
+      const body = await response.json().catch(() => null);
+      if (!response.ok) {
+        throw new Error(body?.message || `Could not resend the secure link (HTTP ${response.status}).`);
+      }
+      setApproval(prev => ({
+        status: body?.status ?? prev?.status,
+        deliveryAttempts:
+          typeof body?.deliveryAttempts === 'number'
+            ? body.deliveryAttempts
+            : (prev?.deliveryAttempts ?? 0) + 1,
+      }));
+      setApprovalMsg('Secure link resent to the investor.');
+    } catch (err: any) {
+      setApprovalError(err?.message || 'Could not resend the secure link. Please try again.');
+    } finally {
+      setApprovalBusy(null);
+    }
+  };
+
   return (
     <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} className="p-8 max-w-5xl">
       {confirmCancel && (
@@ -764,8 +822,49 @@ function TransactionDetail({
             <CheckCircle2 className="w-4 h-4" /> Redemption submitted
           </span>
         )}
+        {/* Phase-2: submit this order for investor 2FA approval (no OTP shown here) */}
+        <button
+          type="button"
+          onClick={requestInvestorApproval}
+          disabled={approvalBusy !== null}
+          className="flex items-center gap-2 px-4 py-2 text-sm font-medium bg-[#0B1B3E] text-white rounded-lg hover:bg-[#1A3066] transition-colors disabled:opacity-50"
+        >
+          <ShieldCheck className="w-4 h-4" />
+          {approvalBusy === 'request' ? 'Submitting…' : 'Submit for investor approval'}
+        </button>
+        {approval && (
+          <button
+            type="button"
+            onClick={resendApprovalLink}
+            disabled={approvalBusy !== null}
+            className="flex items-center gap-2 px-4 py-2 text-sm font-medium bg-white border border-slate-200 text-slate-700 rounded-lg hover:bg-slate-50 transition-colors disabled:opacity-50"
+          >
+            <Send className="w-4 h-4" />
+            {approvalBusy === 'resend' ? 'Resending…' : 'Resend secure link'}
+          </button>
+        )}
         </div>
       </div>
+      {approvalMsg && <div className="mb-5 flex items-start gap-2 rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-sm font-medium text-green-700"><CheckCircle2 className="w-4 h-4 mt-0.5 flex-shrink-0" />{approvalMsg}</div>}
+      {approvalError && <div className="mb-5 flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-700"><AlertCircle className="w-4 h-4 mt-0.5 flex-shrink-0" />{approvalError}</div>}
+      {approval && (
+        <div className="mb-6 rounded-2xl border border-slate-200 bg-white p-5">
+          <div className="flex items-center justify-between">
+            <h2 className="flex items-center gap-2 text-sm font-semibold text-slate-800">
+              <ShieldCheck className="w-4 h-4 text-[#0B1B3E]" /> Investor approval (2FA)
+            </h2>
+            <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-50 border border-amber-200 px-3 py-1 text-xs font-semibold text-amber-700">
+              <Clock className="w-3.5 h-3.5" /> {String(approval.status || 'PENDING').replace(/_/g, ' ')}
+            </span>
+          </div>
+          <p className="mt-2 text-xs text-slate-500">
+            The investor authorizes this transaction with a one-time passcode in their portal. For security, the passcode is never shown to the distributor.
+          </p>
+          <p className="mt-2 text-[11px] text-slate-400">
+            Secure-link delivery attempts: <span className="font-semibold text-slate-600">{approval.deliveryAttempts ?? 0}</span>
+          </p>
+        </div>
+      )}
       {cancelError && <div className="mb-5 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-700">{cancelError}</div>}
       {redeemMsg && <div className="mb-5 flex items-start gap-2 rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-sm font-medium text-green-700"><CheckCircle2 className="w-4 h-4 mt-0.5 flex-shrink-0" />{redeemMsg}</div>}
       {redeemError && <div className="mb-5 flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-700"><AlertCircle className="w-4 h-4 mt-0.5 flex-shrink-0" />{redeemError}</div>}

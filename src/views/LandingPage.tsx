@@ -4,9 +4,11 @@ import { motion } from 'motion/react';
 export default function LandingPage({
   onLogin,
   onSignUp,
+  onInvestorLogin,
 }: {
   onLogin:  () => void;
   onSignUp: () => void;
+  onInvestorLogin: () => void;
 }) {
   return (
     <div className="min-h-screen bg-[#0B1B3E] flex flex-col relative overflow-hidden">
@@ -27,6 +29,12 @@ export default function LandingPage({
           <span className="text-white font-bold text-xl tracking-tight">Platizio</span>
         </div>
         <div className="flex items-center gap-2">
+          <button
+            onClick={onInvestorLogin}
+            className="px-5 py-2 text-sm font-medium text-blue-200 hover:text-white transition-colors rounded-xl hover:bg-white/5"
+          >
+            Investor Login
+          </button>
           <button
             onClick={onLogin}
             className="px-5 py-2 text-sm font-medium text-white/70 hover:text-white transition-colors rounded-xl hover:bg-white/5"
@@ -101,6 +109,17 @@ export default function LandingPage({
               Sign Up as Distributor
             </button>
           </div>
+
+          {/* Investor entry */}
+          <p className="mt-6 text-sm text-white/50">
+            Are you an investor?{' '}
+            <button
+              onClick={onInvestorLogin}
+              className="font-semibold text-blue-300 underline-offset-4 hover:text-white hover:underline transition-colors"
+            >
+              Log in to the investor portal
+            </button>
+          </p>
         </motion.div>
       </div>
 

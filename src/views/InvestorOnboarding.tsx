@@ -1,9 +1,9 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useNavigate, useSearchParams, useLocation } from 'react-router-dom';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   ArrowLeft, ArrowRight, CheckCircle2, Loader2, Check,
-  ShieldCheck, Upload, Building2, User, AlertTriangle, X, RefreshCw, Fingerprint,
+  ShieldCheck, Upload, Building2, User, AlertTriangle, X, RefreshCw, Fingerprint, Clock,
 } from 'lucide-react';
 import CybrillaKycWarnings from '../components/CybrillaKycWarnings';
 import CybrillaKycReasonDialog, { type CybrillaKycReasonDialogContent } from '../components/CybrillaKycReasonDialog';
@@ -235,6 +235,14 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
   const [resumeError, setResumeError] = useState('');
   const [serverErrors, setServerErrors] = useState<Record<string, string>>({});
   const [refNum] = useState(() => 'APX' + Date.now().toString().slice(-8));
+
+  // ── F4: investor-approval gate ──────────────────────────────────────────────
+  // The distributor freezes a snapshot for the investor to approve. Finalize is
+  // blocked until GET /investors/{id}/onboarding/approval-status returns ATTESTED.
+  const [approvalStatus, setApprovalStatus] = useState<string>('NONE');
+  const [approvalLoading, setApprovalLoading] = useState(false);
+  const [approvalSubmitting, setApprovalSubmitting] = useState(false);
+  const [approvalError, setApprovalError] = useState('');
 
   // ── Step 1 — Basic Identity ─────────────────────────────────────────────────
   const initialResumeName = splitFullName(resumeInvestor?.fullName || resumeInvestor?.name);
@@ -1954,7 +1962,61 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
     }
   };
 
+  // ── F4: investor-approval gate helpers ──────────────────────────────────────
+  const gateInvestorId = draftInvestor?.id || resumeInvestor?.id || resumeInvestorId || null;
+  const approvalAttested = normalizeStatus(approvalStatus) === 'ATTESTED';
+  const approvalAwaiting = ['SUBMITTED', 'AWAITING_APPROVAL', 'PENDING', 'AWAITING'].includes(
+    normalizeStatus(approvalStatus),
+  );
+
+  const loadApprovalStatus = useCallback(async (investorId: string) => {
+    setApprovalLoading(true);
+    try {
+      const res = await apiFetch(`/investors/${investorId}/onboarding/approval-status`);
+      const data = await res.json().catch(() => null);
+      if (res.ok && data) {
+        setApprovalStatus(normalizeStatus(data.status) || 'NONE');
+      }
+    } catch {
+      // Non-fatal: leave prior status; the banner just won't update this cycle.
+    } finally {
+      setApprovalLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!gateInvestorId) return;
+    void loadApprovalStatus(gateInvestorId);
+  }, [gateInvestorId, loadApprovalStatus]);
+
+  const submitForInvestorReview = async () => {
+    if (!gateInvestorId) {
+      setApprovalError('Save the investor before submitting for approval.');
+      return;
+    }
+    setApprovalSubmitting(true);
+    setApprovalError('');
+    try {
+      const res = await apiFetch(`/investors/${gateInvestorId}/onboarding/submit-for-review`, {
+        method: 'POST',
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) {
+        throw new Error((data as { message?: string } | null)?.message || 'Could not submit for investor approval.');
+      }
+      setApprovalStatus(normalizeStatus((data as { status?: string } | null)?.status) || 'SUBMITTED');
+    } catch (e) {
+      setApprovalError(e instanceof Error ? e.message : 'Could not submit for investor approval.');
+    } finally {
+      setApprovalSubmitting(false);
+    }
+  };
+
   const submitInvestorToBackend = async () => {
+    if (!approvalAttested) {
+      setSubmitError('Awaiting investor approval — you cannot finalize until the investor approves this exact submission.');
+      return;
+    }
     if (!distributorId) {
       setSubmitError('Distributor session was not found. Please log in again and retry.');
       console.error('[Cybrilla Workflow] Missing distributor id in user session', userData);
@@ -2455,6 +2517,53 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
           <ShieldCheck className="h-4 w-4 flex-shrink-0" />
           KYC is verified for this investor. Identity, consent, and KYC steps are locked and can no longer be edited.
         </div>
+      )}
+
+      {/* ── F4: investor-approval gate banner ─────────────────────────────── */}
+      {gateInvestorId && (approvalAwaiting || approvalAttested || approvalError || approvalStatus === 'NONE') && (
+        approvalAttested ? (
+          <div className="mb-6 flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-700">
+            <CheckCircle2 className="h-4 w-4 flex-shrink-0" />
+            Investor approved this submission. You can finalize now. Any edit will require re-approval.
+          </div>
+        ) : approvalAwaiting ? (
+          <div className="mb-6 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
+            <div className="flex items-start gap-2 text-sm font-medium text-amber-800">
+              <Clock className="mt-0.5 h-4 w-4 flex-shrink-0" />
+              <span>
+                Awaiting investor approval — you cannot finalize until the investor approves this exact
+                submission; any edit requires re-approval.
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={() => void loadApprovalStatus(gateInvestorId)}
+              disabled={approvalLoading}
+              className="mt-2 inline-flex items-center gap-1.5 text-xs font-semibold text-amber-700 hover:underline disabled:opacity-50"
+            >
+              <RefreshCw className={`h-3 w-3 ${approvalLoading ? 'animate-spin' : ''}`} /> Refresh approval status
+            </button>
+          </div>
+        ) : (
+          <div className="mb-6 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+            <div className="flex items-start gap-2 text-sm text-slate-600">
+              <ShieldCheck className="mt-0.5 h-4 w-4 flex-shrink-0 text-slate-400" />
+              <span>
+                Before finalizing, submit this onboarding for the investor to approve. Finalize stays
+                locked until the investor approves this exact submission.
+              </span>
+            </div>
+            {approvalError && <p className="mt-2 text-xs font-medium text-red-600">{approvalError}</p>}
+            <button
+              type="button"
+              onClick={() => void submitForInvestorReview()}
+              disabled={approvalSubmitting}
+              className="mt-3 inline-flex items-center gap-2 rounded-xl bg-[#0B1B3E] px-4 py-2 text-xs font-semibold text-white transition-colors hover:bg-[#1A3066] disabled:opacity-50"
+            >
+              {approvalSubmitting ? (<><Loader2 className="h-3.5 w-3.5 animate-spin" /> Submitting…</>) : 'Submit for investor approval'}
+            </button>
+          </div>
+        )
       )}
 
       <div className="flex items-start mb-8 overflow-x-auto pb-2">
@@ -3471,7 +3580,8 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
                 <button
                   type="button"
                   onClick={() => void submitInvestorToBackend()}
-                  disabled={!allRequiredDocumentsSaved || submitting || !investorIdForDocuments}
+                  disabled={!allRequiredDocumentsSaved || submitting || !investorIdForDocuments || !approvalAttested}
+                  title={!approvalAttested ? 'Awaiting investor approval — finalize is locked until the investor approves this exact submission.' : undefined}
                   className="w-full flex items-center justify-center gap-2 px-6 py-3 text-sm font-semibold bg-green-700 text-white rounded-xl hover:bg-green-800 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                 >
                   {submitting ? (
@@ -3487,7 +3597,9 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
                   )}
                 </button>
                 <p className="mt-3 text-xs text-slate-500 text-center">
-                  This finalizes your investor profile, confirms saved documents, and verifies bank status for SIP/mandate setup.
+                  {approvalAttested
+                    ? 'This finalizes your investor profile, confirms saved documents, and verifies bank status for SIP/mandate setup.'
+                    : 'Finalize is locked until the investor approves this exact submission. Use “Submit for investor approval” above.'}
                 </p>
               </div>
             </div>
@@ -3520,7 +3632,8 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
           <button
             type="button"
             onClick={goNext}
-            disabled={!canNext || submitting || bankStepBusy}
+            disabled={!canNext || submitting || bankStepBusy || (step === 7 && !approvalAttested)}
+            title={step === 7 && !approvalAttested ? 'Awaiting investor approval — finalize is locked until the investor approves this exact submission.' : undefined}
             className="flex items-center gap-2 px-6 py-2.5 text-sm font-semibold bg-[#0B1B3E] text-white rounded-xl hover:bg-[#1A3066] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
           >
             {submitting

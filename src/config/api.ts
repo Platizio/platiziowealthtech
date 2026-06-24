@@ -57,7 +57,10 @@ const isAuthRedirectExcluded = (pathOrUrl: string) => {
     ? pathOrUrl.slice(API_BASE_URL.length)
     : pathOrUrl;
 
-  return path.startsWith('/auth/');
+  // /auth/* (distributor) and /investor-auth/* (investor) are permitAll login
+  // surfaces — a 401 there is a credential error, not an expired session, so it
+  // must not trigger a refresh/redirect.
+  return path.startsWith('/auth/') || path.startsWith('/investor-auth/');
 };
 
 const clearLocalAuthState = () => {
@@ -67,12 +70,41 @@ const clearLocalAuthState = () => {
   window.localStorage.removeItem('userSession');
 };
 
-const redirectToLoginForExpiredSession = () => {
+/**
+ * Investor portal paths use a separate HttpOnly cookie + login flow. A 401 on an
+ * investor API path (or while the browser sits on an /investor route) must bounce
+ * to /investor/login — NOT the distributor session_expired flow — so the two
+ * sessions never cross-redirect.
+ */
+const isInvestorApiPath = (path: string) =>
+  path.startsWith('/investor/') ||
+  path === '/investor' ||
+  path.startsWith('/investor-auth/') ||
+  path === '/investor-auth';
+
+const isInvestorBrowserPath = () =>
+  typeof window !== 'undefined' && window.location.pathname.startsWith('/investor');
+
+const normalizeApiPath = (pathOrUrl: string) =>
+  pathOrUrl.startsWith(API_BASE_URL) ? pathOrUrl.slice(API_BASE_URL.length) : pathOrUrl;
+
+const redirectToLoginForExpiredSession = (pathOrUrl?: string) => {
   if (sessionRedirectInProgress || isSessionRestoreInProgress() || typeof window === 'undefined') return;
+
+  const apiPath = pathOrUrl ? normalizeApiPath(pathOrUrl) : '';
+  const investorScoped =
+    (apiPath && isInvestorApiPath(apiPath)) || (!apiPath && isInvestorBrowserPath()) || isInvestorBrowserPath();
 
   sessionRedirectInProgress = true;
   clearLocalAuthState();
   window.dispatchEvent(new CustomEvent(SESSION_EXPIRED_EVENT));
+
+  if (investorScoped) {
+    if (window.location.pathname !== '/investor/login') {
+      window.location.replace('/investor/login?reason=session_expired');
+    }
+    return;
+  }
 
   if (window.location.pathname !== '/login') {
     window.location.replace('/login?reason=session_expired');
@@ -136,12 +168,15 @@ apiClient.interceptors.response.use(
       && !isAuthRedirectExcluded(requestUrl)
       && !isSessionRestoreInProgress()
     ) {
-      const refreshed = await refreshSession();
-      if (refreshed) {
-        requestConfig._authRetry = true;
-        return apiClient.request(requestConfig);
+      // Investor session paths have no refresh endpoint — a 401 means re-login.
+      if (!isInvestorApiPath(normalizeApiPath(requestUrl))) {
+        const refreshed = await refreshSession();
+        if (refreshed) {
+          requestConfig._authRetry = true;
+          return apiClient.request(requestConfig);
+        }
       }
-      redirectToLoginForExpiredSession();
+      redirectToLoginForExpiredSession(requestUrl);
     }
     return Promise.reject(error);
   },
@@ -160,15 +195,18 @@ export const apiFetch = async (pathOrUrl: string, init: ApiFetchInit = {}) => {
     if (isSessionRestoreInProgress()) {
       return response;
     }
-    const refreshed = await refreshSession();
-    if (refreshed) {
-      return fetch(url, {
-        ...fetchInit,
-        credentials: fetchInit.credentials ?? 'include',
-      });
+    // Investor session paths have no refresh endpoint — a 401 means re-login.
+    if (!isInvestorApiPath(normalizeApiPath(pathOrUrl))) {
+      const refreshed = await refreshSession();
+      if (refreshed) {
+        return fetch(url, {
+          ...fetchInit,
+          credentials: fetchInit.credentials ?? 'include',
+        });
+      }
     }
 
-    redirectToLoginForExpiredSession();
+    redirectToLoginForExpiredSession(pathOrUrl);
   }
 
   return response;

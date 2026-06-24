@@ -14,7 +14,15 @@ interface ContactStatus {
   otpEnabled?: boolean;
 }
 
+/**
+ * `distributor` (default) calls the distributor endpoints under
+ * `/investors/{investorId}/...`. `investor-self` calls the investor-session
+ * endpoints under `/investor/contact/...` and ignores `investorId` entirely.
+ */
+type Mode = 'distributor' | 'investor-self';
+
 interface ContactVerificationProps {
+  /** Required for `distributor` mode; ignored in `investor-self` mode. */
   investorId: string | null;
   channel: Channel;
   /** The email / mobile being verified (for empty-state messaging). */
@@ -23,6 +31,15 @@ interface ContactVerificationProps {
   method?: Method;
   belongsTo?: string | null;
   onVerified?: (status: ContactStatus) => void;
+  /** Which API surface to call. Defaults to the existing distributor flow. */
+  mode?: Mode;
+  /**
+   * Render the channel as disabled with an explanatory hint instead of the
+   * verification controls (e.g. mobile when SMS OTP is switched off).
+   */
+  disabled?: boolean;
+  /** Hint shown when `disabled` is true. */
+  disabledHint?: string;
 }
 
 const RELATIONSHIPS = [
@@ -48,6 +65,9 @@ export default function ContactVerification({
   method: initialMethod,
   belongsTo: initialBelongsTo,
   onVerified,
+  mode = 'distributor',
+  disabled = false,
+  disabledHint,
 }: ContactVerificationProps) {
   const [verified, setVerified] = useState(!!initialVerified);
   const [method, setMethod] = useState<Method>(initialMethod ?? null);
@@ -59,6 +79,18 @@ export default function ContactVerification({
   const [info, setInfo] = useState('');
 
   const label = channel === 'email' ? 'email' : 'mobile';
+  const isSelf = mode === 'investor-self';
+
+  // investor-self has no per-investor id in the URL; distributor needs one.
+  const otpRequestUrl = isSelf
+    ? `/investor/contact/${channel}/otp/request`
+    : `/investors/${investorId}/${channel}/otp/request`;
+  const otpVerifyUrl = isSelf
+    ? `/investor/contact/${channel}/otp/verify`
+    : `/investors/${investorId}/${channel}/otp/verify`;
+  const declareUrl = isSelf
+    ? '/investor/contact/declare'
+    : `/investors/${investorId}/contact/declare`;
 
   const applyStatus = (status: ContactStatus | null) => {
     if (!status) return;
@@ -75,10 +107,10 @@ export default function ContactVerification({
   };
 
   const sendCode = async () => {
-    if (!investorId) return;
+    if (!isSelf && !investorId) return;
     setBusy(true); setError(''); setInfo('');
     try {
-      const res = await apiFetch(`/investors/${investorId}/${channel}/otp/request`, { method: 'POST' });
+      const res = await apiFetch(otpRequestUrl, { method: 'POST' });
       const data = (await res.json().catch(() => null)) as ContactStatus | null;
       if (!res.ok) throw new Error((data as unknown as { message?: string })?.message || `Could not send the ${label} code.`);
       setSent(true);
@@ -95,10 +127,10 @@ export default function ContactVerification({
   };
 
   const verifyCode = async () => {
-    if (!investorId || !code.trim()) return;
+    if ((!isSelf && !investorId) || !code.trim()) return;
     setBusy(true); setError('');
     try {
-      const res = await apiFetch(`/investors/${investorId}/${channel}/otp/verify`, {
+      const res = await apiFetch(otpVerifyUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ code: code.trim() }),
@@ -114,10 +146,10 @@ export default function ContactVerification({
   };
 
   const declare = async () => {
-    if (!investorId) return;
+    if (!isSelf && !investorId) return;
     setBusy(true); setError('');
     try {
-      const res = await apiFetch(`/investors/${investorId}/contact/declare`, {
+      const res = await apiFetch(declareUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ channel: channel.toUpperCase(), belongsTo }),
@@ -142,7 +174,15 @@ export default function ContactVerification({
     );
   }
 
-  if (!investorId) {
+  if (disabled) {
+    return (
+      <p className="mt-1.5 text-[11px] text-slate-400">
+        {disabledHint || `${label === 'email' ? 'Email' : 'Mobile'} verification is currently unavailable.`}
+      </p>
+    );
+  }
+
+  if (!isSelf && !investorId) {
     return <p className="mt-1.5 text-[11px] text-slate-400">Save the investor to verify their {label}.</p>;
   }
   if (!value) {

@@ -1,5 +1,6 @@
 import React, { useState, useEffect, Suspense, lazy } from 'react';
-import { Routes, Route, Navigate, useNavigate } from 'react-router-dom';
+import { Routes, Route, Navigate, useNavigate, Outlet } from 'react-router-dom';
+import { LogOut } from 'lucide-react';
 
 // ── Eager imports ────────────────────────────────────────────────────────
 // AppLayout wraps every authenticated route; lazy-loading it would defeat
@@ -7,6 +8,7 @@ import { Routes, Route, Navigate, useNavigate } from 'react-router-dom';
 // and LoginPage are the first paint for unauthenticated users — lazy-loading
 // them would replace the initial UI with a spinner.
 import AppLayout from './layout/AppLayout';
+import InvestorLayout from './layout/InvestorLayout';
 import LandingPage from './views/LandingPage';
 import LoginPage from './views/LoginPage';
 import { apiFetch, SESSION_EXPIRED_EVENT } from './config/api';
@@ -21,7 +23,15 @@ import {
   selectIsAuthLoading,
   setAuthenticatedUser,
 } from './store/slices/authSlice';
+import {
+  investorLogout,
+  restoreInvestorSession,
+  shouldRestoreInvestorOnBoot,
+  selectInvestorUser,
+  selectIsInvestorAuthLoading,
+} from './store/slices/investorAuthSlice';
 import { normalizeAuthUser, type AuthUser } from './types/auth';
+import type { InvestorUser } from './types/investorAuth';
 
 // ── Lazy-loaded routes (F-33) ────────────────────────────────────────────
 // Each `lazy(() => import('./views/X'))` becomes its own bundle chunk under
@@ -61,6 +71,19 @@ const DistributorMgmt     = lazy(() => import('./views/DistributorMgmt'));
 const ProductMgmt         = lazy(() => import('./views/ProductMgmt'));
 const InvestorMgmt        = lazy(() => import('./views/InvestorMgmt'));
 
+// Investor portal views (Phase 1)
+const InvestorLoginPage      = lazy(() => import('./views/InvestorLoginPage'));
+const InvestorSignup         = lazy(() => import('./views/InvestorSignup'));
+const InvestorOnboardingReview = lazy(() => import('./views/InvestorOnboardingReview'));
+
+// Investor portal views (Phase 2 — transaction 2FA + withdrawal)
+const InvestorApprovalCenter = lazy(() => import('./views/InvestorApprovalCenter'));
+const InvestorWithdrawal     = lazy(() => import('./views/InvestorWithdrawal'));
+
+// Investor portal views (Phase 3 — portfolio dashboard)
+const InvestorDashboard      = lazy(() => import('./views/InvestorDashboard'));
+const InvestorDashboardLuxe  = lazy(() => import('./views/InvestorDashboardLuxe'));
+
 /**
  * F-33: fallback shown while a lazy chunk is being fetched. Visually matches
  * the existing session-restore spinner so chunk loads don't introduce a new
@@ -81,6 +104,8 @@ export default function App() {
   const userSession = useAppSelector(selectAuthUser);
   const loadingSession = useAppSelector(selectIsAuthLoading);
   const canAccessAdmin = useAppSelector(selectCanAccessAdmin);
+  const investorSession = useAppSelector(selectInvestorUser);
+  const loadingInvestorSession = useAppSelector(selectIsInvestorAuthLoading);
 
   useEffect(() => {
     void dispatch(restoreSession()).then((result) => {
@@ -93,6 +118,24 @@ export default function App() {
           `${window.location.pathname}${window.location.search}${window.location.hash}`,
         );
         navigate(`/login?reason=session_expired&returnTo=${returnTo}`, { replace: true });
+      }
+    });
+  }, [dispatch, navigate]);
+
+  // Investor portal session restore on boot (separate cookie + slice). Only runs
+  // for protected /investor/* paths — distributor/admin routes are untouched.
+  useEffect(() => {
+    void dispatch(restoreInvestorSession()).then((result) => {
+      if (restoreInvestorSession.rejected.match(result)) {
+        console.warn('Investor session restore unavailable (backend may be down):', result.payload);
+        return;
+      }
+      if (
+        restoreInvestorSession.fulfilled.match(result) &&
+        !result.payload &&
+        shouldRestoreInvestorOnBoot()
+      ) {
+        navigate('/investor/login?reason=session_expired', { replace: true });
       }
     });
   }, [dispatch, navigate]);
@@ -139,7 +182,12 @@ export default function App() {
     navigate('/login', { replace: true });
   };
 
-  if (loadingSession) {
+  const handleInvestorSignOut = async () => {
+    await dispatch(investorLogout());
+    navigate('/investor/login', { replace: true });
+  };
+
+  if (loadingSession || loadingInvestorSession) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-slate-50">
         <div className="w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
@@ -154,7 +202,7 @@ export default function App() {
     <Suspense fallback={<PageSkeleton />}>
     <Routes>
       {/* ── Pre-app screens ─────────────────────────────────────────────────────── */}
-      <Route path="/" element={<LandingPage onLogin={() => navigate('/login')} onSignUp={() => navigate('/onboarding')} />} />
+      <Route path="/" element={<LandingPage onLogin={() => navigate('/login')} onSignUp={() => navigate('/onboarding')} onInvestorLogin={() => navigate('/investor/login')} />} />
       <Route path="/login" element={<LoginPage onLogin={handleLoginSuccess} onSignUp={() => navigate('/onboarding')} onBack={() => navigate('/')} />} />
       <Route path="/onboarding" element={<Onboarding onComplete={() => navigate('/pending')} onBack={() => navigate('/')} />} />
       <Route path="/pending" element={<PendingApproval onGoToLogin={() => navigate('/login')} />} />
@@ -162,6 +210,35 @@ export default function App() {
           non-admin hitting an /admin/* path). Top-level so it works regardless
           of session state (e.g. user follows a stale admin link from chat). */}
       <Route path="/unauthorized" element={<Unauthorized />} />
+
+      {/* ── Investor portal (Phase 1) ───────────────────────────────────────────
+          Public, passwordless investor auth. Distributor/admin routes below are
+          untouched. The authenticated investor area is gated by investorAuthSlice. */}
+      <Route path="/investor/login" element={<InvestorLoginPage />} />
+      <Route path="/investor/signup" element={<InvestorSignup />} />
+      {investorSession ? (
+        <>
+          {/* Full-screen immersive "Luxe" dashboard — rendered OUTSIDE the sidebar
+              shell for a full-bleed experience, but still session-gated. */}
+          <Route
+            path="/investor/luxe"
+            element={<InvestorDashboardLuxe investor={investorSession} onSignOut={handleInvestorSignOut} />}
+          />
+          <Route element={<InvestorLayout investor={investorSession} onSignOut={handleInvestorSignOut} />}>
+            <Route path="/investor" element={<Navigate to="/investor/dashboard" replace />} />
+            <Route path="/investor/dashboard" element={<InvestorDashboard />} />
+            <Route path="/investor/onboarding" element={<InvestorOnboardingReview />} />
+            <Route path="/investor/approvals" element={<InvestorApprovalCenter />} />
+            <Route path="/investor/withdrawals" element={<InvestorWithdrawal />} />
+            <Route path="/investor/profile" element={<InvestorProfile investor={investorSession} />} />
+          </Route>
+        </>
+      ) : (
+        <Route
+          path="/investor/*"
+          element={<Navigate to="/investor/login" replace />}
+        />
+      )}
 
       {/* ── App Layout ────────────────────────────────────────────────────────── */}
       {userData && (
@@ -274,9 +351,126 @@ function InvestorTransactionWrapper() {
 }
 
 function ProductMgmtWrapper({ userData }: { userData?: any }) {
-  // ProductMgmt used to get products state from App.tsx. 
+  // ProductMgmt used to get products state from App.tsx.
   // We can either initialize it here or refactor ProductMgmt to fetch its own data.
   // For now, initializing empty state to not break the component signature.
   const [products, setProducts] = useState<any[]>([]);
   return <ProductMgmt products={products} setProducts={setProducts} userData={userData} />;
+}
+
+// ── Investor portal shell (Phase 1) ─────────────────────────────────────────
+// Minimal authenticated header + outlet for investor routes. Distinct from the
+// distributor AppLayout so the two portals never share chrome or navigation.
+function InvestorShell({
+  investor,
+  onSignOut,
+}: {
+  investor: InvestorUser;
+  onSignOut: () => void;
+}) {
+  const navigate = useNavigate();
+  return (
+    <div className="min-h-screen bg-[#F1F5F9]">
+      <header className="sticky top-0 z-30 border-b border-slate-200 bg-white">
+        <div className="mx-auto flex max-w-5xl items-center justify-between px-6 py-3">
+          <div className="flex items-center gap-6">
+            <button
+              type="button"
+              onClick={() => navigate('/investor/dashboard')}
+              className="flex items-center gap-2.5"
+            >
+              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-[#0B1B3E] text-sm font-bold text-white">
+                P
+              </div>
+              <span className="text-base font-bold tracking-tight text-slate-800">Platizio</span>
+              <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                Investor
+              </span>
+            </button>
+            <nav className="hidden items-center gap-1 sm:flex">
+              <button
+                type="button"
+                onClick={() => navigate('/investor/dashboard')}
+                className="rounded-lg px-3 py-1.5 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-900"
+              >
+                Dashboard
+              </button>
+              <button
+                type="button"
+                onClick={() => navigate('/investor/onboarding')}
+                className="rounded-lg px-3 py-1.5 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-900"
+              >
+                Onboarding
+              </button>
+              <button
+                type="button"
+                onClick={() => navigate('/investor/approvals')}
+                className="rounded-lg px-3 py-1.5 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-900"
+              >
+                Approvals
+              </button>
+              <button
+                type="button"
+                onClick={() => navigate('/investor/withdrawals')}
+                className="rounded-lg px-3 py-1.5 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-900"
+              >
+                Withdraw
+              </button>
+              <button
+                type="button"
+                onClick={() => navigate('/investor/profile')}
+                className="rounded-lg px-3 py-1.5 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-900"
+              >
+                Profile
+              </button>
+            </nav>
+          </div>
+          <div className="flex items-center gap-3">
+            <span className="hidden text-sm text-slate-500 sm:inline">
+              {investor.fullName || investor.email}
+            </span>
+            <button
+              type="button"
+              onClick={onSignOut}
+              className="flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-50"
+            >
+              <LogOut className="h-3.5 w-3.5" /> Sign out
+            </button>
+          </div>
+        </div>
+      </header>
+      <main>
+        <Outlet />
+      </main>
+    </div>
+  );
+}
+
+// Minimal investor profile for Phase 1 — read-only account summary.
+function InvestorProfile({ investor }: { investor: InvestorUser }) {
+  const rows: Array<{ label: string; value: string }> = [
+    { label: 'Full name', value: investor.fullName || '—' },
+    { label: 'Email', value: investor.email || '—' },
+    { label: 'Account status', value: String(investor.status || '—') },
+    { label: 'Email verified', value: investor.emailVerified ? 'Yes' : 'No' },
+    { label: 'Mobile verified', value: investor.mobileVerified ? 'Yes' : 'No' },
+    { label: 'Linked to investor record', value: investor.investorLinked ? 'Yes' : 'Not yet' },
+  ];
+  return (
+    <div className="mx-auto max-w-2xl p-8">
+      <h1 className="mb-1 text-2xl font-semibold text-slate-800">Your profile</h1>
+      <p className="mb-6 text-sm text-slate-500">Your investor account details.</p>
+      <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
+        {rows.map((row, i) => (
+          <div
+            key={row.label}
+            className={`flex items-center justify-between px-6 py-4 ${i > 0 ? 'border-t border-slate-100' : ''}`}
+          >
+            <span className="text-xs font-bold uppercase tracking-wider text-slate-500">{row.label}</span>
+            <span className="text-sm font-medium text-slate-800">{row.value}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 }
