@@ -1,0 +1,56 @@
+# Render Blueprint — Platizio Wealthtech backend + managed Postgres (investor.md §5, R11).
+#
+# The app DB lives on a Render Managed Postgres co-located (same region) with the backend
+# web service. Spring builds its JDBC URL from parts (DB_HOST/DB_PORT/DB_NAME) injected here
+# via `fromDatabase`; see src/main/resources/application.yml (datasource.url falls back to
+# those parts when DB_URL is unset). Supabase is retained for auth/OTP only — NOT the app DB.
+#
+# Provisioning + first apply is done from the user's Render account ("New > Blueprint").
+# Secrets marked `sync: false` are entered once in the Render dashboard (never committed).
+
+databases:
+  - name: platizio-db
+    plan: basic-256mb          # bump as data grows; smallest paid tier with backups
+    region: singapore          # MUST match the web service region (low backend↔DB latency)
+    postgresMajorVersion: "17" # parity with local dev (Postgres 17)
+
+services:
+  - type: web
+    name: platizio-backend
+    runtime: docker
+    region: singapore          # co-located with platizio-db
+    plan: starter
+    # The Maven project is nested in a subdir of the repo root.
+    dockerfilePath: ./platiziowealthtech-Back_end/Dockerfile
+    dockerContext: ./platiziowealthtech-Back_end
+    autoDeploy: true
+    envVars:
+      # --- App DB: injected from the managed Postgres above (R11) -------------
+      - key: DB_HOST
+        fromDatabase: { name: platizio-db, property: host }
+      - key: DB_PORT
+        fromDatabase: { name: platizio-db, property: port }
+      - key: DB_NAME
+        fromDatabase: { name: platizio-db, property: database }
+      - key: DB_USERNAME
+        fromDatabase: { name: platizio-db, property: user }
+      - key: DB_PASSWORD
+        fromDatabase: { name: platizio-db, property: password }
+      # Flyway migrates V1→head on first boot; ddl-auto stays `validate`.
+
+      # --- Runtime profile + secrets (set in the Render dashboard) ------------
+      - key: SPRING_PROFILES_ACTIVE
+        sync: false            # the production profile (NOT `local`)
+      - key: MAIL_USERNAME
+        sync: false
+      - key: MAIL_PASSWORD
+        sync: false
+      # Supabase (auth/OTP only) + Cybrilla/Finprim integration secrets:
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: CYBRILLA_PRE_VERIFICATION_CLIENT_ID
+        sync: false
+      - key: CYBRILLA_PRE_VERIFICATION_CLIENT_SECRET
+        sync: false

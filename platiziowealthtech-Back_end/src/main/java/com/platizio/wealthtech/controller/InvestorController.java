@@ -6,6 +6,8 @@ import com.platizio.wealthtech.domain.KycStatus;
 import com.platizio.wealthtech.domain.TermsAcceptance;
 import com.platizio.wealthtech.dto.ContactDeclarationRequest;
 import com.platizio.wealthtech.dto.ContactVerificationStatus;
+import com.platizio.wealthtech.dto.DistributorProfileSubmitRequest;
+import com.platizio.wealthtech.dto.DistributorProfileSubmitResponse;
 import com.platizio.wealthtech.dto.InvestorBankRequest;
 import com.platizio.wealthtech.dto.InvestorCreateRequest;
 import com.platizio.wealthtech.dto.OtpVerifyCodeRequest;
@@ -26,13 +28,19 @@ import com.platizio.wealthtech.dto.IdentityDocumentCreateRequest;
 import com.platizio.wealthtech.dto.KycFlowAdvanceResponse;
 import com.platizio.wealthtech.dto.KycFlowStatusResponse;
 import com.platizio.wealthtech.dto.InvestorUpdateRequest;
+import com.platizio.wealthtech.dto.SendToInvestorRequest;
+import com.platizio.wealthtech.dto.SendToInvestorResponse;
 import com.platizio.wealthtech.dto.UploadedInvestorDocumentResponse;
 import com.platizio.wealthtech.security.JwtAuthPrincipal;
+import com.platizio.wealthtech.domain.InvestorLinkingStatus;
+import com.platizio.wealthtech.domain.ProfileChangeApprovalChallenge;
+import com.platizio.wealthtech.domain.InvestorLinkRequest;
 import com.platizio.wealthtech.domain.OnboardingSubmission;
 import com.platizio.wealthtech.service.ConsentRecordService;
 import com.platizio.wealthtech.service.InvestorContactVerificationService;
 import com.platizio.wealthtech.service.InvestorDocumentService;
 import com.platizio.wealthtech.service.InvestorKycService;
+import com.platizio.wealthtech.service.InvestorLinkRequestService;
 import com.platizio.wealthtech.service.InvestorService;
 import com.platizio.wealthtech.service.OnboardingSubmissionService;
 import com.platizio.wealthtech.service.TermsAcceptanceService;
@@ -62,6 +70,7 @@ import org.springframework.web.multipart.MultipartFile;
 public class InvestorController {
 
     private static final ObjectMapper SNAPSHOT_MAPPER = new ObjectMapper();
+    private static final org.slf4j.Logger logger = org.slf4j.LoggerFactory.getLogger(InvestorController.class);
 
     private final InvestorService investorService;
     private final InvestorDocumentService investorDocumentService;
@@ -69,6 +78,7 @@ public class InvestorController {
     private final InvestorContactVerificationService contactVerificationService;
     private final TermsAcceptanceService termsAcceptanceService;
     private final OnboardingSubmissionService onboardingSubmissionService;
+    private final InvestorLinkRequestService investorLinkRequestService;
 
     public InvestorController(
             InvestorService investorService,
@@ -76,7 +86,8 @@ public class InvestorController {
             InvestorKycService investorKycService,
             InvestorContactVerificationService contactVerificationService,
             TermsAcceptanceService termsAcceptanceService,
-            OnboardingSubmissionService onboardingSubmissionService
+            OnboardingSubmissionService onboardingSubmissionService,
+            InvestorLinkRequestService investorLinkRequestService
     ) {
         this.investorService = investorService;
         this.investorDocumentService = investorDocumentService;
@@ -84,6 +95,7 @@ public class InvestorController {
         this.contactVerificationService = contactVerificationService;
         this.termsAcceptanceService = termsAcceptanceService;
         this.onboardingSubmissionService = onboardingSubmissionService;
+        this.investorLinkRequestService = investorLinkRequestService;
     }
 
     @Operation(summary = "List investors", description = "Returns paginated investors visible to the authenticated distributor.")
@@ -110,6 +122,32 @@ public class InvestorController {
     @PostMapping
     public Investor create(@Valid @RequestBody InvestorCreateRequest request, Authentication auth) {
         return investorService.createInvestor(request, actorId(auth));
+    }
+
+    @Operation(summary = "Send to Investor (approval-gated onboarding)",
+            description = "From Step-1 basic identity, parks a PENDING investor (distributor_id NOT linked yet — R5) "
+                    + "keyed on PAN (R4) and sends it to the investor for approval. Returns PENDING_INVESTOR_APPROVAL "
+                    + "plus the approval token so the email-link flow is demoable without SMTP (investor.md §3 T1, §6.1).")
+    @ApiResponse(responseCode = "200", description = "Investor parked PENDING and sent for approval",
+                 content = @Content(schema = @Schema(implementation = SendToInvestorResponse.class)))
+    @PostMapping("/send-to-investor")
+    public SendToInvestorResponse sendToInvestor(
+            @Valid @RequestBody SendToInvestorRequest request, Authentication auth) {
+        UUID distributorId = actorId(auth);
+        Investor investor = investorService.createOrUpdatePendingInvestor(request, distributorId);
+        InvestorLinkRequest linkRequest =
+                investorLinkRequestService.sendToInvestor(investor.getId(), distributorId, request.payloadJson());
+        // Dev surfacing (no real email yet — that's a later shared task): log the approval URL at
+        // INFO and return the token so the flow is demoable/testable without SMTP.
+        String approvalUrl = "/investor/approve?token=" + linkRequest.getToken();
+        logger.info(
+                "investor_link status='sent_to_investor' investor_id='{}' distributor_id='{}' approval_url='{}'",
+                investor.getId(), distributorId, approvalUrl);
+        return new SendToInvestorResponse(
+                "PENDING_INVESTOR_APPROVAL",
+                "Investor approval is pending.",
+                investor.getId(),
+                linkRequest.getToken());
     }
 
     // ── Contact verification (email + mobile OTP via Supabase / self-declaration) ──
@@ -683,6 +721,45 @@ public class InvestorController {
         Investor investor = investorService.getInvestor(id, actorId); // ownership check
         onboardingSubmissionService.assertFinalizable(id, ConsentRecordService.sha256(onboardingSnapshotJson(investor)));
         return investorService.markReadyAfterInvestorApproval(id, actorId);
+    }
+
+    // ── Distributor-facing skip-form path (investor.md R10) ──
+    // The investor approved the link but skipped the profile form, so the distributor fills
+    // it on their behalf. Both endpoints resolve the acting distributor from the JWT
+    // (NEVER from the body) and delegate to InvestorService, which asserts the investor is
+    // in a fillable state and that the acting distributor is the one linked to the investor.
+    // Wrong-state → IllegalStateException (400); cross-distributor → AccessDeniedException
+    // (403), both mapped by GlobalExceptionHandler. The investor-facing approve/apply/reject
+    // half lives on the investor-portal track and is intentionally not exposed here.
+
+    @Operation(summary = "Submit distributor-filled profile for investor review (R10)",
+            description = "From an INVESTOR_SKIPPED (or DISTRIBUTOR_FILLING) investor, moves linking_status "
+                    + "→ DISTRIBUTOR_FILLING and freezes the distributor-filled profile into a fresh 2FA "
+                    + "challenge the investor must approve. The acting distributor is taken from the JWT.")
+    @PostMapping("/{investorId}/profile/submit")
+    public DistributorProfileSubmitResponse submitProfile(
+            @PathVariable UUID investorId,
+            @Valid @RequestBody DistributorProfileSubmitRequest body,
+            Authentication auth) {
+        ProfileChangeApprovalChallenge challenge =
+                investorService.submitProfileForInvestorReview(investorId, body.payloadJson(), actorId(auth));
+        return new DistributorProfileSubmitResponse(
+                investorId, InvestorLinkingStatus.DISTRIBUTOR_FILLING, challenge.getId());
+    }
+
+    @Operation(summary = "Update the pending distributor-filled profile (R10)",
+            description = "While still DISTRIBUTOR_FILLING, supersedes any live challenge (forcing "
+                    + "re-authorisation) and freezes a fresh challenge over the edited profile. The acting "
+                    + "distributor is taken from the JWT.")
+    @PutMapping("/{investorId}/profile")
+    public DistributorProfileSubmitResponse updateProfile(
+            @PathVariable UUID investorId,
+            @Valid @RequestBody DistributorProfileSubmitRequest body,
+            Authentication auth) {
+        ProfileChangeApprovalChallenge challenge =
+                investorService.updateProfile(investorId, body.payloadJson(), actorId(auth));
+        return new DistributorProfileSubmitResponse(
+                investorId, InvestorLinkingStatus.DISTRIBUTOR_FILLING, challenge.getId());
     }
 
     /**

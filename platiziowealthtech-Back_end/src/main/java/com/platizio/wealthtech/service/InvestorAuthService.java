@@ -128,7 +128,31 @@ public class InvestorAuthService {
         InvestorAccount account = accountRepository.findByEmailIgnoreCase(normalized)
                 .filter(a -> a.getStatus() == InvestorAccountStatus.ACTIVE)
                 .orElseThrow(() -> new BadCredentialsException("Invalid email or code"));
+        // R6: gate login on a completed distributor link. The OTP is already
+        // consumed and the account confirmed ACTIVE; reject BEFORE the JWT so an
+        // unlinked investor can never obtain a session.
+        validateDistributorLink(account);
         return new InvestorAuthResult(jwtService.generateInvestorToken(account.getId(), account.getEmail()), account);
+    }
+
+    /**
+     * R6: an investor may hold a session only once a distributor has been linked
+     * to their distributor-created {@link Investor} row via the approval flow
+     * (i.e. {@code investor.distributorId} is set). Until then login is rejected
+     * AFTER OTP verification with a user-visible message. Throws
+     * {@link BadCredentialsException} (401, message echoed to the client) — not
+     * {@link AccessDeniedException}, whose handler masks the copy as "Access denied".
+     */
+    private void validateDistributorLink(InvestorAccount account) {
+        UUID investorId = account.getInvestorId();
+        boolean linked = investorId != null
+                && investorRepository.findById(investorId)
+                        .map(inv -> inv.getDistributorId() != null)
+                        .orElse(false);
+        if (!linked) {
+            throw new BadCredentialsException(
+                    "No distributor allotted yet. Please contact your financial advisor to complete your profile setup.");
+        }
     }
 
     @Transactional(readOnly = true)

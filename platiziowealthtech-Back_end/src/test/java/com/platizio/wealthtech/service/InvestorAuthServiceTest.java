@@ -146,11 +146,16 @@ class InvestorAuthServiceTest {
 
     @Test
     void otpLoginVerifiesAndReturnsTokenForActiveAccount() {
+        UUID investorId = UUID.randomUUID();
         InvestorAccount active = new InvestorAccount();
         ReflectionTestUtils.setField(active, "id", UUID.randomUUID());
         active.setEmail("a@example.com");
         active.setStatus(InvestorAccountStatus.ACTIVE);
+        active.setInvestorId(investorId);
         when(accountRepository.findByEmailIgnoreCase("a@example.com")).thenReturn(Optional.of(active));
+        Investor linked = new Investor();
+        linked.setDistributorId(UUID.randomUUID()); // R6: distributor linked
+        when(investorRepository.findById(investorId)).thenReturn(Optional.of(linked));
 
         InvestorAuthService.InvestorAuthResult result = service.otpLogin("A@Example.com", "654321");
 
@@ -164,6 +169,82 @@ class InvestorAuthServiceTest {
 
         assertThatThrownBy(() -> service.otpLogin("a@example.com", "654321"))
                 .isInstanceOf(BadCredentialsException.class);
+    }
+
+    private InvestorAccount activeAccount(UUID investorId) {
+        InvestorAccount active = new InvestorAccount();
+        ReflectionTestUtils.setField(active, "id", UUID.randomUUID());
+        active.setEmail("a@example.com");
+        active.setStatus(InvestorAccountStatus.ACTIVE);
+        active.setInvestorId(investorId);
+        return active;
+    }
+
+    @Test
+    void otpLoginRejectsWhenAccountHasNoInvestorLink() {
+        // R6: account.investorId == null -> no distributor can be allotted.
+        InvestorAccount active = activeAccount(null);
+        when(accountRepository.findByEmailIgnoreCase("a@example.com")).thenReturn(Optional.of(active));
+
+        assertThatThrownBy(() -> service.otpLogin("A@Example.com", "654321"))
+                .isInstanceOf(BadCredentialsException.class)
+                .hasMessage("No distributor allotted yet. Please contact your financial advisor to complete your profile setup.");
+
+        // OTP was still verified before the gate; JWT was never issued.
+        verify(otpService).verify("a@example.com", OtpPurpose.INVESTOR_LOGIN, "654321");
+        verify(jwtService, never()).generateInvestorToken(any(), anyString());
+    }
+
+    @Test
+    void otpLoginRejectsWhenInvestorRowNotFound() {
+        // R6: linked investorId exists on the account, but the investors row is gone.
+        UUID investorId = UUID.randomUUID();
+        InvestorAccount active = activeAccount(investorId);
+        when(accountRepository.findByEmailIgnoreCase("a@example.com")).thenReturn(Optional.of(active));
+        when(investorRepository.findById(investorId)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.otpLogin("A@Example.com", "654321"))
+                .isInstanceOf(BadCredentialsException.class)
+                .hasMessage("No distributor allotted yet. Please contact your financial advisor to complete your profile setup.");
+
+        verify(otpService).verify("a@example.com", OtpPurpose.INVESTOR_LOGIN, "654321");
+        verify(jwtService, never()).generateInvestorToken(any(), anyString());
+    }
+
+    @Test
+    void otpLoginRejectsWhenDistributorNotAllotted() {
+        // R6: investors row exists but distributor_id is still null (not yet approved/linked).
+        UUID investorId = UUID.randomUUID();
+        InvestorAccount active = activeAccount(investorId);
+        when(accountRepository.findByEmailIgnoreCase("a@example.com")).thenReturn(Optional.of(active));
+        Investor unlinked = new Investor();
+        unlinked.setDistributorId(null);
+        when(investorRepository.findById(investorId)).thenReturn(Optional.of(unlinked));
+
+        assertThatThrownBy(() -> service.otpLogin("A@Example.com", "654321"))
+                .isInstanceOf(BadCredentialsException.class)
+                .hasMessage("No distributor allotted yet. Please contact your financial advisor to complete your profile setup.");
+
+        verify(otpService).verify("a@example.com", OtpPurpose.INVESTOR_LOGIN, "654321");
+        verify(jwtService, never()).generateInvestorToken(any(), anyString());
+    }
+
+    @Test
+    void otpLoginSucceedsWhenDistributorAllotted() {
+        // R6: investors row exists and distributor_id is set -> session issued.
+        UUID investorId = UUID.randomUUID();
+        InvestorAccount active = activeAccount(investorId);
+        when(accountRepository.findByEmailIgnoreCase("a@example.com")).thenReturn(Optional.of(active));
+        Investor linked = new Investor();
+        linked.setDistributorId(UUID.randomUUID());
+        when(investorRepository.findById(investorId)).thenReturn(Optional.of(linked));
+
+        InvestorAuthService.InvestorAuthResult result = service.otpLogin("A@Example.com", "654321");
+
+        // OTP verified BEFORE the gate, then JWT issued.
+        verify(otpService).verify("a@example.com", OtpPurpose.INVESTOR_LOGIN, "654321");
+        verify(jwtService).generateInvestorToken(any(), anyString());
+        assertThat(result.token()).isEqualTo("investor.jwt.token");
     }
 
     @Test

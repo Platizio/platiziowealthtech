@@ -13,8 +13,17 @@ import org.hibernate.annotations.SQLRestriction;
 @SQLRestriction("is_deleted = false")
 public class Investor extends BaseEntity {
 
-    @Column(nullable = false)
+    // R5: nullable — the distributor is linked only when the investor approves (PAN-keyed).
+    @Column
     private UUID distributorId;
+
+    /** R5: the distributor who initiated onboarding, before the investor approves. */
+    private UUID pendingDistributorId;
+
+    /** R1–R10: drives the investor↔distributor approval choreography (investor.md §3). */
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false, length = 32)
+    private InvestorLinkingStatus linkingStatus = InvestorLinkingStatus.READY;
 
     @Column(nullable = false)
     private String fullName;
@@ -128,6 +137,12 @@ public class Investor extends BaseEntity {
 
     public UUID getDistributorId() { return distributorId; }
     public void setDistributorId(UUID distributorId) { this.distributorId = distributorId; }
+
+    public UUID getPendingDistributorId() { return pendingDistributorId; }
+    public void setPendingDistributorId(UUID pendingDistributorId) { this.pendingDistributorId = pendingDistributorId; }
+
+    public InvestorLinkingStatus getLinkingStatus() { return linkingStatus; }
+    public void setLinkingStatus(InvestorLinkingStatus linkingStatus) { this.linkingStatus = linkingStatus; }
     public String getFullName() { return fullName; }
     public void setFullName(String fullName) { this.fullName = fullName; }
     public String getMobileNumber() { return mobileNumber; }

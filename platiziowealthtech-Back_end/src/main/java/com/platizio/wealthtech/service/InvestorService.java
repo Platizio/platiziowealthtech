@@ -11,6 +11,7 @@ import com.platizio.wealthtech.integration.PincodeLookupResult;
 import com.platizio.wealthtech.dto.InvestorCreateRequest;
 import com.platizio.wealthtech.dto.InvestorOnboardingResumeResponse;
 import com.platizio.wealthtech.dto.InvestorUpdateRequest;
+import com.platizio.wealthtech.dto.SendToInvestorRequest;
 import com.platizio.wealthtech.integration.CybrillaClient;
 import com.platizio.wealthtech.integration.CybrillaApiException;
 import com.platizio.wealthtech.integration.ExternalReferenceIds;
@@ -22,10 +23,12 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.persistence.EntityNotFoundException;
 import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
 import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
@@ -65,6 +68,11 @@ public class InvestorService implements BankVerificationStarter {
     private final CybrillaClient cybrillaClient;
     private final ObjectProvider<InvestorKycService> investorKycServiceProvider;
     private final InvestorCybrillaSyncService investorCybrillaSyncService;
+    private final ProfileChangeApprovalService profileChangeApprovalService;
+    // PA6/R8 (receive-half): optional so the many test constructors (and the legacy
+    // short constructors) need not thread it through. Injected by Spring at runtime
+    // and by tests via setNotificationService; null-guarded at the single emit point.
+    private NotificationService notificationService;
     private final long scheduledBankSyncFailureBackoffMs;
     private volatile long scheduledBankSyncBackoffUntilEpochMillis;
     private final TransactionTemplate deferredPersistTx;
@@ -76,7 +84,7 @@ public class InvestorService implements BankVerificationStarter {
             AuditService auditService,
             CybrillaClient cybrillaClient
     ) {
-        this(investorRepository, investorBankAccountRepository, distributorService, auditService, cybrillaClient, null, 900_000, null, null, null);
+        this(investorRepository, investorBankAccountRepository, distributorService, auditService, cybrillaClient, null, 900_000, null, null, null, null);
     }
 
     public InvestorService(
@@ -95,6 +103,7 @@ public class InvestorService implements BankVerificationStarter {
                 cybrillaClient,
                 null,
                 scheduledBankSyncFailureBackoffMs,
+                null,
                 null,
                 null,
                 null
@@ -121,6 +130,7 @@ public class InvestorService implements BankVerificationStarter {
                 scheduledBankSyncFailureBackoffMs,
                 investorDocumentRepository,
                 null,
+                null,
                 null
         );
     }
@@ -136,7 +146,8 @@ public class InvestorService implements BankVerificationStarter {
             @Value("${app.bank-sync.failure-backoff-ms:900000}") long scheduledBankSyncFailureBackoffMs,
             InvestorDocumentRepository investorDocumentRepository,
             PlatformTransactionManager transactionManager,
-            ObjectProvider<InvestorKycService> investorKycServiceProvider
+            ObjectProvider<InvestorKycService> investorKycServiceProvider,
+            ProfileChangeApprovalService profileChangeApprovalService
     ) {
         this.investorRepository = investorRepository;
         this.investorBankAccountRepository = investorBankAccountRepository;
@@ -146,6 +157,7 @@ public class InvestorService implements BankVerificationStarter {
         this.cybrillaClient = cybrillaClient;
         this.investorKycServiceProvider = investorKycServiceProvider;
         this.investorCybrillaSyncService = investorCybrillaSyncService;
+        this.profileChangeApprovalService = profileChangeApprovalService;
         this.scheduledBankSyncFailureBackoffMs = Math.max(0, scheduledBankSyncFailureBackoffMs);
         if (transactionManager == null) {
             this.deferredPersistTx = null;
@@ -154,6 +166,16 @@ public class InvestorService implements BankVerificationStarter {
             template.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
             this.deferredPersistTx = template;
         }
+    }
+
+    /**
+     * PA6/R8: setter-based optional injection of the in-app notification service. Kept off the
+     * constructors so the existing (and test) constructor signatures are unchanged; Spring wires
+     * it at runtime, tests inject a mock. {@code required = false} keeps the bean optional.
+     */
+    @Autowired(required = false)
+    public void setNotificationService(NotificationService notificationService) {
+        this.notificationService = notificationService;
     }
 
     private void ensurePoaReadinessBeforeOrderPlacement(UUID investorId, UUID actorId) {
@@ -565,6 +587,84 @@ public class InvestorService implements BankVerificationStarter {
             );
         }
         return investorRepository.save(saved);
+    }
+
+    /**
+     * Distributor "Send to Investor" backing op (investor.md §3 T1, §6.1, R1/R4/R5): from the
+     * Step-1 basic identity, park a PENDING investor keyed on PAN. PAN is the sole linking
+     * identifier (R4): we locate any existing investor by PAN.
+     *
+     * <ul>
+     *   <li>No existing row → create a new investor with the basic fields,
+     *       {@code distributor_id = NULL} (NOT linked yet — R5),
+     *       {@code pending_distributor_id = distributorId},
+     *       {@code linking_status = PENDING_INVESTOR_APPROVAL}.</li>
+     *   <li>Existing row still in a pre-approval state (PENDING_INVESTOR_APPROVAL / REJECTED, or a
+     *       legacy unlinked draft) → refresh the basic fields + {@code pending_distributor_id} and
+     *       re-arm {@code PENDING_INVESTOR_APPROVAL}.</li>
+     *   <li>Existing row already linked / past approval (any other linking_status, e.g. READY) →
+     *       reject with {@link IllegalStateException} (do NOT clobber an already-linked investor).</li>
+     * </ul>
+     *
+     * <p>Reuses the existing PAN normalisation + validation. Does NOT change the create
+     * constructor. The caller then hands the saved investor to
+     * {@code InvestorLinkRequestService.sendToInvestor(...)} which freezes the review payload and
+     * mints the approval token.
+     */
+    @Transactional
+    public Investor createOrUpdatePendingInvestor(SendToInvestorRequest request, UUID distributorId) {
+        String pan = normalizePan(request.pan());
+        PanFormat.validateForDatabase(pan);
+        String email = cleanText(request.email());
+
+        Optional<Investor> existingByPan = investorRepository.findByPan(pan);
+        if (existingByPan.isPresent()) {
+            Investor existing = existingByPan.get();
+            if (!isPreApprovalLinkingState(existing.getLinkingStatus())) {
+                // Do NOT clobber an already-linked / READY investor (R5 guard).
+                throw new IllegalStateException(
+                        "An investor with this PAN is already linked to a distributor.");
+            }
+            applyBasicIdentity(existing, request, email, pan);
+            existing.setDistributorId(null); // R5: not linked until the investor approves.
+            existing.setPendingDistributorId(distributorId);
+            existing.setLinkingStatus(InvestorLinkingStatus.PENDING_INVESTOR_APPROVAL);
+            return investorRepository.save(existing);
+        }
+
+        Investor investor = new Investor();
+        applyBasicIdentity(investor, request, email, pan);
+        investor.setDistributorId(null); // R5: not linked yet.
+        investor.setPendingDistributorId(distributorId);
+        investor.setLinkingStatus(InvestorLinkingStatus.PENDING_INVESTOR_APPROVAL);
+        investor.setInvestorStatus(InvestorStatus.ONBOARDING);
+        investor.setKycStatus(KycStatus.PENDING);
+        // households are NOT NULL; a self folio keys its own household until linked.
+        investor.setHouseholdId(UUID.randomUUID());
+
+        Investor saved = investorRepository.save(investor);
+        if (saved.getHouseholdId() == null && saved.getId() != null) {
+            saved.setHouseholdId(saved.getId());
+            saved = investorRepository.save(saved);
+        }
+        auditService.log(
+                "INVESTOR", saved.getId(), "PENDING_INVESTOR_APPROVAL_PARKED", distributorId,
+                "{\"pendingDistributorId\":\"" + distributorId + "\"}");
+        return saved;
+    }
+
+    /** Pre-approval states where a distributor may (re-)park a PENDING request keyed on this PAN. */
+    private boolean isPreApprovalLinkingState(InvestorLinkingStatus status) {
+        return status == InvestorLinkingStatus.PENDING_INVESTOR_APPROVAL
+                || status == InvestorLinkingStatus.REJECTED;
+    }
+
+    private void applyBasicIdentity(Investor investor, SendToInvestorRequest request, String email, String pan) {
+        investor.setFullName(cleanText(request.fullName()));
+        investor.setMobileNumber(cleanText(request.mobileNumber()));
+        investor.setEmail(email);
+        investor.setPan(pan);
+        investor.setDateOfBirth(request.dateOfBirth());
     }
 
     @Transactional
@@ -1291,7 +1391,237 @@ public class InvestorService implements BankVerificationStarter {
         investor.setInvestorStatus(InvestorStatus.READY_FOR_TRANSACTIONS);
         Investor saved = investorRepository.save(investor);
         auditService.log("INVESTOR", saved.getId(), "ONBOARDING_FINALIZED", actorId, "{}");
+
+        // R8 (receive-half): the investor has submitted/applied the form and is READY —
+        // notify the linked distributor in-app. Same @Transactional boundary so the
+        // notification commits atomically with the READY transition. notificationService is
+        // optionally injected (PA6), so null-guard for the legacy/short-constructor paths.
+        if (notificationService != null && saved.getDistributorId() != null) {
+            notificationService.createForDistributor(
+                    saved.getDistributorId(),
+                    saved.getId(),
+                    NotificationType.INVESTOR_FORM_SUBMITTED,
+                    "Investor completed onboarding",
+                    "The investor submitted their onboarding form and is ready for transactions.");
+        }
         return saved;
+    }
+
+    // ---- Skip-form state machine (R10) --------------------------------------
+    //
+    // After the investor approves the LINK (linking_status = INVESTOR_APPROVED,
+    // distributor_id linked), the investor may approve but SKIP the profile form.
+    // The distributor then fills it and the investor re-approves the resulting diff
+    // through the ProfileChangeApprovalService 2FA engine:
+    //
+    //   INVESTOR_APPROVED ──approveAndSkipForm──▶ INVESTOR_SKIPPED
+    //     ──submitProfileForInvestorReview──▶ DISTRIBUTOR_FILLING (challenge created)
+    //     ──updateProfile (supersede+recreate)──▶ DISTRIBUTOR_FILLING
+    //     ──approveProfileChange (2FA)──▶ PENDING_PROFILE_APPROVAL
+    //     ──applyProfileChange (consume gate FIRST)──▶ READY
+    //   PENDING_PROFILE_APPROVAL ──rejectProfileChange──▶ INVESTOR_SKIPPED
+
+    /**
+     * The investor approves the link but skips filling the profile form (R10): the
+     * distributor (already linked from the link approval) must fill it. Records the
+     * skip by moving {@code linking_status → INVESTOR_SKIPPED}; {@code distributor_id}
+     * is left untouched (it was linked at the link-approval transition).
+     *
+     * @throws IllegalStateException if the investor is not in a link-approved state
+     */
+    @Transactional
+    public Investor approveAndSkipForm(UUID investorId, UUID actorId) {
+        Investor investor = getInvestor(investorId);
+        InvestorLinkingStatus status = investor.getLinkingStatus();
+        if (status != InvestorLinkingStatus.INVESTOR_APPROVED
+                && status != InvestorLinkingStatus.PENDING_INVESTOR_APPROVAL) {
+            throw new IllegalStateException(
+                    "Cannot skip the profile form from linking_status=" + status
+                            + "; the investor must have approved the link first.");
+        }
+        investor.setLinkingStatus(InvestorLinkingStatus.INVESTOR_SKIPPED);
+        Investor saved = investorRepository.save(investor);
+        auditService.log("INVESTOR", saved.getId(), "INVESTOR_SKIPPED_FORM", actorId, "{}");
+        return saved;
+    }
+
+    /**
+     * The distributor submits the profile they filled on behalf of a skipped investor
+     * (R10): asserts the investor is {@code INVESTOR_SKIPPED} or already
+     * {@code DISTRIBUTOR_FILLING} AND that the acting distributor is the one linked to
+     * the investor, moves {@code linking_status → DISTRIBUTOR_FILLING}, and freezes the
+     * change into a fresh 2FA challenge for the investor to approve.
+     *
+     * @throws IllegalStateException if the investor is not in a fillable state
+     * @throws AccessDeniedException if the acting distributor is not linked to the investor
+     */
+    @Transactional
+    public ProfileChangeApprovalChallenge submitProfileForInvestorReview(
+            UUID investorId, String profileJson, UUID distributorActorId) {
+        Investor investor = getInvestor(investorId);
+        assertDistributorFillable(investor, distributorActorId);
+        investor.setLinkingStatus(InvestorLinkingStatus.DISTRIBUTOR_FILLING);
+        investorRepository.save(investor);
+        auditService.log("INVESTOR", investor.getId(), "DISTRIBUTOR_FILLING_SUBMITTED",
+                distributorActorId, "{}");
+        return profileChangeApprovalService.createChallenge(investorId, profileJson, distributorActorId);
+    }
+
+    /**
+     * The distributor edits the profile while still {@code DISTRIBUTOR_FILLING} (R10):
+     * stays in {@code DISTRIBUTOR_FILLING}, supersedes any live challenge (forcing
+     * re-authorisation), and freezes a fresh challenge over the new profile.
+     *
+     * @throws IllegalStateException if the investor is not {@code DISTRIBUTOR_FILLING}
+     * @throws AccessDeniedException if the acting distributor is not linked to the investor
+     */
+    @Transactional
+    public ProfileChangeApprovalChallenge updateProfile(
+            UUID investorId, String profileJson, UUID distributorActorId) {
+        Investor investor = getInvestor(investorId);
+        if (investor.getLinkingStatus() != InvestorLinkingStatus.DISTRIBUTOR_FILLING) {
+            throw new IllegalStateException(
+                    "Cannot update the pending profile from linking_status="
+                            + investor.getLinkingStatus() + "; expected DISTRIBUTOR_FILLING.");
+        }
+        assertLinkedDistributor(investor, distributorActorId);
+        profileChangeApprovalService.supersedeOnEdit(investorId, distributorActorId);
+        auditService.log("INVESTOR", investor.getId(), "DISTRIBUTOR_FILLING_UPDATED",
+                distributorActorId, "{}");
+        return profileChangeApprovalService.createChallenge(investorId, profileJson, distributorActorId);
+    }
+
+    /**
+     * The investor approves the distributor-filled diff via email-OTP + consent 2FA
+     * (R9/R10). Delegates verification to {@link ProfileChangeApprovalService#approve}
+     * (which asserts the acting account owns the investor) and, on success, moves
+     * {@code linking_status → PENDING_PROFILE_APPROVAL} (approved, awaiting apply).
+     */
+    @Transactional
+    public Investor approveProfileChange(
+            UUID investorId, UUID challengeId, UUID investorAccountId, String otpCode,
+            boolean consentAccepted, String ip, String ua, String sessionId) {
+        profileChangeApprovalService.approve(
+                challengeId, investorAccountId, otpCode, consentAccepted, ip, ua, sessionId);
+        Investor investor = getInvestor(investorId);
+        investor.setLinkingStatus(InvestorLinkingStatus.PENDING_PROFILE_APPROVAL);
+        Investor saved = investorRepository.save(investor);
+        auditService.log("INVESTOR", saved.getId(), "PROFILE_CHANGE_APPROVED", investorAccountId,
+                "{\"challengeId\":\"" + challengeId + "\"}");
+        return saved;
+    }
+
+    /**
+     * Applies the investor-approved profile change and finalises the link (R10). The
+     * atomic 2FA hard gate {@link ProfileChangeApprovalService#assertApprovedAndConsume}
+     * is the FIRST profile-touching statement: it both proves an {@code APPROVED}
+     * challenge exists with a matching hash AND flips it {@code APPROVED → CONSUMED} in
+     * the same transaction, so a replay (CONSUMED) is blocked and an apply exception
+     * rolls the flip back (retry-safe). Only after the gate passes are the approved
+     * profile fields copied onto the investor and {@code linking_status} set to
+     * {@code READY}.
+     *
+     * @throws IllegalStateException if no approved challenge exists or the hash drifted
+     */
+    @Transactional
+    public Investor applyProfileChange(UUID investorId, String recomputedSha256) {
+        // HARD GATE — must be the first statement: exactly-once + retry-safe.
+        profileChangeApprovalService.assertApprovedAndConsume(investorId, recomputedSha256);
+
+        ProfileChangeApprovalChallenge approved = profileChangeApprovalService
+                .listForInvestor(investorId).stream()
+                .filter(c -> c.getStatus() == ProfileChangeApprovalStatus.CONSUMED)
+                .filter(c -> Objects.equals(c.getProfileChangeSha256(), recomputedSha256))
+                .max(java.util.Comparator.comparing(
+                        c -> c.getConsumedAt() == null ? OffsetDateTime.MIN : c.getConsumedAt()))
+                .orElseThrow(() -> new IllegalStateException(
+                        "Approved profile snapshot disappeared after the consume gate."));
+
+        Investor investor = getInvestor(investorId);
+        applyApprovedProfileFields(investor, approved.getPendingProfileJson());
+        investor.setLinkingStatus(InvestorLinkingStatus.READY);
+        // Finalise: drive the investor READY_FOR_TRANSACTIONS (same effect as the
+        // existing markReadyAfterInvestorApproval path, but the investor's own 2FA
+        // gate — not a distributor-management ACL — is the authority here).
+        investor.setInvestorStatus(InvestorStatus.READY_FOR_TRANSACTIONS);
+        Investor saved = investorRepository.save(investor);
+        auditService.log("INVESTOR", saved.getId(), "PROFILE_CHANGE_APPLIED", investor.getDistributorId(),
+                "{\"hash\":\"" + recomputedSha256 + "\"}");
+        auditService.log("INVESTOR", saved.getId(), "ONBOARDING_FINALIZED", investor.getDistributorId(), "{}");
+        return saved;
+    }
+
+    /**
+     * The investor declines the distributor-filled diff (R10): marks the named
+     * challenge {@code REJECTED} (asserting the acting account owns the investor) and
+     * sends the link back to {@code INVESTOR_SKIPPED} so the distributor can re-fill.
+     */
+    @Transactional
+    public Investor rejectProfileChange(
+            UUID investorId, UUID challengeId, String reason, UUID investorAccountId) {
+        profileChangeApprovalService.reject(challengeId, investorAccountId, reason);
+        Investor investor = getInvestor(investorId);
+        investor.setLinkingStatus(InvestorLinkingStatus.INVESTOR_SKIPPED);
+        Investor saved = investorRepository.save(investor);
+        auditService.log("INVESTOR", saved.getId(), "PROFILE_CHANGE_REJECTED", investorAccountId,
+                "{\"challengeId\":\"" + challengeId + "\"}");
+        return saved;
+    }
+
+    /** Fillable by the linked distributor only when SKIPPED or already FILLING. */
+    private void assertDistributorFillable(Investor investor, UUID distributorActorId) {
+        InvestorLinkingStatus status = investor.getLinkingStatus();
+        if (status != InvestorLinkingStatus.INVESTOR_SKIPPED
+                && status != InvestorLinkingStatus.DISTRIBUTOR_FILLING) {
+            throw new IllegalStateException(
+                    "Cannot submit a distributor-filled profile from linking_status=" + status
+                            + "; expected INVESTOR_SKIPPED or DISTRIBUTOR_FILLING.");
+        }
+        assertLinkedDistributor(investor, distributorActorId);
+    }
+
+    /** The acting distributor must be the one linked to this investor (R10). */
+    private void assertLinkedDistributor(Investor investor, UUID distributorActorId) {
+        if (investor.getDistributorId() == null
+                || !investor.getDistributorId().equals(distributorActorId)) {
+            throw new AccessDeniedException(
+                    "Only the linked distributor may fill this investor's profile.");
+        }
+    }
+
+    /** Copies the approved pending-profile JSON onto the investor's profile fields. */
+    private void applyApprovedProfileFields(Investor investor, String pendingProfileJson) {
+        if (!hasText(pendingProfileJson)) {
+            return;
+        }
+        JsonNode node;
+        try {
+            node = OBJECT_MAPPER.readTree(pendingProfileJson);
+        } catch (Exception ex) {
+            throw new IllegalStateException("Approved profile snapshot is not valid JSON.", ex);
+        }
+        applyDateField(node, "dateOfBirth", investor::setDateOfBirth);
+        applyDateField(node, "anniversaryDate", investor::setAnniversaryDate);
+        applyDateField(node, "goalMaturityDate", investor::setGoalMaturityDate);
+        applyTextField(node, "addressLine1", investor::setAddressLine1);
+        applyTextField(node, "addressLine2", investor::setAddressLine2);
+        applyTextField(node, "city", investor::setCity);
+        applyTextField(node, "state", investor::setState);
+        applyTextField(node, "postalCode", investor::setPostalCode);
+    }
+
+    private void applyTextField(JsonNode node, String field, java.util.function.Consumer<String> setter) {
+        JsonNode value = node.get(field);
+        if (value != null && !value.isNull()) {
+            setter.accept(cleanText(value.asText()));
+        }
+    }
+
+    private void applyDateField(JsonNode node, String field, java.util.function.Consumer<java.time.LocalDate> setter) {
+        JsonNode value = node.get(field);
+        if (value != null && !value.isNull() && hasText(value.asText())) {
+            setter.accept(java.time.LocalDate.parse(value.asText().trim()));
+        }
     }
 
     @Transactional(readOnly = true)
