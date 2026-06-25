@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { parseServerValidation } from '../utils/serverValidation';
+import { parseServerValidation, readServerValidation, buildValidationSummary } from '../utils/serverValidation';
 
 /** Spring Boot origin for investor-action pages (/investor-actions/*), not the Vite dev server. */
 export const BACKEND_ORIGIN =
@@ -210,4 +210,56 @@ export const apiFetch = async (pathOrUrl: string, init: ApiFetchInit = {}) => {
   }
 
   return response;
+};
+
+// ─── Persona-linking: Step-1 "Send to Investor" gate (R1/R2) ──────────────────
+
+/** Distributor Step-1 basic identity sent for investor approval. `payloadJson` is a
+ *  JSON.stringify of the wizard form collected so far. */
+export interface SendToInvestorRequest {
+  fullName: string;
+  pan: string;
+  email: string;
+  mobileNumber: string;
+  dateOfBirth: string;
+  payloadJson: string;
+}
+
+/** Backend response for a successful send-to-investor: the investor record is created
+ *  with `distributor_id` NOT yet linked and an approval email is dispatched. */
+export interface SendToInvestorResponse {
+  status: 'PENDING_INVESTOR_APPROVAL';
+  message: string;
+  investorId: string;
+  approvalToken: string;
+}
+
+/**
+ * POST /investors/send-to-investor — creates a pending investor row keyed on PAN and
+ * emails the investor an approval link. The distributor wizard stays locked at Step 1
+ * until the investor approves. Throws an Error (with a human-readable message and any
+ * mapped field errors attached) when the server rejects the request.
+ */
+export const sendToInvestor = async (
+  body: SendToInvestorRequest,
+): Promise<SendToInvestorResponse> => {
+  const response = await apiFetch('/investors/send-to-investor', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    const validation = await readServerValidation(response);
+    const error = new Error(
+      buildValidationSummary(validation)
+        || validation.payload?.message
+        || `Server error: ${response.status}`,
+    ) as Error & { fieldErrors?: Record<string, string>; status?: number };
+    error.fieldErrors = validation.fieldErrors;
+    error.status = response.status;
+    throw error;
+  }
+
+  return (await response.json()) as SendToInvestorResponse;
 };

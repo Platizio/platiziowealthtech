@@ -3,9 +3,9 @@ import { motion, AnimatePresence } from 'motion/react';
 import {
   Check, ChevronRight, ChevronLeft, ChevronDown, ChevronUp,
   Eye, EyeOff, Upload, X, Info, AlertCircle, MapPin, Briefcase,
-  ShieldCheck,
+  ShieldCheck, MailCheck, Lock,
 } from 'lucide-react';
-import { apiFetch } from '../config/api';
+import { apiFetch, sendToInvestor } from '../config/api';
 import { buildValidationSummary, mapServerErrorsToState, readServerValidation } from '../utils/serverValidation';
 
 // ─── Password strength helpers ────────────────────────────────────────────────
@@ -278,6 +278,10 @@ export default function Onboarding({ onComplete, onBack }: { onComplete: () => v
   const [showConfPwd,  setShowConfPwd]  = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError,  setSubmitError]  = useState<string | null>(null);
+  // ── Persona-linking gate (R1/R2): Step-1 "Send to Investor" ──────────────────
+  const [sentToInvestor, setSentToInvestor] = useState(false);      // wizard locked at Step 1 until investor approves
+  const [showPendingModal, setShowPendingModal] = useState(false);  // "Investor approval is pending" popup
+  const [pendingEmail, setPendingEmail] = useState('');             // address the approval link was emailed to
 
   // ── Updaters ───────────────────────────────────────────────────────────────
   const set = <K extends keyof FormData>(k: K, v: FormData[K]) => {
@@ -390,10 +394,50 @@ export default function Onboarding({ onComplete, onBack }: { onComplete: () => v
     const errs = validate(step);
     if (Object.keys(errs).length > 0) { setErrors(errs); return; }
     setErrors({});
+    // R1/R2: Step-1 "Continue" is repurposed as "Send to Investor" — the wizard does
+    // not advance past Step 1 until the investor approves via the emailed link.
+    if (step === 1) { handleSendToInvestor(); return; }
     if (step < 5) setStep(s => s + 1);
     else handleSubmit();
   };
   const goBack = () => { setErrors({}); setStep(s => s - 1); };
+
+  // ── Send to Investor (R1/R2) ─────────────────────────────────────────────────
+  // POSTs the Step-1 basic identity for investor approval. On success the wizard is
+  // locked at Step 1 (sentToInvestor) and the "approval pending" popup is shown; the
+  // investor must approve via an emailed link before steps 2-5 unlock.
+  const handleSendToInvestor = async () => {
+    setIsSubmitting(true);
+    setSubmitError(null);
+    const trimmedEmail = data.email.trim().toLowerCase();
+    try {
+      const res = await sendToInvestor({
+        fullName:     `${data.firstName.trim()} ${data.lastName.trim()}`,
+        pan:          data.pan.trim().toUpperCase(),
+        email:        trimmedEmail,
+        mobileNumber: data.mobile.trim(),
+        dateOfBirth:  data.dob,
+        payloadJson:  JSON.stringify(data),
+      });
+      if (res.status === 'PENDING_INVESTOR_APPROVAL') {
+        setPendingEmail(trimmedEmail);
+        setSentToInvestor(true);
+        setShowPendingModal(true);
+      }
+    } catch (err) {
+      const e = err as Error & { fieldErrors?: Record<string, string> };
+      if (e.fieldErrors && Object.keys(e.fieldErrors).length > 0) {
+        setErrors(mapServerErrorsToState(e.fieldErrors, {
+          fullName: 'firstName',
+          mobileNumber: 'mobile',
+          dateOfBirth: 'dob',
+        }));
+      }
+      setSubmitError(e.message || 'Something went wrong. Please try again.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
 
   const handleSubmit = async () => {
     setIsSubmitting(true);
@@ -535,7 +579,10 @@ export default function Onboarding({ onComplete, onBack }: { onComplete: () => v
         {/* Step progress */}
         <div className="relative z-10 flex-1">
           <p className="text-white/35 text-[10px] font-bold uppercase tracking-widest mb-5">Application Progress</p>
-          {STEPS.map((s, i) => (
+          {STEPS.map((s, i) => {
+            // R1/R2: while the investor's approval is pending, steps 2-5 stay locked.
+            const locked = sentToInvestor && s.id > 1;
+            return (
             <div key={s.id}>
               <div className={`flex items-start gap-3.5 ${step === s.id ? 'opacity-100' : step > s.id ? 'opacity-75' : 'opacity-30'}`}>
                 <div className={`w-7 h-7 rounded-full flex items-center justify-center flex-shrink-0 text-sm font-bold mt-0.5 transition-all duration-300 ${
@@ -543,10 +590,13 @@ export default function Onboarding({ onComplete, onBack }: { onComplete: () => v
                   step === s.id ? 'bg-white text-[#0B1B3E] shadow-lg' :
                   'bg-white/10 text-white/40 border border-white/10'
                 }`}>
-                  {step > s.id ? <Check className="w-3.5 h-3.5" /> : s.id}
+                  {step > s.id ? <Check className="w-3.5 h-3.5" /> : locked ? <Lock className="w-3 h-3" /> : s.id}
                 </div>
                 <div>
-                  <p className={`text-sm font-semibold leading-tight ${step === s.id ? 'text-white' : 'text-white/65'}`}>{s.title}</p>
+                  <p className={`text-sm font-semibold leading-tight flex items-center gap-1.5 ${step === s.id ? 'text-white' : 'text-white/65'}`}>
+                    {s.title}
+                    {locked && <Lock className="w-3 h-3 text-amber-300/80" aria-label="Locked until investor approval" />}
+                  </p>
                   <p className="text-[11px] text-white/30 mt-0.5">{s.subtitle}</p>
                 </div>
               </div>
@@ -554,7 +604,8 @@ export default function Onboarding({ onComplete, onBack }: { onComplete: () => v
                 <div className={`ml-3.5 w-px h-5 my-1 ${step > s.id ? 'bg-green-400/30' : 'bg-white/10'}`} />
               )}
             </div>
-          ))}
+            );
+          })}
         </div>
 
         {/* Footer */}
@@ -1096,18 +1147,36 @@ export default function Onboarding({ onComplete, onBack }: { onComplete: () => v
             </motion.div>
           </AnimatePresence>
 
+          {/* ── Investor-approval pending banner (R2) ── */}
+          {sentToInvestor && (
+            <div className="mt-10 flex items-start gap-3 bg-amber-50 border border-amber-200 rounded-xl px-4 py-3.5">
+              <MailCheck className="w-4 h-4 text-amber-500 flex-shrink-0 mt-0.5" />
+              <p className="text-xs text-amber-800 leading-relaxed">
+                <span className="font-bold">Investor approval is pending.</span>{' '}
+                We have emailed an approval link to{' '}
+                <span className="font-semibold">{pendingEmail}</span>. The remaining steps unlock once the investor approves.
+              </p>
+            </div>
+          )}
+
           {/* ── Navigation ── */}
-          <div className="flex gap-3 mt-10 pt-6 border-t border-slate-100">
+          <div className={`flex gap-3 pt-6 border-t border-slate-100 ${sentToInvestor ? 'mt-6' : 'mt-10'}`}>
             {step > 1 && (
               <button onClick={goBack}
                 className="px-6 py-3 bg-slate-100 text-slate-700 font-medium text-sm rounded-xl hover:bg-slate-200 transition-colors flex items-center gap-2">
                 <ChevronLeft className="w-4 h-4" /> Back
               </button>
             )}
-            <button onClick={goNext} disabled={isSubmitting}
+            <button onClick={goNext} disabled={isSubmitting || sentToInvestor}
               className="flex-1 py-3 bg-[#0B1B3E] text-white font-semibold text-sm rounded-xl hover:bg-[#1A3066] transition-colors flex items-center justify-center gap-2 shadow-sm disabled:opacity-60 disabled:cursor-not-allowed">
-              {step === 5 ? (isSubmitting ? 'Submitting…' : 'Submit Application') : 'Save & Continue'}
-              {step < 5 && <ChevronRight className="w-4 h-4" />}
+              {step === 1
+                ? (sentToInvestor
+                    ? (<><Lock className="w-4 h-4" /> Awaiting investor approval</>)
+                    : (isSubmitting ? 'Sending…' : 'Send to Investor'))
+                : step === 5
+                  ? (isSubmitting ? 'Submitting…' : 'Submit Application')
+                  : 'Save & Continue'}
+              {step > 1 && step < 5 && <ChevronRight className="w-4 h-4" />}
             </button>
           </div>
           {submitError && (
@@ -1120,6 +1189,66 @@ export default function Onboarding({ onComplete, onBack }: { onComplete: () => v
           </p>
         </div>
       </div>
+
+      {/* ─── Investor approval pending modal (R2) ─────────────────────────────── */}
+      <AnimatePresence>
+        {showPendingModal && (
+          <motion.div
+            className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/45 px-4 backdrop-blur-sm"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="investor-pending-title"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={() => setShowPendingModal(false)}
+          >
+            <motion.div
+              className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-6 text-left shadow-2xl"
+              initial={{ opacity: 0, y: 18, scale: 0.97 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 12, scale: 0.98 }}
+              transition={{ duration: 0.18 }}
+              onClick={e => e.stopPropagation()}
+            >
+              <div className="flex items-start gap-3">
+                <div className="mt-0.5 flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-xl bg-[#0B1B3E]/5 text-[#0B1B3E]">
+                  <MailCheck className="h-5 w-5" aria-hidden="true" />
+                </div>
+                <div className="min-w-0">
+                  <h2 id="investor-pending-title" className="text-base font-semibold text-slate-900">
+                    Investor approval is pending
+                  </h2>
+                  <p className="mt-2 text-sm leading-6 text-slate-600">
+                    We have sent an approval link to{' '}
+                    <span className="font-semibold text-slate-800">{pendingEmail}</span>.
+                    The investor must approve via that emailed link before onboarding continues — the
+                    remaining steps stay locked until then.
+                  </p>
+                </div>
+              </div>
+
+              <div className="mt-5 flex items-start gap-2.5 rounded-xl border border-amber-100 bg-amber-50 px-4 py-3">
+                <Info className="h-4 w-4 flex-shrink-0 text-amber-500 mt-0.5" aria-hidden="true" />
+                <p className="text-xs leading-relaxed text-amber-800">
+                  Once the investor approves, you can return to complete steps 2–5 (credentials, address,
+                  bank and agreements).
+                </p>
+              </div>
+
+              <div className="mt-6 flex justify-end">
+                <button
+                  type="button"
+                  onClick={() => setShowPendingModal(false)}
+                  className="rounded-lg bg-[#0B1B3E] px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-[#1A3066]"
+                >
+                  Got it
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
