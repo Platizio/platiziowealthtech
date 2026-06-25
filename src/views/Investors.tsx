@@ -5,7 +5,7 @@ import {
   Search, Filter, ChevronLeft, Download, ShieldCheck, Users,
   TrendingUp, TrendingDown, AreaChart as AreaChartIcon, Activity,
   CheckCircle2, Clock, XCircle, AlertCircle, Upload, RefreshCw, Pencil,
-  Trash2, Plus, ArrowRight,
+  Trash2, Plus, ArrowRight, ClipboardEdit, Link2,
 } from 'lucide-react';
 import {
   AreaChart as RechartsArea, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
@@ -26,6 +26,8 @@ import {
 } from '../utils/archivedInvestorRestore';
 import EmptyState from '../components/EmptyState';
 import InvestorEditForm from '../components/InvestorEditForm';
+import DistributorFillProfileForm from '../components/DistributorFillProfileForm';
+import type { DistributorProfileSubmitResponse } from '../config/api';
 import CybrillaKycWarnings from '../components/CybrillaKycWarnings';
 import CybrillaKycReasonDialog, { type CybrillaKycReasonDialogContent } from '../components/CybrillaKycReasonDialog';
 import KycFlowPanel from '../components/KycFlowPanel';
@@ -97,6 +99,26 @@ const riskConfig: Record<string, string> = {
   CONSERVATIVE: 'bg-blue-50 text-blue-600',
   MODERATE: 'bg-amber-50 text-amber-600',
   AGGRESSIVE: 'bg-red-50 text-red-600',
+};
+
+// ─── Persona-linking status (investor.md §3) ─────────────────────────────────────
+// Surfaced from Investor.linkingStatus (serialized camelCase by the BE on each investor
+// row). Only the states a distributor needs to act on / understand carry a badge; the
+// common terminal READY state stays unbadged to avoid noise.
+const linkingStatusConfig: Record<string, { label: string; cls: string }> = {
+  PENDING_INVESTOR_APPROVAL: { label: 'Awaiting investor approval', cls: 'bg-amber-50 text-amber-700' },
+  INVESTOR_APPROVED: { label: 'Link approved', cls: 'bg-green-50 text-green-700' },
+  INVESTOR_FILLING: { label: 'Investor filling form', cls: 'bg-blue-50 text-blue-600' },
+  INVESTOR_SKIPPED: { label: 'Form skipped — fill needed', cls: 'bg-orange-50 text-orange-700' },
+  DISTRIBUTOR_FILLING: { label: 'You are filling the profile', cls: 'bg-indigo-50 text-indigo-700' },
+  PENDING_PROFILE_APPROVAL: { label: 'Awaiting investor sign-off', cls: 'bg-amber-50 text-amber-700' },
+  REJECTED: { label: 'Link rejected', cls: 'bg-red-50 text-red-600' },
+};
+
+/** True when the distributor can fill the profile on a skipped/in-progress fill (R10). */
+const canDistributorFillProfile = (investor: any) => {
+  const status = String(investor?.linkingStatus || '').toUpperCase();
+  return status === 'INVESTOR_SKIPPED' || status === 'DISTRIBUTOR_FILLING';
 };
 
 const matchesInvestorSearch = (inv: any, query: string) => {
@@ -547,6 +569,7 @@ export default function Investors({
   const [kycFilter, setKycFilter] = useState('All');
   const [statusFilter, setStatusFilter] = useState('All');
   const [selectedInvestor, setSelectedInvestor] = useState<any | null>(null);
+  const [openFillProfile, setOpenFillProfile] = useState(false);
   const [page, setPage] = useState(0);
   const [size, setSize] = useState(20);
   const [kycRefreshingIds, setKycRefreshingIds] = useState<Record<string, boolean>>({});
@@ -734,8 +757,9 @@ export default function Investors({
     setSelectedInvestor(prev => prev?.id === updatedInvestor.id ? { ...prev, ...updatedInvestor } : prev);
   };
 
-  const openInvestorDetail = (investor: any) => {
+  const openInvestorDetail = (investor: any, options?: { fillProfile?: boolean }) => {
     listScrollRef.current = typeof window !== 'undefined' ? window.scrollY : 0;
+    setOpenFillProfile(Boolean(options?.fillProfile));
     setSelectedInvestor(investor);
   };
 
@@ -972,6 +996,7 @@ export default function Investors({
         onContinueOnboarding={continueInvestorOnboarding}
         onModifyKyc={openModifyKyc}
         isDeleting={Boolean(deletingInvestorIds[selectedInvestor.id])}
+        startInFillProfile={openFillProfile}
       />
     );
   }
@@ -1103,6 +1128,8 @@ export default function Investors({
                   const canInvest = isTransactionEligible(inv);
                   const investBlockedReason = canInvest ? '' : transactionEligibilityMessage(inv);
                   const canContinueOnboarding = shouldShowContinueOnboarding(inv);
+                  const linking = linkingStatusConfig[String(inv.linkingStatus || '').toUpperCase()];
+                  const canFillProfile = canDistributorFillProfile(inv);
 
                   return (
                     <tr key={inv.id} className="group hover:bg-slate-50 transition-colors">
@@ -1122,6 +1149,11 @@ export default function Investors({
                         <span className={`px-2 py-1 text-xs font-semibold rounded-md ${stCls}`}>
                           {(inv.investorStatus || 'DRAFT').replace(/_/g, ' ')}
                         </span>
+                        {linking && (
+                          <span className={`mt-1.5 flex w-fit items-center gap-1 px-2 py-0.5 text-[10px] font-semibold rounded ${linking.cls}`}>
+                            <Link2 className="w-3 h-3" /> {linking.label}
+                          </span>
+                        )}
                       </td>
                       <td className="px-6 py-4">
                         <span className={`inline-flex items-center px-2.5 py-1 text-xs font-semibold rounded-md ${kyc.bg} ${kyc.text}`}>
@@ -1176,6 +1208,16 @@ export default function Investors({
                             >
                               <RefreshCw className={`w-3.5 h-3.5 ${kycRefreshingIds[inv.id] ? 'animate-spin' : ''}`} />
                               KYC
+                            </button>
+                          )}
+                          {canFillProfile && (
+                            <button
+                              onClick={() => openInvestorDetail(inv, { fillProfile: true })}
+                              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-orange-700 border border-orange-200 rounded-lg hover:bg-orange-50 transition-colors"
+                              title="This investor skipped the onboarding form — fill it on their behalf"
+                            >
+                              <ClipboardEdit className="w-3.5 h-3.5" />
+                              Fill profile
                             </button>
                           )}
                           <button
@@ -1270,6 +1312,7 @@ function InvestorDetail({
   onContinueOnboarding,
   onModifyKyc,
   isDeleting,
+  startInFillProfile,
 }: {
   investor: any;
   onBack: () => void;
@@ -1279,6 +1322,7 @@ function InvestorDetail({
   onContinueOnboarding?: (investor: any) => void;
   onModifyKyc?: (investor: any) => void;
   isDeleting?: boolean;
+  startInFillProfile?: boolean;
 }) {
   const [activeTab, setActiveTab] = useState(() =>
     isKycVerifiedStatus(investor?.kycStatus) ? 'overview' : 'compliance',
@@ -1393,6 +1437,10 @@ function InvestorDetail({
   // that auto-fades a few seconds after a successful PUT.
   const [isEditing, setIsEditing] = useState(false);
   const [savedFlash, setSavedFlash] = useState(false);
+  // R10: distributor skip-form fill panel toggle + a success banner shown after the
+  // distributor-filled profile is frozen into a 2FA challenge for the investor to approve.
+  const [isFillingProfile, setIsFillingProfile] = useState(Boolean(startInFillProfile));
+  const [fillNotice, setFillNotice] = useState('');
   const editScrollTopRef = React.useRef(0);
   useEffect(() => {
     setCurrentInvestor(investor);
@@ -1473,6 +1521,20 @@ function InvestorDetail({
   const investBlockedReason = canInvest ? '' : transactionEligibilityMessage(currentInvestor);
   const canContinueOnboarding = shouldShowContinueOnboarding(currentInvestor);
   const initials = (currentInvestor.fullName || 'IN').split(' ').map((n: string) => n[0]).join('').substring(0, 2).toUpperCase();
+  const linking = linkingStatusConfig[String(currentInvestor.linkingStatus || '').toUpperCase()];
+  const canFillProfile = canDistributorFillProfile(currentInvestor);
+  const isFillResubmit = String(currentInvestor.linkingStatus || '').toUpperCase() === 'DISTRIBUTOR_FILLING';
+
+  const handleProfileFilled = (result: DistributorProfileSubmitResponse) => {
+    const next = { ...currentInvestor, linkingStatus: result.linkingStatus };
+    setCurrentInvestor(next);
+    onInvestorUpdated?.(next);
+    setIsFillingProfile(false);
+    setFillNotice(
+      'Profile submitted. The investor has been asked to approve these details with a one-time '
+      + 'code before they take effect.',
+    );
+  };
 
   const restoreEditScroll = () => {
     if (typeof window !== 'undefined') {
@@ -2001,6 +2063,11 @@ function InvestorDetail({
               <span className={`inline-flex items-center px-2.5 py-1 text-xs font-semibold rounded-md ${kyc.bg} ${kyc.text}`}>
                 {kyc.label}
               </span>
+              {linking && (
+                <span className={`inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold rounded-md ${linking.cls}`}>
+                  <Link2 className="w-3.5 h-3.5" /> {linking.label}
+                </span>
+              )}
               {currentInvestor.pan && (
                 <span className="text-slate-400 font-mono text-xs">PAN: {currentInvestor.pan}</span>
               )}
@@ -2014,6 +2081,15 @@ function InvestorDetail({
             <span className="flex items-center gap-1.5 text-xs font-semibold text-green-700 bg-green-50 border border-green-200 px-2.5 py-1 rounded-full">
               <CheckCircle2 className="w-3.5 h-3.5" /> Saved
             </span>
+          )}
+          {canFillProfile && !isFillingProfile && (
+            <button
+              type="button"
+              onClick={() => { setFillNotice(''); setIsFillingProfile(true); }}
+              className="flex items-center gap-2 px-4 py-2 text-sm font-medium bg-orange-600 text-white rounded-lg shadow-sm hover:bg-orange-700 transition-colors"
+            >
+              <ClipboardEdit className="w-4 h-4" /> {isFillResubmit ? 'Edit profile' : 'Fill profile'}
+            </button>
           )}
           {canContinueOnboarding && onContinueOnboarding && (
             <button
@@ -2074,6 +2150,33 @@ function InvestorDetail({
         </div>
       </div>
 
+      {/* R10: distributor skip-form success banner */}
+      {fillNotice && !isFillingProfile && (
+        <div className="mb-6 flex items-start gap-2 rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-sm font-medium text-green-700">
+          <CheckCircle2 className="mt-0.5 h-4 w-4 flex-shrink-0" />
+          <span>{fillNotice}</span>
+        </div>
+      )}
+
+      {/* R10: distributor fills the skipped onboarding profile. Replaces the tab body while
+          active so the focused task stays front-and-centre, mirroring the F-10 edit flow. */}
+      {isFillingProfile ? (
+        <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+          <div className="mb-5 flex items-center gap-2">
+            <ClipboardEdit className="h-5 w-5 text-[#0B1B3E]" />
+            <h2 className="text-lg font-semibold text-slate-800">
+              {isFillResubmit ? 'Edit investor profile' : 'Fill investor profile'}
+            </h2>
+          </div>
+          <DistributorFillProfileForm
+            investor={currentInvestor}
+            isResubmit={isFillResubmit}
+            onSubmitted={handleProfileFilled}
+            onCancel={() => setIsFillingProfile(false)}
+          />
+        </div>
+      ) : (
+      <>
       {/* Tabs */}
       <div className="flex gap-6 border-b border-slate-200 mb-8">
         {tabs.map(tab => (
@@ -2453,6 +2556,8 @@ function InvestorDetail({
           </motion.div>
         )}
       </AnimatePresence>
+      </>
+      )}
 
       <CybrillaKycReasonDialog
         open={kycReasonDialogOpen}

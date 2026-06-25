@@ -34,6 +34,14 @@ export default function InvestorLoginPage() {
   const [searchParams] = useSearchParams();
   const sessionExpired = searchParams.get('reason') === 'session_expired';
 
+  /** Post-login destination. Only same-origin /investor/* paths are honored so the
+   *  return-to cannot be used to bounce the session somewhere unexpected. */
+  const safeReturnTo = (() => {
+    const raw = searchParams.get('returnTo');
+    if (raw && raw.startsWith('/investor/')) return raw;
+    return '/investor/dashboard';
+  })();
+
   const [channel, setChannel] = useState<LoginChannel>('email');
 
   const [email, setEmail] = useState('');
@@ -135,7 +143,7 @@ export default function InvestorLoginPage() {
       }
       const user = normalizeInvestorUser(data);
       if (user) dispatch(setInvestorUser(user));
-      navigate('/investor/dashboard', { replace: true });
+      navigate(safeReturnTo, { replace: true });
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Incorrect OTP. Please check and try again.');
       setOtpDigits(Array(6).fill(''));

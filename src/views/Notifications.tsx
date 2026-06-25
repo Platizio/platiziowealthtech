@@ -40,7 +40,7 @@ const typeConfig: Record<NotifType, { borderColor: string; iconBg: string; icon:
   },
 };
 
-const CATEGORIES = ['All', 'KYC', 'Transaction', 'Payment', 'SIP', 'Redemption', 'Mandate', 'Life Event', 'General'];
+const CATEGORIES = ['All', 'Linking', 'KYC', 'Transaction', 'Payment', 'SIP', 'Redemption', 'Mandate', 'Life Event', 'General'];
 
 function mapBackendType(type: string): { notifType: NotifType, category: string } {
   switch (type) {
@@ -55,6 +55,13 @@ function mapBackendType(type: string): { notifType: NotifType, category: string 
     case 'BANK_CREDIT_COMPLETED': return { notifType: 'success', category: 'Redemption' };
     case 'RECURRING_PLAN_EVENT': return { notifType: 'info', category: 'SIP' };
     case 'LIFE_EVENT_REMINDER': return { notifType: 'info', category: 'Life Event' };
+    // ── Persona-linking choreography (investor.md R8) ──
+    // INVESTOR_LINK_APPROVED: the investor clicked Approve on the email link, so the
+    // distributor↔investor link is now live. INVESTOR_FORM_SUBMITTED: the investor
+    // completed/submitted their onboarding profile. Both are positive milestones the
+    // distributor needs to see so they know to proceed (or, for a skipped form, fill it).
+    case 'INVESTOR_LINK_APPROVED': return { notifType: 'success', category: 'Linking' };
+    case 'INVESTOR_FORM_SUBMITTED': return { notifType: 'success', category: 'Linking' };
     case 'GENERAL':
     default:
       return { notifType: 'info', category: 'General' };

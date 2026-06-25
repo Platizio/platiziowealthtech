@@ -263,3 +263,297 @@ export const sendToInvestor = async (
 
   return (await response.json()) as SendToInvestorResponse;
 };
+
+// ─── Investor email-approval link (R3/R7) ─────────────────────────────────────
+
+/** Link request lifecycle, mirrors BE `InvestorLinkRequestStatus`. */
+export type InvestorLinkStatus =
+  | 'PENDING'
+  | 'APPROVED'
+  | 'REJECTED'
+  | 'EXPIRED'
+  | 'SUPERSEDED';
+
+/**
+ * Read-only review payload for the investor email-approval link — mirrors the BE
+ * record `InvestorLinkReviewResponse` (GET /investor/link/{token}). `profileDetailsJson`
+ * is the exact distributor-entered Step-1 payload, passed through verbatim for the FE
+ * to render; `contentSha256`/`revisionNo` bind it to the reviewed revision.
+ */
+export interface InvestorLinkReviewResponse {
+  distributorDisplayName?: string | null;
+  profileDetailsJson?: string | null;
+  contentSha256?: string | null;
+  revisionNo?: number | null;
+  status: InvestorLinkStatus;
+  /** ISO-8601 OffsetDateTime; null when the request never carried an expiry. */
+  expiresAt?: string | null;
+}
+
+/** Shared shape for the three POST mutations — they all return at least `linkingStatus`. */
+export interface InvestorLinkActionResponse {
+  linkingStatus?: string;
+  status?: string;
+  [key: string]: unknown;
+}
+
+/** Thrown by the link api fns; carries the HTTP status so the page can map 403/404/410/409. */
+export type InvestorLinkError = Error & { status?: number };
+
+/**
+ * Runs an investor-link request and normalizes failures into a single Error carrying the
+ * HTTP status. A 401 here is handled by `apiFetch` (investor session → /investor/login),
+ * so we only translate the resource-level errors (404 unknown token, 403 not-mine,
+ * 409/410 expired/already-acted) into human-readable copy at the call site.
+ */
+const investorLinkRequest = async <T>(
+  path: string,
+  method: 'GET' | 'POST',
+): Promise<T> => {
+  const response = await apiFetch(path, {
+    method,
+    headers: { 'Content-Type': 'application/json' },
+  });
+  const data = (await response.json().catch(() => null)) as
+    | (T & { message?: string })
+    | null;
+  if (!response.ok) {
+    const error = new Error(
+      (data as { message?: string } | null)?.message
+        || `Server error: ${response.status}`,
+    ) as InvestorLinkError;
+    error.status = response.status;
+    throw error;
+  }
+  return data as T;
+};
+
+/** GET /investor/link/{token} — load the distributor-entered details for review. */
+export const reviewInvestorLink = (token: string) =>
+  investorLinkRequest<InvestorLinkReviewResponse>(
+    `/investor/link/${encodeURIComponent(token)}`,
+    'GET',
+  );
+
+/** POST /investor/link/{token}/approve — link the distributor by PAN (→ INVESTOR_APPROVED). */
+export const approveInvestorLink = (token: string) =>
+  investorLinkRequest<InvestorLinkActionResponse>(
+    `/investor/link/${encodeURIComponent(token)}/approve`,
+    'POST',
+  );
+
+/** POST /investor/link/{token}/reject — decline the link (→ REJECTED). */
+export const rejectInvestorLink = (token: string) =>
+  investorLinkRequest<InvestorLinkActionResponse>(
+    `/investor/link/${encodeURIComponent(token)}/reject`,
+    'POST',
+  );
+
+/** POST /investor/link/{token}/approve-and-skip — approve but ask the distributor to fill (→ INVESTOR_SKIPPED). */
+export const approveAndSkipInvestorLink = (token: string) =>
+  investorLinkRequest<InvestorLinkActionResponse>(
+    `/investor/link/${encodeURIComponent(token)}/approve-and-skip`,
+    'POST',
+  );
+
+// ─── Distributor skip-form fill (R10) ─────────────────────────────────────────
+
+/** Linking lifecycle, mirrors BE `InvestorLinkingStatus`. */
+export type InvestorLinkingStatus =
+  | 'PENDING_INVESTOR_APPROVAL'
+  | 'INVESTOR_APPROVED'
+  | 'INVESTOR_FILLING'
+  | 'INVESTOR_SKIPPED'
+  | 'DISTRIBUTOR_FILLING'
+  | 'PENDING_PROFILE_APPROVAL'
+  | 'READY'
+  | 'REJECTED';
+
+/**
+ * Mirrors the BE record `DistributorProfileSubmitResponse`. After a distributor fills
+ * (or edits) a skipped investor's profile, the BE freezes the details into a fresh 2FA
+ * `challengeId` the investor must approve, and reflects `linkingStatus` =
+ * `DISTRIBUTOR_FILLING`.
+ */
+export interface DistributorProfileSubmitResponse {
+  investorId: string;
+  linkingStatus: InvestorLinkingStatus;
+  challengeId: string;
+}
+
+/**
+ * Posts a distributor-filled profile for an investor who approved the link but skipped the
+ * form (linking_status INVESTOR_SKIPPED, or already DISTRIBUTOR_FILLING). `payloadJson` is a
+ * `JSON.stringify` of the collected profile fields (dateOfBirth, address, etc.); the acting
+ * distributor is resolved server-side from the JWT/cookie — never sent in the body.
+ *
+ * POST /api/v1/investors/{investorId}/profile/submit. A 400 means the investor is not in a
+ * fillable state; a 403 means a different distributor is linked. The error carries `.status`.
+ */
+export const submitDistributorProfile = async (
+  investorId: string,
+  payloadJson: string,
+): Promise<DistributorProfileSubmitResponse> => {
+  const response = await apiFetch(`/investors/${encodeURIComponent(investorId)}/profile/submit`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ payloadJson }),
+  });
+  const data = (await response.json().catch(() => null)) as
+    | (DistributorProfileSubmitResponse & { message?: string })
+    | null;
+  if (!response.ok) {
+    const error = new Error(
+      (data as { message?: string } | null)?.message || `Server error: ${response.status}`,
+    ) as Error & { status?: number };
+    error.status = response.status;
+    throw error;
+  }
+  return data as DistributorProfileSubmitResponse;
+};
+
+/**
+ * Edits the still-pending distributor-filled profile (while DISTRIBUTOR_FILLING): supersedes
+ * any live challenge and freezes a fresh one over the edited details.
+ * PUT /api/v1/investors/{investorId}/profile.
+ */
+export const updateDistributorProfile = async (
+  investorId: string,
+  payloadJson: string,
+): Promise<DistributorProfileSubmitResponse> => {
+  const response = await apiFetch(`/investors/${encodeURIComponent(investorId)}/profile`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ payloadJson }),
+  });
+  const data = (await response.json().catch(() => null)) as
+    | (DistributorProfileSubmitResponse & { message?: string })
+    | null;
+  if (!response.ok) {
+    const error = new Error(
+      (data as { message?: string } | null)?.message || `Server error: ${response.status}`,
+    ) as Error & { status?: number };
+    error.status = response.status;
+    throw error;
+  }
+  return data as DistributorProfileSubmitResponse;
+};
+
+// ─── Investor profile-change approvals (skip-form 2FA, R9) ────────────────────
+
+/**
+ * Compact view of a pending distributor-filled profile-change (2FA) challenge for the
+ * investor's Approvals page — mirrors the BE record {@code ProfileChangeApprovalSummaryResponse}
+ * ({@code GET /investor/profile-changes}). {@code pendingProfileJson} is the immutable frozen
+ * profile the investor is approving; {@code consentRenderedText} is the exact consent copy
+ * stored as evidence. The OTP code is NEVER carried here — it is delivered out-of-band.
+ */
+export interface ProfileChangeApprovalSummary {
+  challengeId: string;
+  investorId?: string;
+  status: string;               // PENDING | CHALLENGE_SENT | APPROVED
+  pendingProfileJson?: string;
+  profileChangeSha256?: string;
+  consentTemplateVersion?: string;
+  consentRenderedText?: string;
+  maskedDestination?: string;
+  channel?: string;             // EMAIL | MOBILE
+  expiresAt?: string;
+  createdAt?: string;
+}
+
+/** Mirrors the BE record {@code OtpRequestResponse}. {@code devCode} is local-profile only. */
+export interface ProfileChangeOtpResponse {
+  message?: string;
+  expiresInSeconds?: number;
+  resendInSeconds?: number;
+  devCode?: string;
+}
+
+/** Result of approving a profile change — the change is applied and the investor → READY. */
+export interface ProfileChangeApproveResponse {
+  challengeId?: string;
+  linkingStatus?: string;       // READY
+  message?: string;
+  [key: string]: unknown;
+}
+
+/** Result of rejecting a profile change — the link returns to INVESTOR_SKIPPED for a re-fill. */
+export interface ProfileChangeRejectResponse {
+  challengeId?: string;
+  linkingStatus?: string;       // INVESTOR_SKIPPED
+  [key: string]: unknown;
+}
+
+/** Thrown by the profile-change api fns; carries the HTTP status so the page can map 403/404/409/410. */
+export type ProfileChangeError = Error & { status?: number };
+
+const profileChangeRequest = async <T>(
+  path: string,
+  method: 'GET' | 'POST',
+  body?: unknown,
+): Promise<T> => {
+  const response = await apiFetch(path, {
+    method,
+    headers: { 'Content-Type': 'application/json' },
+    ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+  });
+  const data = (await response.json().catch(() => null)) as (T & { message?: string }) | null;
+  if (!response.ok) {
+    const error = new Error(
+      (data as { message?: string } | null)?.message || `Server error: ${response.status}`,
+    ) as ProfileChangeError;
+    error.status = response.status;
+    throw error;
+  }
+  return data as T;
+};
+
+/**
+ * GET /investor/profile-changes — lists all live (PENDING | CHALLENGE_SENT | APPROVED)
+ * distributor-filled profile-change challenges for my linked investor profile.
+ */
+export const listProfileChanges = (): Promise<ProfileChangeApprovalSummary[]> =>
+  profileChangeRequest<ProfileChangeApprovalSummary[]>('/investor/profile-changes', 'GET');
+
+/**
+ * POST /investor/profile-changes/{challengeId}/request-otp — emails the one-time passcode
+ * bound to this challenge (PENDING → CHALLENGE_SENT). Never returns the live code.
+ */
+export const requestProfileChangeOtp = (
+  challengeId: string,
+): Promise<ProfileChangeOtpResponse> =>
+  profileChangeRequest<ProfileChangeOtpResponse>(
+    `/investor/profile-changes/${encodeURIComponent(challengeId)}/request-otp`,
+    'POST',
+    {},
+  );
+
+/**
+ * POST /investor/profile-changes/{challengeId}/approve — verifies consent + OTP (→ APPROVED)
+ * then applies the frozen change (→ READY). The BE body field is {@code code}.
+ */
+export const approveProfileChange = (
+  challengeId: string,
+  otpCode: string,
+  consentAccepted: boolean,
+): Promise<ProfileChangeApproveResponse> =>
+  profileChangeRequest<ProfileChangeApproveResponse>(
+    `/investor/profile-changes/${encodeURIComponent(challengeId)}/approve`,
+    'POST',
+    { consentAccepted, code: otpCode },
+  );
+
+/**
+ * POST /investor/profile-changes/{challengeId}/reject — declines the change (→ REJECTED) and
+ * returns the link to INVESTOR_SKIPPED so the distributor can re-fill. {@code reason} is optional.
+ */
+export const rejectProfileChange = (
+  challengeId: string,
+  reason?: string,
+): Promise<ProfileChangeRejectResponse> =>
+  profileChangeRequest<ProfileChangeRejectResponse>(
+    `/investor/profile-changes/${encodeURIComponent(challengeId)}/reject`,
+    'POST',
+    { reason: reason ?? null },
+  );

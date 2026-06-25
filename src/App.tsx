@@ -75,6 +75,7 @@ const InvestorMgmt        = lazy(() => import('./views/InvestorMgmt'));
 const InvestorLoginPage      = lazy(() => import('./views/InvestorLoginPage'));
 const InvestorSignup         = lazy(() => import('./views/InvestorSignup'));
 const InvestorOnboardingReview = lazy(() => import('./views/InvestorOnboardingReview'));
+const InvestorLinkApproval    = lazy(() => import('./views/InvestorLinkApproval'));
 
 // Investor portal views (Phase 2 — transaction 2FA + withdrawal)
 const InvestorApprovalCenter = lazy(() => import('./views/InvestorApprovalCenter'));
@@ -216,6 +217,10 @@ export default function App() {
           untouched. The authenticated investor area is gated by investorAuthSlice. */}
       <Route path="/investor/login" element={<InvestorLoginPage />} />
       <Route path="/investor/signup" element={<InvestorSignup />} />
+      {/* OWED-3 (R3/R7): the distributor approval-email destination. Public on
+          purpose — the page itself prompts an unauthenticated investor through
+          the OTP auth (with a return-to back here) before showing the review. */}
+      <Route path="/investor/approve" element={<InvestorLinkApproval />} />
       {investorSession ? (
         <>
           {/* Full-screen immersive "Luxe" dashboard — rendered OUTSIDE the sidebar

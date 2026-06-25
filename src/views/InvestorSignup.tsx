@@ -4,7 +4,7 @@ import {
   AlertCircle, ShieldCheck, CheckCircle2, RefreshCw,
   MessageSquare, ArrowLeft, ArrowRight, Check, UserPlus,
 } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { apiFetch } from '../config/api';
 import { useAppDispatch } from '../store/hooks';
 import { setInvestorUser } from '../store/slices/investorAuthSlice';
@@ -40,6 +40,15 @@ const STEP_LABELS = ['Email', 'Your details', 'Verify & consent', 'Done'];
 export default function InvestorSignup() {
   const navigate = useNavigate();
   const dispatch = useAppDispatch();
+  const [searchParams] = useSearchParams();
+
+  /** Post-signup destination. Only same-origin /investor/* paths are honored so the
+   *  return-to cannot bounce the new session somewhere unexpected. */
+  const safeReturnTo = (() => {
+    const raw = searchParams.get('returnTo');
+    if (raw && raw.startsWith('/investor/')) return raw;
+    return '/investor/dashboard';
+  })();
 
   const [step, setStep] = useState(1);
 
@@ -187,7 +196,7 @@ export default function InvestorSignup() {
       const user = normalizeInvestorUser(data);
       if (user) dispatch(setInvestorUser(user));
       setStep(4);
-      setTimeout(() => navigate('/investor/dashboard', { replace: true }), 900);
+      setTimeout(() => navigate(safeReturnTo, { replace: true }), 900);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not complete signup. Please try again.');
       setOtpDigits(Array(6).fill(''));
