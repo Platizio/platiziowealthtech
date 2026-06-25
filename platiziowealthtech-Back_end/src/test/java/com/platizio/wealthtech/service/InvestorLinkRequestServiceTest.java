@@ -245,9 +245,10 @@ class InvestorLinkRequestServiceTest {
         Investor inv = investor();
         InvestorLinkRequest request = pendingRequest(OffsetDateTime.now().plusDays(3));
         when(linkRequestRepository.findByToken("tok")).thenReturn(Optional.of(request));
+        when(ownershipGuard.assertOwns(investorAccountId, investorId)).thenReturn(account("ABCDE1234F"));
         when(investorRepository.findById(investorId)).thenReturn(Optional.of(inv));
 
-        service.reject("tok");
+        service.reject(investorAccountId, "tok");
 
         assertThat(request.getStatus()).isEqualTo(InvestorLinkRequestStatus.REJECTED);
         assertThat(inv.getLinkingStatus()).isEqualTo(InvestorLinkingStatus.REJECTED);
@@ -255,6 +256,38 @@ class InvestorLinkRequestServiceTest {
         // PA6/R8: a rejection does NOT notify the distributor.
         verify(notificationService, never())
                 .createForDistributor(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void rejectIsBlockedForANonOwningAccount() {
+        InvestorLinkRequest request = pendingRequest(OffsetDateTime.now().plusDays(3));
+        when(linkRequestRepository.findByToken("tok")).thenReturn(Optional.of(request));
+        // The guard denies a caller that does not own this investor (IDOR guard).
+        when(ownershipGuard.assertOwns(investorAccountId, investorId))
+                .thenThrow(new AccessDeniedException("You are not authorized to act on this investor."));
+
+        assertThatThrownBy(() -> service.reject(investorAccountId, "tok"))
+                .isInstanceOf(AccessDeniedException.class);
+
+        // No state is flipped and the distributor is never notified.
+        assertThat(request.getStatus()).isEqualTo(InvestorLinkRequestStatus.PENDING);
+        verify(investorRepository, never()).save(any());
+        verify(notificationService, never())
+                .createForDistributor(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void rejectIsBlockedWhenPanDoesNotMatchTheOwningAccount() {
+        InvestorLinkRequest request = pendingRequest(OffsetDateTime.now().plusDays(3));
+        when(linkRequestRepository.findByToken("tok")).thenReturn(Optional.of(request));
+        // The account owns the investorId but its PAN differs from the request PAN.
+        when(ownershipGuard.assertOwns(investorAccountId, investorId)).thenReturn(account("ZZZZZ9999Z"));
+
+        assertThatThrownBy(() -> service.reject(investorAccountId, "tok"))
+                .isInstanceOf(AccessDeniedException.class);
+
+        assertThat(request.getStatus()).isEqualTo(InvestorLinkRequestStatus.PENDING);
+        verify(investorRepository, never()).save(any());
     }
 
     private InvestorLinkRequest pendingRequest(OffsetDateTime expiresAt) {

@@ -147,16 +147,27 @@ public class InvestorLinkRequestService {
     }
 
     /**
-     * Investor declines the link (T2'): mark the PENDING request REJECTED and set the investor's
-     * {@code linking_status = REJECTED}. {@code distributor_id} stays unlinked.
+     * Investor declines the link (T2'), bound to the approving account: assert the account
+     * owns this link (same PAN-bound ownership rule as {@link #approveByToken}) so an investor
+     * cannot reject a link meant for a DIFFERENT investor (IDOR — SEC-1/SEC-2), then mark the
+     * PENDING request REJECTED and set the investor's {@code linking_status = REJECTED}.
+     * {@code distributor_id} stays unlinked.
      */
     @Transactional
-    public void reject(String token) {
+    public void reject(UUID investorAccountId, String token) {
         InvestorLinkRequest request = linkRequestRepository.findByToken(token)
                 .orElseThrow(() -> new EntityNotFoundException("Approval link not found or no longer valid."));
         if (request.getStatus() != InvestorLinkRequestStatus.PENDING) {
             throw new IllegalStateException("This approval link is not awaiting your approval.");
         }
+
+        // Bind the rejection to the account that actually owns this investor (parity with
+        // approveByToken): prove ownership, then PAN-bind, before flipping any state.
+        InvestorAccount account = ownershipGuard.assertOwns(investorAccountId, request.getInvestorId());
+        if (!Objects.equals(normalizePan(account.getPan()), normalizePan(request.getPan()))) {
+            throw new AccessDeniedException("Approval does not match your account.");
+        }
+
         request.setStatus(InvestorLinkRequestStatus.REJECTED);
         linkRequestRepository.save(request);
 

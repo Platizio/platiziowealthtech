@@ -55,6 +55,12 @@ public class OnboardingSubmissionService {
                 investorId, OnboardingSubmissionStatus.SUPERSEDED);
     }
 
+    /** The exact frozen revision a link request points at (for the investor review screen). */
+    @Transactional(readOnly = true)
+    public Optional<OnboardingSubmission> findById(UUID submissionId) {
+        return submissionId == null ? Optional.empty() : repository.findById(submissionId);
+    }
+
     /** Investor attests the exact revision they reviewed (rejects a stale hash). */
     @Transactional
     public OnboardingSubmission attest(
