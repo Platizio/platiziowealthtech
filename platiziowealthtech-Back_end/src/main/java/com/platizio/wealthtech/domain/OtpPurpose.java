@@ -6,5 +6,13 @@ package com.platizio.wealthtech.domain;
  */
 public enum OtpPurpose {
     LOGIN,
-    SIGNUP
+    SIGNUP,
+    /** Passwordless investor-portal login (email OTP). */
+    INVESTOR_LOGIN,
+    /** Investor-portal self-signup email verification. */
+    INVESTOR_SIGNUP,
+    /** Investor approval of a transaction (purchase / SIP / redemption) — 2FA. */
+    TRANSACTION_APPROVAL,
+    /** Investor approval of a distributor-filled profile change — 2FA. */
+    PROFILE_APPROVAL
 }

@@ -53,7 +53,11 @@ public class LoginRateLimitFilter extends OncePerRequestFilter {
                     // address by rotating accounts (per-email cooldown already
                     // caps repeats for a single inbox). Verify is bounded by the
                     // per-code attempt counter in OtpService.
-                    "/api/v1/auth/otp/request");
+                    "/api/v1/auth/otp/request",
+                    // Same protections for the passwordless investor-portal surface.
+                    "/api/v1/investor-auth/otp/request",
+                    "/api/v1/investor-auth/login/otp/verify",
+                    "/api/v1/investor-auth/signup");
 
     private static final int CAPACITY = 5;
     private static final int REFILL_TOKENS = 5;

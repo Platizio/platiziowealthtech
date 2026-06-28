@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import jakarta.validation.Validation;
 import jakarta.validation.Validator;
 import jakarta.validation.ValidatorFactory;
+import com.platizio.wealthtech.validation.MobileFormat;
 import com.platizio.wealthtech.validation.PanFormat;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
@@ -64,17 +65,21 @@ class InvestorCreateRequestValidationTest {
     }
 
     @Test
-    void acceptsValidMobileNumber() {
-        assertThat(VALIDATOR.validate(requestWithMobile("9876543210"))).isEmpty();
+    void acceptsValidIndianMobile() {
+        assertThat(messagesFor(requestWithMobile("9876543210")))
+                .doesNotContain(MobileFormat.INDIAN_MOBILE_MESSAGE);
     }
 
     @Test
-    void rejectsMobileNumberWithInvalidFormat() {
-        // Too short, and starting with a non-6-9 digit — both invalid.
-        assertThat(messagesFor(requestWithMobile("12345")))
-                .anyMatch(m -> m.contains("Mobile number must be a valid 10-digit"));
+    void rejectsMobileStartingBelowSix() {
         assertThat(messagesFor(requestWithMobile("1234567890")))
-                .anyMatch(m -> m.contains("Mobile number must be a valid 10-digit"));
+                .contains(MobileFormat.INDIAN_MOBILE_MESSAGE);
+    }
+
+    @Test
+    void rejectsMobileOfWrongLength() {
+        assertThat(messagesFor(requestWithMobile("98765")))
+                .contains(MobileFormat.INDIAN_MOBILE_MESSAGE);
     }
 
     private static Set<String> messagesFor(InvestorCreateRequest request) {

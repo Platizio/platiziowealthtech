@@ -88,10 +88,12 @@ class AuthControllerRefreshTest {
         return new AuthCookieService(
                 "access_token",
                 "refresh_token",
+                "investor_access_token",
                 false,
                 "Lax",
                 900_000,
-                604_800_000
+                604_800_000,
+                3_600_000
         );
     }
 

@@ -1,6 +1,7 @@
 package com.platizio.wealthtech.dto;
 
 import com.platizio.wealthtech.domain.InvestorRelationshipType;
+import com.platizio.wealthtech.validation.MobileFormat;
 import com.platizio.wealthtech.validation.PanFormat;
 import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
@@ -14,8 +15,7 @@ public record InvestorCreateRequest(
         @NotNull UUID distributorId,
         @NotBlank String fullName,
         @NotBlank
-        @Pattern(regexp = "^[6-9]\\d{9}$",
-                message = "Mobile number must be a valid 10-digit Indian number starting with 6-9")
+        @Pattern(regexp = MobileFormat.INDIAN_MOBILE_REGEX, message = MobileFormat.INDIAN_MOBILE_MESSAGE)
         String mobileNumber,
         @NotBlank @Email String email,
         @NotBlank

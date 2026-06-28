@@ -3,8 +3,15 @@ package com.platizio.wealthtech.controller;
 import com.platizio.wealthtech.domain.Investor;
 import com.platizio.wealthtech.domain.InvestorBankAccount;
 import com.platizio.wealthtech.domain.KycStatus;
+import com.platizio.wealthtech.domain.TermsAcceptance;
+import com.platizio.wealthtech.dto.ContactDeclarationRequest;
+import com.platizio.wealthtech.dto.ContactVerificationStatus;
+import com.platizio.wealthtech.dto.DistributorProfileSubmitRequest;
+import com.platizio.wealthtech.dto.DistributorProfileSubmitResponse;
 import com.platizio.wealthtech.dto.InvestorBankRequest;
 import com.platizio.wealthtech.dto.InvestorCreateRequest;
+import com.platizio.wealthtech.dto.OtpVerifyCodeRequest;
+import com.platizio.wealthtech.dto.TermsAcceptanceRequest;
 import com.platizio.wealthtech.dto.InvestorDocumentUploadResponse;
 import com.platizio.wealthtech.dto.InvestorExternalKycResponse;
 import com.platizio.wealthtech.dto.InvestorKycCheckRequest;
@@ -21,12 +28,25 @@ import com.platizio.wealthtech.dto.IdentityDocumentCreateRequest;
 import com.platizio.wealthtech.dto.KycFlowAdvanceResponse;
 import com.platizio.wealthtech.dto.KycFlowStatusResponse;
 import com.platizio.wealthtech.dto.InvestorUpdateRequest;
+import com.platizio.wealthtech.dto.SendToInvestorRequest;
+import com.platizio.wealthtech.dto.SendToInvestorResponse;
 import com.platizio.wealthtech.dto.UploadedInvestorDocumentResponse;
 import com.platizio.wealthtech.security.JwtAuthPrincipal;
+import com.platizio.wealthtech.domain.InvestorLinkingStatus;
+import com.platizio.wealthtech.domain.ProfileChangeApprovalChallenge;
+import com.platizio.wealthtech.domain.InvestorLinkRequest;
+import com.platizio.wealthtech.domain.OnboardingSubmission;
+import com.platizio.wealthtech.service.ConsentRecordService;
+import com.platizio.wealthtech.service.InvestorContactVerificationService;
 import com.platizio.wealthtech.service.InvestorDocumentService;
 import com.platizio.wealthtech.service.InvestorKycService;
+import com.platizio.wealthtech.service.InvestorLinkRequestService;
 import com.platizio.wealthtech.service.InvestorService;
+import com.platizio.wealthtech.service.OnboardingSubmissionService;
+import com.platizio.wealthtech.service.TermsAcceptanceService;
+import jakarta.servlet.http.HttpServletRequest;
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.media.ArraySchema;
 import io.swagger.v3.oas.annotations.media.Content;
@@ -49,18 +69,33 @@ import org.springframework.web.multipart.MultipartFile;
 @Tag(name = "Investors", description = "Endpoints for managing investors and their KYC/Bank details")
 public class InvestorController {
 
+    private static final ObjectMapper SNAPSHOT_MAPPER = new ObjectMapper();
+    private static final org.slf4j.Logger logger = org.slf4j.LoggerFactory.getLogger(InvestorController.class);
+
     private final InvestorService investorService;
     private final InvestorDocumentService investorDocumentService;
     private final InvestorKycService investorKycService;
+    private final InvestorContactVerificationService contactVerificationService;
+    private final TermsAcceptanceService termsAcceptanceService;
+    private final OnboardingSubmissionService onboardingSubmissionService;
+    private final InvestorLinkRequestService investorLinkRequestService;
 
     public InvestorController(
             InvestorService investorService,
             InvestorDocumentService investorDocumentService,
-            InvestorKycService investorKycService
+            InvestorKycService investorKycService,
+            InvestorContactVerificationService contactVerificationService,
+            TermsAcceptanceService termsAcceptanceService,
+            OnboardingSubmissionService onboardingSubmissionService,
+            InvestorLinkRequestService investorLinkRequestService
     ) {
         this.investorService = investorService;
         this.investorDocumentService = investorDocumentService;
         this.investorKycService = investorKycService;
+        this.contactVerificationService = contactVerificationService;
+        this.termsAcceptanceService = termsAcceptanceService;
+        this.onboardingSubmissionService = onboardingSubmissionService;
+        this.investorLinkRequestService = investorLinkRequestService;
     }
 
     @Operation(summary = "List investors", description = "Returns paginated investors visible to the authenticated distributor.")
@@ -87,6 +122,105 @@ public class InvestorController {
     @PostMapping
     public Investor create(@Valid @RequestBody InvestorCreateRequest request, Authentication auth) {
         return investorService.createInvestor(request, actorId(auth));
+    }
+
+    @Operation(summary = "Send to Investor (approval-gated onboarding)",
+            description = "From Step-1 basic identity, parks a PENDING investor (distributor_id NOT linked yet — R5) "
+                    + "keyed on PAN (R4) and sends it to the investor for approval. Returns PENDING_INVESTOR_APPROVAL "
+                    + "plus the approval token so the email-link flow is demoable without SMTP (investor.md §3 T1, §6.1).")
+    @ApiResponse(responseCode = "200", description = "Investor parked PENDING and sent for approval",
+                 content = @Content(schema = @Schema(implementation = SendToInvestorResponse.class)))
+    @PostMapping("/send-to-investor")
+    public SendToInvestorResponse sendToInvestor(
+            @Valid @RequestBody SendToInvestorRequest request, Authentication auth) {
+        UUID distributorId = actorId(auth);
+        Investor investor = investorService.createOrUpdatePendingInvestor(request, distributorId);
+        InvestorLinkRequest linkRequest =
+                investorLinkRequestService.sendToInvestor(investor.getId(), distributorId, request.payloadJson());
+        // Dev surfacing (no real email yet — that's a later shared task): log the approval URL at
+        // INFO and return the token so the flow is demoable/testable without SMTP.
+        String approvalUrl = "/investor/approve?token=" + linkRequest.getToken();
+        logger.info(
+                "investor_link status='sent_to_investor' investor_id='{}' distributor_id='{}' approval_url='{}'",
+                investor.getId(), distributorId, approvalUrl);
+        return new SendToInvestorResponse(
+                "PENDING_INVESTOR_APPROVAL",
+                "Investor approval is pending.",
+                investor.getId(),
+                linkRequest.getToken());
+    }
+
+    // ── Contact verification (email + mobile OTP via Supabase / self-declaration) ──
+
+    @Operation(summary = "Send an email verification OTP", description = "Sends a one-time code to the investor's email via Supabase Auth.")
+    @PostMapping("/{id}/email/otp/request")
+    public ContactVerificationStatus requestEmailOtp(@PathVariable UUID id, Authentication auth) {
+        return contactVerificationService.requestEmailOtp(id, actorId(auth));
+    }
+
+    @Operation(summary = "Verify the email OTP", description = "Verifies the emailed code and marks the email verified (method OTP).")
+    @PostMapping("/{id}/email/otp/verify")
+    public ContactVerificationStatus verifyEmailOtp(
+            @PathVariable UUID id, @Valid @RequestBody OtpVerifyCodeRequest request, Authentication auth) {
+        return contactVerificationService.verifyEmailOtp(id, actorId(auth), request.code());
+    }
+
+    @Operation(summary = "Send a mobile verification OTP", description = "Sends a one-time code to the investor's mobile via Supabase Auth SMS.")
+    @PostMapping("/{id}/mobile/otp/request")
+    public ContactVerificationStatus requestMobileOtp(@PathVariable UUID id, Authentication auth) {
+        return contactVerificationService.requestMobileOtp(id, actorId(auth));
+    }
+
+    @Operation(summary = "Verify the mobile OTP", description = "Verifies the SMS code and marks the mobile verified (method OTP).")
+    @PostMapping("/{id}/mobile/otp/verify")
+    public ContactVerificationStatus verifyMobileOtp(
+            @PathVariable UUID id, @Valid @RequestBody OtpVerifyCodeRequest request, Authentication auth) {
+        return contactVerificationService.verifyMobileOtp(id, actorId(auth), request.code());
+    }
+
+    @Operation(summary = "Self-declare a contact", description = "Distributor attests an email/mobile belongs to the investor, with the relationship (belongs_to).")
+    @PostMapping("/{id}/contact/declare")
+    public ContactVerificationStatus declareContact(
+            @PathVariable UUID id, @Valid @RequestBody ContactDeclarationRequest request, Authentication auth) {
+        return contactVerificationService.declareContact(id, actorId(auth), request.channel(), request.belongsTo());
+    }
+
+    @Operation(summary = "Get contact verification status", description = "Returns the email/mobile verification state for the investor.")
+    @GetMapping("/{id}/contact/status")
+    public ContactVerificationStatus contactStatus(@PathVariable UUID id, Authentication auth) {
+        return contactVerificationService.getStatus(id, actorId(auth));
+    }
+
+    // ── Terms & Conditions acceptance (Task 4 / DF-10) ──
+
+    @Operation(summary = "Record a T&C acceptance", description = "Persists that the investor accepted a terms document (version), with timestamp + IP/UA.")
+    @PostMapping("/{id}/terms/accept")
+    public TermsAcceptance acceptTerms(
+            @PathVariable UUID id,
+            @Valid @RequestBody TermsAcceptanceRequest request,
+            HttpServletRequest httpRequest,
+            Authentication auth) {
+        UUID actorId = actorId(auth);
+        investorService.getInvestor(id, actorId); // ownership check (404/403 if not the distributor's investor)
+        return termsAcceptanceService.record(
+                TermsAcceptanceService.SUBJECT_INVESTOR, id, request.documentKey(), request.version(),
+                clientIp(httpRequest), httpRequest.getHeader("User-Agent"), actorId);
+    }
+
+    @Operation(summary = "List T&C acceptances", description = "Returns the investor's recorded terms acceptances (latest first).")
+    @GetMapping("/{id}/terms")
+    public List<TermsAcceptance> listTerms(@PathVariable UUID id, Authentication auth) {
+        UUID actorId = actorId(auth);
+        investorService.getInvestor(id, actorId); // ownership check
+        return termsAcceptanceService.list(TermsAcceptanceService.SUBJECT_INVESTOR, id);
+    }
+
+    private String clientIp(HttpServletRequest request) {
+        String forwarded = request.getHeader("X-Forwarded-For");
+        if (forwarded != null && !forwarded.isBlank()) {
+            return forwarded.split(",")[0].trim();
+        }
+        return request.getRemoteAddr();
     }
 
     @GetMapping("/filter/kyc")
@@ -544,7 +678,112 @@ public class InvestorController {
             @Valid @RequestBody InvestorUpdateRequest request,
             Authentication auth
     ) {
-        return investorService.updateInvestor(investorId, request, actorId(auth));
+        UUID actorId = actorId(auth);
+        Investor updated = investorService.updateInvestor(investorId, request, actorId);
+        // A distributor edit to KYC-material data invalidates any prior investor attestation.
+        onboardingSubmissionService.invalidateAttestationOnEdit(investorId, actorId);
+        return updated;
+    }
+
+    // ── Investor-approval gate on distributor onboarding (SRS FR-ONB-001/002/003) ──
+
+    @Operation(summary = "Submit onboarding for investor review",
+            description = "Freezes the current KYC-material snapshot into a hashed revision the investor must attest before finalize.")
+    @PostMapping("/{id}/onboarding/submit-for-review")
+    public OnboardingSubmission submitForReview(@PathVariable UUID id, Authentication auth) {
+        UUID actorId = actorId(auth);
+        Investor investor = investorService.getInvestor(id, actorId); // ownership check (404/403)
+        return onboardingSubmissionService.submitForInvestorReview(id, onboardingSnapshotJson(investor), actorId);
+    }
+
+    @Operation(summary = "Onboarding approval status",
+            description = "Returns the latest revision's status/hash/revisionNo, or status NONE when nothing was submitted.")
+    @GetMapping("/{id}/onboarding/approval-status")
+    public java.util.Map<String, Object> approvalStatus(@PathVariable UUID id, Authentication auth) {
+        UUID actorId = actorId(auth);
+        investorService.getInvestor(id, actorId); // ownership check
+        return onboardingSubmissionService.latestRevisionForInvestor(id)
+                .map(s -> {
+                    java.util.Map<String, Object> body = new java.util.LinkedHashMap<>();
+                    body.put("status", s.getStatus().name());
+                    body.put("contentSha256", s.getContentSha256());
+                    body.put("revisionNo", s.getRevisionNo());
+                    return body;
+                })
+                .orElseGet(() -> java.util.Map.of("status", "NONE"));
+    }
+
+    @Operation(summary = "Finalize onboarding",
+            description = "Hard gate: requires the latest revision to be ATTESTED and unchanged, then marks the investor ready.")
+    @PostMapping("/{id}/onboarding/finalize")
+    public Investor finalizeOnboarding(@PathVariable UUID id, Authentication auth) {
+        UUID actorId = actorId(auth);
+        Investor investor = investorService.getInvestor(id, actorId); // ownership check
+        onboardingSubmissionService.assertFinalizable(id, ConsentRecordService.sha256(onboardingSnapshotJson(investor)));
+        return investorService.markReadyAfterInvestorApproval(id, actorId);
+    }
+
+    // ── Distributor-facing skip-form path (investor.md R10) ──
+    // The investor approved the link but skipped the profile form, so the distributor fills
+    // it on their behalf. Both endpoints resolve the acting distributor from the JWT
+    // (NEVER from the body) and delegate to InvestorService, which asserts the investor is
+    // in a fillable state and that the acting distributor is the one linked to the investor.
+    // Wrong-state → IllegalStateException (400); cross-distributor → AccessDeniedException
+    // (403), both mapped by GlobalExceptionHandler. The investor-facing approve/apply/reject
+    // half lives on the investor-portal track and is intentionally not exposed here.
+
+    @Operation(summary = "Submit distributor-filled profile for investor review (R10)",
+            description = "From an INVESTOR_SKIPPED (or DISTRIBUTOR_FILLING) investor, moves linking_status "
+                    + "→ DISTRIBUTOR_FILLING and freezes the distributor-filled profile into a fresh 2FA "
+                    + "challenge the investor must approve. The acting distributor is taken from the JWT.")
+    @PostMapping("/{investorId}/profile/submit")
+    public DistributorProfileSubmitResponse submitProfile(
+            @PathVariable UUID investorId,
+            @Valid @RequestBody DistributorProfileSubmitRequest body,
+            Authentication auth) {
+        ProfileChangeApprovalChallenge challenge =
+                investorService.submitProfileForInvestorReview(investorId, body.payloadJson(), actorId(auth));
+        return new DistributorProfileSubmitResponse(
+                investorId, InvestorLinkingStatus.DISTRIBUTOR_FILLING, challenge.getId());
+    }
+
+    @Operation(summary = "Update the pending distributor-filled profile (R10)",
+            description = "While still DISTRIBUTOR_FILLING, supersedes any live challenge (forcing "
+                    + "re-authorisation) and freezes a fresh challenge over the edited profile. The acting "
+                    + "distributor is taken from the JWT.")
+    @PutMapping("/{investorId}/profile")
+    public DistributorProfileSubmitResponse updateProfile(
+            @PathVariable UUID investorId,
+            @Valid @RequestBody DistributorProfileSubmitRequest body,
+            Authentication auth) {
+        ProfileChangeApprovalChallenge challenge =
+                investorService.updateProfile(investorId, body.payloadJson(), actorId(auth));
+        return new DistributorProfileSubmitResponse(
+                investorId, InvestorLinkingStatus.DISTRIBUTOR_FILLING, challenge.getId());
+    }
+
+    /**
+     * Deterministic JSON of the KYC-material investor fields (stable key order via a
+     * {@link java.util.LinkedHashMap}). Hashing this proves exactly what the investor
+     * attested; any later edit changes the hash and invalidates the attestation.
+     */
+    private String onboardingSnapshotJson(Investor investor) {
+        java.util.LinkedHashMap<String, Object> snapshot = new java.util.LinkedHashMap<>();
+        snapshot.put("fullName", investor.getFullName());
+        snapshot.put("pan", investor.getPan());
+        snapshot.put("dateOfBirth", investor.getDateOfBirth() == null ? null : investor.getDateOfBirth().toString());
+        snapshot.put("addressLine1", investor.getAddressLine1());
+        snapshot.put("addressLine2", investor.getAddressLine2());
+        snapshot.put("city", investor.getCity());
+        snapshot.put("state", investor.getState());
+        snapshot.put("postalCode", investor.getPostalCode());
+        snapshot.put("mobileNumber", investor.getMobileNumber());
+        snapshot.put("email", investor.getEmail());
+        try {
+            return SNAPSHOT_MAPPER.writeValueAsString(snapshot);
+        } catch (com.fasterxml.jackson.core.JsonProcessingException ex) {
+            throw new IllegalStateException("Failed to serialize onboarding snapshot", ex);
+        }
     }
 
     @GetMapping("/{investorId}/documents")

@@ -6,7 +6,9 @@ spring:
   application:
     name: wealthtech-backend
   datasource:
-    url: ${DB_URL:jdbc:postgresql://localhost:5432/postgres}
+    # R11: a full DB_URL still wins if set (back-compat); otherwise the JDBC URL is built
+    # from parts (DB_HOST/DB_PORT/DB_NAME) which Render injects via render.yaml `fromDatabase`.
+    url: ${DB_URL:jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:postgres}}
     username: ${DB_USERNAME:postgres}
     password: ${DB_PASSWORD}
     driverClassName: org.postgresql.Driver
@@ -125,6 +127,27 @@ finprim:
       client-secret: ${FINPRIM_TENANT_CLIENT_SECRET:}
       refresh-buffer-seconds: ${FINPRIM_TOKEN_REFRESH_BUFFER_SECONDS:120}
 
+# Supabase Auth (GoTrue) — backend-mediated email + mobile OTP for investor
+# contact verification (Tier 2). real-client-enabled defaults to false here so
+# the app still boots without a Supabase project (DisabledSupabaseAuthClient,
+# dev code 000000). In the deployed/dev env it is overridden to TRUE via the
+# git-ignored .env (SUPABASE_URL + SUPABASE_ANON_KEY), so RealSupabaseAuthClient
+# is active and EMAIL OTP is live-verified. For the email to carry a 6-digit
+# code, the dashboard Magic Link template must include {{ .Token }}.
+# MOBILE/SMS OTP is DEFERRED: sms-enabled defaults to false because the Supabase
+# Phone provider is disabled (likely needs a paid plan). The mobile OTP endpoints
+# return a clean 400 ("use self-declaration") and contact-status reports
+# smsOtpEnabled=false until SUPABASE_SMS_ENABLED=true AND Authentication ->
+# Providers -> Phone is enabled with an SMS provider in the dashboard.
+supabase:
+  auth:
+    url: ${SUPABASE_URL:}
+    anon-key: ${SUPABASE_ANON_KEY:}
+    service-role-key: ${SUPABASE_SERVICE_ROLE_KEY:}
+    create-user: ${SUPABASE_CREATE_USER:true}
+    real-client-enabled: ${SUPABASE_REAL_CLIENT_ENABLED:false}
+    sms-enabled: ${SUPABASE_SMS_ENABLED:false}
+
 external-auth:
   auto-refresh:
     # Scheduled refresh runs every ~30 minutes by default and only renews tokens already in cache.
@@ -163,6 +186,11 @@ app:
     cookie-name: ${AUTH_COOKIE_NAME:access_token}
     refresh-cookie-name: ${AUTH_REFRESH_COOKIE_NAME:refresh_token}
     refresh-token-expiration-ms: ${AUTH_REFRESH_TOKEN_EXPIRATION_MS:604800000}  # 7 days
+    # Investor portal (Phase 1): a distinct passwordless session cookie so investor
+    # and distributor sessions never collide in one browser. 1h access token; the
+    # investor re-OTPs after expiry (investor refresh-token rotation is a follow-up).
+    investor-cookie-name: ${INVESTOR_AUTH_COOKIE_NAME:investor_access_token}
+    investor-access-expiration-ms: ${INVESTOR_ACCESS_EXPIRATION_MS:3600000}  # 1 hour
     cookie-secure: ${AUTH_COOKIE_SECURE}
     cookie-same-site: ${AUTH_COOKIE_SAME_SITE:Lax}
     blocked-token-purge-interval-ms: ${AUTH_BLOCKED_TOKEN_PURGE_INTERVAL_MS:3600000}
@@ -175,6 +203,20 @@ app:
     resend-cooldown-seconds: ${OTP_RESEND_COOLDOWN_SECONDS:30}
     from-address: ${MAIL_FROM:no-reply@platizio.local}
     from-name: ${MAIL_FROM_NAME:Platizio}
+    # DF-13: when true (local dev only) and SMTP is disabled, the live code is
+    # echoed in the OTP response so devs can test without email. MUST stay false
+    # in every deployed/demo environment — the local profile overrides it to true.
+    expose-dev-code: ${OTP_EXPOSE_DEV_CODE:false}
+  demo:
+    # DF-12: demo-only order lifecycle simulator (DemoOrderAdvancer). Off by
+    # default; the local profile enables it. A demo profile can opt in to show
+    # orders auto-completing (PAYMENT_PENDING -> SUCCESSFUL) without a webhook.
+    order-advancer-enabled: ${DEMO_ORDER_ADVANCER_ENABLED:false}
+  password-reset:
+    # DF-13 (adjacent): when true (local dev only) the raw reset token is echoed
+    # in the forgot-password response so devs can reset without email. MUST stay
+    # false in every deployed/demo environment — the local profile overrides it.
+    expose-dev-token: ${PASSWORD_RESET_EXPOSE_DEV_TOKEN:false}
   kyc-sync:
     enabled: ${KYC_SYNC_ENABLED:true}
     interval-ms: ${KYC_SYNC_INTERVAL_MS:180000}

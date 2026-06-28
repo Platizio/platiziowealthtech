@@ -1,0 +1,52 @@
+# =============================================================================
+# Demo profile (DF-12) — run the customer demo on THIS profile, never `local`.
+#
+#     SPRING_PROFILES_ACTIVE=demo ./mvnw spring-boot:run
+#
+# Versus the `local` profile, this profile deliberately drops every dev
+# convenience that leaks secrets, while keeping the demo usable:
+#   * OTP codes are NEVER echoed in the API response (expose-dev-code = false).
+#   * Demo personas are still seeded (DemoDataSeeder runs on {local, demo}).
+#   * Orders still auto-complete so the happy path is not stuck at
+#     PAYMENT_PENDING (DemoOrderAdvancer — toggle below).
+#
+# Logging in during the demo:
+#   * Easiest: use PASSWORD login (e.g. alice@example.com / Platizio@2024).
+#   * To demo OTP login, configure MAIL_* for real email delivery, or read the
+#     code from the server logs ("OTP for ... is NNNNNN"). The code is never
+#     shown on screen on this profile — that is the point of DF-13.
+# =============================================================================
+spring:
+  datasource:
+    # Mirrors local defaults so it boots against the same Postgres; override
+    # DB_* in the environment to point at a dedicated demo database.
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/postgres}
+    username: ${DB_USERNAME:postgres}
+    password: ${DB_PASSWORD:1234}
+
+jwt:
+  # Demo-only fallback so the app boots without external secrets. Production
+  # always provides a real JWT_SECRET via the environment.
+  secret: ${JWT_SECRET:demo-only-jwt-secret-32-bytes-minimum-not-for-prod}
+
+external-auth:
+  auto-refresh:
+    # Fetch POA/FP tokens lazily on first use instead of at boot, so the demo
+    # starts even when live Cybrilla/FP credentials are not configured (same as
+    # the local profile). Set the cybrilla.* / finprim.* creds in the env to
+    # exercise real KYC/order calls during the demo.
+    warm-on-startup: false
+
+app:
+  auth:
+    # HTTP demo (no TLS terminator in front) — same as local.
+    cookie-secure: ${AUTH_COOKIE_SECURE:false}
+    cookie-same-site: ${AUTH_COOKIE_SAME_SITE:Lax}
+  otp:
+    # Defense in depth (DF-13): the live OTP is never returned in the response.
+    expose-dev-code: false
+  demo:
+    # Auto-advance demo orders to SUCCESSFUL so the happy path completes on
+    # screen. Set DEMO_ORDER_ADVANCER_ENABLED=false to walk the real payment
+    # flow manually via PATCH /api/v1/orders/{id}/status.
+    order-advancer-enabled: ${DEMO_ORDER_ADVANCER_ENABLED:true}

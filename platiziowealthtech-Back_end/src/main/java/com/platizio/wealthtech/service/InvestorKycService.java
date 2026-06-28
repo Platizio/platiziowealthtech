@@ -1386,6 +1386,13 @@ public class InvestorKycService {
         if (request.dateOfBirth() != null) {
             putPoaValue(payload, "date_of_birth", request.dateOfBirth().toString());
         }
+        // Task 5: include the readiness identifier (plain-string PAN) so the standalone
+        // pre-verification matches the onboarding payload and runs the readiness lookup
+        // (POA /poa/pre_verifications accepts {"investor_identifier":"PAN"}) alongside
+        // the PAN/name/DOB validation above.
+        if (StringUtils.hasText(pan)) {
+            payload.put("investor_identifier", pan);
+        }
         return payload;
     }
 

@@ -54,6 +54,7 @@ public class InvestorActionService {
     private final InvestorService investorService;
     private final OrderService orderService;
     private final CybrillaClient cybrillaClient;
+    private final TransactionApprovalService transactionApprovalService;
     private final String paymentPostbackUrl;
     private final String cybrillaEnvironment;
     private final String mandateProviderName;
@@ -69,6 +70,7 @@ public class InvestorActionService {
             InvestorService investorService,
             OrderService orderService,
             CybrillaClient cybrillaClient,
+            TransactionApprovalService transactionApprovalService,
             @Value("${app.payment.postback-url:}") String paymentPostbackUrl,
             @Value("${cybrilla.environment:sandbox}") String cybrillaEnvironment,
             @Value("${cybrilla.payment.mandate-provider-name:CYBRILLAPOA}") String mandateProviderName,
@@ -83,6 +85,7 @@ public class InvestorActionService {
         this.investorService = investorService;
         this.orderService = orderService;
         this.cybrillaClient = cybrillaClient;
+        this.transactionApprovalService = transactionApprovalService;
         this.paymentPostbackUrl = paymentPostbackUrl;
         this.cybrillaEnvironment = cybrillaEnvironment;
         this.mandateProviderName = mandateProviderName;
@@ -101,6 +104,40 @@ public class InvestorActionService {
     public InvestorActionPage confirmPurchase(String token) {
         TransactionOrder order = findOrder(token);
         order = orderService.syncLumpsumOrderFromProvider(order);
+        return confirmPurchase(order);
+    }
+
+    /**
+     * Gated confirm callable by order id (used by the authenticated investor-portal
+     * approval flow). Resolves the order, syncs provider state, then runs the same
+     * gated consent → payment → confirm sequence as {@link #confirmPurchase(String)}.
+     * The 2FA hard gate ({@link TransactionApprovalService#assertApprovedAndConsume})
+     * is planted deep in the provider sequence (Gate A / Gate B), so this method never
+     * mutates the provider without a live APPROVED challenge.
+     */
+    @Transactional
+    public InvestorActionPage confirmPurchaseForOrder(UUID orderId) {
+        TransactionOrder order = orderRepository.findById(orderId)
+                .orElseThrow(() -> new EntityNotFoundException("Order not found"));
+        order = orderService.syncLumpsumOrderFromProvider(order);
+        return confirmPurchase(order);
+    }
+
+    /**
+     * Gated SIP-mandate start callable by order id (used by the authenticated
+     * investor-portal approval flow for {@code SIP} challenges). Resolves the order,
+     * syncs provider state, then runs the same gated mandate sequence as
+     * {@link #confirmPurchaseForOrder(UUID)} — {@link #confirmPurchase(TransactionOrder)}
+     * routes a SIP mandate order through {@code confirmSipMandatePurchase}, where the
+     * 2FA hard gate (Gate B) is planted immediately before {@code cybrillaClient.createMandate}.
+     * Never mutates the provider without a live APPROVED challenge.
+     */
+    @Transactional
+    public InvestorActionPage startSipMandateForOrder(UUID orderId) {
+        return confirmPurchaseForOrder(orderId);
+    }
+
+    private InvestorActionPage confirmPurchase(TransactionOrder order) {
         String message;
         if (order.getOrderStatus() == OrderStatus.PENDING_INVESTOR_ACTION
                 || order.getOrderStatus() == OrderStatus.PROCESSING) {
@@ -140,7 +177,15 @@ public class InvestorActionService {
                         order.getId(),
                         ex.getMessage()
                 );
-                message = ex.getMessage();
+                // STEP 5 / locked decision #1: the legacy un-authenticated secure-link path
+                // creates NO approval challenge, so Gate A/B throws here ("2FA approval
+                // required ..."). Translate that into a friendly "log in to the portal"
+                // outcome (a rendered message + 4xx via the controller), never a 500, and
+                // never a provider mutation. Other IllegalStateExceptions (investor not
+                // ready) keep their own message.
+                message = isTwoFactorRequired(ex)
+                        ? "Please log in to the Platizio investor portal to approve this transaction with a one-time passcode."
+                        : ex.getMessage();
             } catch (CybrillaApiException ex) {
                 logger.warn(
                         "investor_action_confirm status='failed' order_id='{}' reason='{}'",
@@ -310,6 +355,16 @@ public class InvestorActionService {
         int bankAccountOldId = resolveFpBankAccountOldId(investor);
         int mandateId = order.getExternalMandateId() == null ? 0 : order.getExternalMandateId();
         if (mandateId <= 0) {
+            // GATE B (SIP): the FIRST provider-touching statement of the mandate-creation
+            // sequence. Atomically asserts a live APPROVED 2FA challenge whose frozen SIP
+            // snapshot still matches the order, and burns it to CONSUMED in the same
+            // transaction (retry-safe + exactly-once, see Gate A). Guarded by mandateId<=0
+            // so an in-flight authorization retry (mandate already created) is not blocked
+            // by the already-CONSUMED challenge. Throws IllegalStateException (→ 400) when
+            // no 2FA approval exists (e.g. the legacy token path, locked decision #1).
+            transactionApprovalService.assertApprovedAndConsume(
+                    order.getId(),
+                    ConsentRecordService.sha256(transactionApprovalService.renderSipSnapshot(order)));
             int mandateLimit = mandateLimitFor(order.getAmount());
             JsonNode mandate = cybrillaClient.createMandate(
                     bankAccountOldId,
@@ -410,6 +465,17 @@ public class InvestorActionService {
         }
     }
 
+    /**
+     * SIP 2FA is consumed ONCE at mandate creation (Gate B in
+     * {@link #startSipMandateAuthorization}, the only path to {@code cybrillaClient.createMandate}).
+     * Every reachable caller of this method requires an already-created+APPROVED mandate
+     * ({@code externalMandateId > 0}), which can only have been minted under Gate B — so the
+     * NACH debit ({@code cybrillaClient.createNachPayment}) below runs under a mandate whose
+     * creation already burned a live APPROVED challenge. The e-mandate authorization the
+     * investor performs on the FP secure page is the standing second factor for each
+     * recurring auto-debit, so the per-installment debits are INTENTIONALLY not re-gated by
+     * the 2FA engine.
+     */
     private String submitSipPlanAfterApprovedMandate(TransactionOrder order, Investor investor) {
         ProductScheme scheme = schemeRepository.findById(order.getProductSchemeId())
                 .orElseThrow(() -> new EntityNotFoundException("Product scheme not found"));
@@ -431,6 +497,8 @@ public class InvestorActionService {
         cybrillaClient.updateMfPurchasePlan(order.getExternalOrderId(), confirmPayload);
 
         int installmentAmcOrderId = awaitFirstInstallmentAmcOrderId(order.getExternalOrderId());
+        // First recurring debit under the Gate-B-created mandate (2FA already consumed at
+        // mandate creation; the e-mandate authorization is the standing second factor).
         JsonNode nachPayment = cybrillaClient.createNachPayment(mandateId, List.of(installmentAmcOrderId));
         order.setExternalPaymentId(nachPayment.path("id").asInt(0));
         order.setOrderStatus(OrderStatus.ACTIVE);
@@ -564,8 +632,27 @@ public class InvestorActionService {
 
         String existingRedirect = existingPaymentRedirectUrl(order);
         if (existingRedirect != null) {
+            // Idempotent retry: a payment was already minted for this order, so its stored
+            // redirect is returned WITHOUT re-minting and WITHOUT a second consume. The
+            // gate below therefore runs only on the path that mints a NEW payment.
             return existingRedirect;
         }
+
+        // GATE A (purchase, riskiest): planted as the first statement that runs only when a
+        // NEW payment will be minted — i.e. AFTER the existing-payment idempotency
+        // short-circuit and BEFORE any provider review/consent/payment call. This single
+        // location covers EVERY money-minting branch below ("pending", "submitted",
+        // "confirmed") with exactly ONE consume, and the legacy un-authenticated token path
+        // (locked decision #1) which creates no APPROVED challenge therefore cannot reach
+        // createNetbankingPayment through ANY branch. It atomically asserts a live APPROVED
+        // 2FA challenge whose frozen snapshot still matches the order, and burns it to
+        // CONSUMED in the same transaction. A provider exception below rolls the flip back
+        // (retry-safe); a replay finds CONSUMED → blocked (exactly-once). Throws
+        // IllegalStateException (→ HTTP 400) when no 2FA approval exists. A normal
+        // redirect-retry short-circuits ABOVE this gate (no double-consume).
+        transactionApprovalService.assertApprovedAndConsume(
+                order.getId(),
+                ConsentRecordService.sha256(transactionApprovalService.renderPurchaseSnapshot(order)));
 
         JsonNode purchase = awaitMfPurchaseReviewPassed(order.getExternalOrderId());
         String state = purchase.path("state").asText("");
@@ -1178,6 +1265,17 @@ public class InvestorActionService {
 
     private static String safe(String value) {
         return value == null ? "" : value.replace("\"", "\\\"");
+    }
+
+    /**
+     * True when the IllegalStateException is the 2FA hard gate rejecting an unapproved
+     * (e.g. legacy token) confirm — see {@link TransactionApprovalService#assertApprovedAndConsume}.
+     */
+    private static boolean isTwoFactorRequired(IllegalStateException ex) {
+        String msg = ex.getMessage();
+        return msg != null
+                && (msg.contains("2FA approval required")
+                || msg.contains("changed after the investor approved it"));
     }
 
     private String messageFor(TransactionOrder order) {

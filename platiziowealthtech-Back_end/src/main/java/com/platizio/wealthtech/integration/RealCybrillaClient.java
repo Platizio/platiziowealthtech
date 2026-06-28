@@ -2788,7 +2788,7 @@ public class RealCybrillaClient implements CybrillaClient {
     private String resolveGender(Investor investor) {
         String gender = onboardingNoteValue(investor, "gender");
         if (!StringUtils.hasText(gender)) {
-            return "female";
+            return complianceDefault(investor, "gender", "female", "no onboarding note");
         }
         return switch (gender.trim().toLowerCase(Locale.ROOT)) {
             case "m", "male" -> "male";
@@ -2801,7 +2801,7 @@ public class RealCybrillaClient implements CybrillaClient {
     private String resolveOccupation(Investor investor) {
         String occupation = onboardingNoteValue(investor, "occupation");
         if (!StringUtils.hasText(occupation)) {
-            return "service";
+            return complianceDefault(investor, "occupation", "service", "no onboarding note");
         }
         String normalized = occupation.trim().toLowerCase(Locale.ROOT).replace(' ', '_');
         return switch (normalized) {
@@ -2810,14 +2810,14 @@ public class RealCybrillaClient implements CybrillaClient {
                     "others", "agriculture", "doctor", "forex_dealer", "service" -> normalized;
             case "salaried", "employed" -> "service";
             case "self_employed", "self-employed" -> "business";
-            default -> "service";
+            default -> complianceDefault(investor, "occupation", "service", "unmapped value '" + normalized + "'");
         };
     }
 
     private String resolveIncomeSlab(Investor investor) {
         String income = onboardingNoteValue(investor, "income");
         if (!StringUtils.hasText(income)) {
-            return "upto_1lakh";
+            return complianceDefault(investor, "income_slab", "upto_1lakh", "no onboarding note");
         }
         String normalized = income.toLowerCase(Locale.ROOT);
         if (normalized.contains("below") || normalized.contains("1 l")) {
@@ -2835,13 +2835,13 @@ public class RealCybrillaClient implements CybrillaClient {
         if (normalized.contains("25–50") || normalized.contains("25-50") || normalized.contains("above")) {
             return "above_25_lakhs";
         }
-        return "upto_1lakh";
+        return complianceDefault(investor, "income_slab", "upto_1lakh", "unmapped value '" + normalized + "'");
     }
 
     private String resolveSourceOfWealth(Investor investor) {
         String occupation = onboardingNoteValue(investor, "occupation");
         if (!StringUtils.hasText(occupation)) {
-            return "salary";
+            return complianceDefault(investor, "source_of_wealth", "salary", "no onboarding note");
         }
         String normalized = occupation.toLowerCase(Locale.ROOT);
         if (normalized.contains("business")) {
@@ -2858,7 +2858,24 @@ public class RealCybrillaClient implements CybrillaClient {
         if ("yes".equalsIgnoreCase(pep) || "true".equalsIgnoreCase(pep)) {
             return "applicable";
         }
+        if (!StringUtils.hasText(pep)) {
+            return complianceDefault(investor, "pep_details", "not_applicable", "no onboarding note");
+        }
         return "not_applicable";
+    }
+
+    /**
+     * DF-14: every SEBI/AMFI compliance field that falls back to a blanket default
+     * (because the investor was onboarded without that data) is logged at WARN so
+     * the silent defaulting is observable in production. The real fix — collecting
+     * these fields instead of defaulting — is to-do #11; this just makes the gap
+     * visible. Returns {@code value} unchanged.
+     */
+    private String complianceDefault(Investor investor, String field, String value, String reason) {
+        logger.warn(
+                "compliance_default field='{}' applied='{}' investor='{}' reason='{}' (DF-14: collect, don't default)",
+                field, value, investor != null ? investor.getId() : null, reason);
+        return value;
     }
 
     private String onboardingNoteValue(Investor investor, String key) {
@@ -2895,7 +2912,7 @@ public class RealCybrillaClient implements CybrillaClient {
         Map<String, Object> payload = new LinkedHashMap<>();
         put(payload, "profile", profileId);
         put(payload, "email", investor.getEmail());
-        put(payload, "belongs_to", "self");
+        put(payload, "belongs_to", resolveBelongsTo(investor.getEmailBelongsTo()));
         return payload;
     }
 
@@ -2905,8 +2922,18 @@ public class RealCybrillaClient implements CybrillaClient {
         put(payload, "profile", profileId);
         put(payload, "isd", phoneParts.isd());
         put(payload, "number", phoneParts.number());
-        put(payload, "belongs_to", "self");
+        put(payload, "belongs_to", resolveBelongsTo(investor.getMobileBelongsTo()));
         return payload;
+    }
+
+    /**
+     * The contact relationship declared during onboarding (self / spouse /
+     * dependent_child / dependent_parent / guardian). Falls back to {@code self}
+     * when not declared, preserving prior behaviour. Replaces the former
+     * hardcoded {@code "self"} (DF-11).
+     */
+    private String resolveBelongsTo(String declared) {
+        return StringUtils.hasText(declared) ? declared : "self";
     }
 
     private Map<String, Object> bankAccountPayload(Investor investor, InvestorBankAccount bankAccount) {
@@ -3160,7 +3187,47 @@ public class RealCybrillaClient implements CybrillaClient {
         if (StringUtils.hasText(fundCategory) && !metadata.hasNonNull("category")) {
             metadata.put("category", fundCategory);
         }
+        // DF-07: surface a canonical numeric `nav` the distributor UI reads
+        // (nav / current_nav / last_nav). The POA catalogue may expose it under
+        // several keys or not at all; when absent the UI renders an em dash
+        // instead of a misleading Rs 0.00.
+        if (!metadata.hasNonNull("nav")) {
+            Double nav = firstNav(schemeNode, "nav", "latest_nav", "last_nav", "current_nav", "nav_value");
+            if (nav != null) {
+                metadata.put("nav", nav);
+            }
+        }
         return metadata.toString();
+    }
+
+    /**
+     * Best-effort extraction of a positive NAV from the first matching field.
+     * Accepts numeric or string-encoded values (e.g. "Rs 52.34"); returns
+     * {@code null} when no field carries a usable positive number.
+     */
+    private Double firstNav(JsonNode node, String... fields) {
+        for (String field : fields) {
+            JsonNode value = node.path(field);
+            if (value.isNumber()) {
+                double d = value.asDouble();
+                if (d > 0) {
+                    return d;
+                }
+            } else if (value.isTextual()) {
+                String raw = value.asText().replaceAll("[^0-9.]", "");
+                if (StringUtils.hasText(raw)) {
+                    try {
+                        double d = Double.parseDouble(raw);
+                        if (d > 0) {
+                            return d;
+                        }
+                    } catch (NumberFormatException ignored) {
+                        // fall through to the next candidate field
+                    }
+                }
+            }
+        }
+        return null;
     }
 
     private String nestedText(JsonNode node, String objectName, String fieldName) {

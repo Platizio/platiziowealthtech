@@ -19,14 +19,13 @@ import java.util.Locale;
 import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
-import org.springframework.mock.env.MockEnvironment;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.util.ReflectionTestUtils;
 
 class PasswordResetServiceTest {
 
     @Test
-    void requestResetInLocalProfileReturnsOneTimeTokenAndResetConsumesIt() {
+    void requestResetWithExposeTokenEnabledReturnsOneTimeTokenAndResetConsumesIt() {
         UUID distributorId = UUID.randomUUID();
         Distributor distributor = new Distributor();
         ReflectionTestUtils.setField(distributor, "id", distributorId);
@@ -60,6 +59,28 @@ class PasswordResetServiceTest {
     }
 
     @Test
+    void requestResetNeverReturnsTokenWhenExposeDisabled() {
+        // DF-13-adjacent: with the flag off (production / demo default), the raw
+        // reset token must never leak in the response, even for a known account.
+        UUID distributorId = UUID.randomUUID();
+        Distributor distributor = new Distributor();
+        ReflectionTestUtils.setField(distributor, "id", distributorId);
+        distributor.setEmail("user@example.com");
+
+        List<PasswordResetToken> tokens = new ArrayList<>();
+        List<AuditEvent> audits = new ArrayList<>();
+        PasswordResetService service =
+                service(List.of(distributor), tokens, audits, new RecordingRefreshTokenService(), false);
+
+        var response = service.requestReset(new ForgotPasswordRequest("user@example.com"));
+
+        assertThat(response.resetToken()).isNull();
+        // The token is still generated and persisted (hashed) so the email link works.
+        assertThat(tokens).hasSize(1);
+        assertThat(tokens.getFirst().getDistributorId()).isEqualTo(distributorId);
+    }
+
+    @Test
     void requestResetUsesGenericResponseForUnknownEmails() {
         List<PasswordResetToken> tokens = new ArrayList<>();
         List<AuditEvent> audits = new ArrayList<>();
@@ -79,16 +100,24 @@ class PasswordResetServiceTest {
             List<AuditEvent> audits,
             RecordingRefreshTokenService refreshTokenService
     ) {
-        MockEnvironment environment = new MockEnvironment();
-        environment.setActiveProfiles("local");
+        return service(distributors, tokens, audits, refreshTokenService, true);
+    }
+
+    private PasswordResetService service(
+            List<Distributor> distributors,
+            List<PasswordResetToken> tokens,
+            List<AuditEvent> audits,
+            RecordingRefreshTokenService refreshTokenService,
+            boolean exposeDevToken
+    ) {
         return new PasswordResetService(
                 distributorRepository(distributors),
                 passwordResetTokenRepository(tokens),
                 passwordEncoder(),
                 new AuditService(auditEventRepository(audits)),
                 refreshTokenService,
-                environment,
-                15
+                15,
+                exposeDevToken
         );
     }
 

@@ -1,9 +1,14 @@
 package com.platizio.wealthtech.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doNothing;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -40,6 +45,13 @@ class InvestorActionServiceTest {
         return orderService;
     }
 
+    /** A 2FA engine whose gate passes (challenge APPROVED) so the provider sequence proceeds. */
+    private static TransactionApprovalService approvedApprovalService() {
+        TransactionApprovalService service = mock(TransactionApprovalService.class);
+        doNothing().when(service).assertApprovedAndConsume(any(), any());
+        return service;
+    }
+
     @Test
     void confirmPurchaseRunsFpConsentPaymentAndConfirmFlow() throws Exception {
         TransactionOrderRepository orderRepository = mock(TransactionOrderRepository.class);
@@ -61,6 +73,7 @@ class InvestorActionServiceTest {
                 investorService,
                 passthroughOrderService(),
                 cybrillaClient,
+                approvedApprovalService(),
                 "http://localhost/investor-actions/{token}/payment-complete",
                 "sandbox",
                 "CYBRILLAPOA",
@@ -123,6 +136,200 @@ class InvestorActionServiceTest {
     }
 
     @Test
+    void confirmPurchaseWithoutApprovalDoesNotMutateProviderAndAsksToLogIn() throws Exception {
+        // GATE A / STEP 5: the legacy un-authenticated token path created no APPROVED
+        // challenge, so the gate throws and the provider consent/payment never fires.
+        TransactionOrderRepository orderRepository = mock(TransactionOrderRepository.class);
+        InvestorRepository investorRepository = mock(InvestorRepository.class);
+        ProductSchemeRepository schemeRepository = mock(ProductSchemeRepository.class);
+        CybrillaClient cybrillaClient = mock(CybrillaClient.class);
+        RecordingAuditService auditService = new RecordingAuditService();
+        TransactionOrder order = pendingOrder();
+        Investor investor = investor(order.getInvestorId());
+        ProductScheme scheme = scheme(order.getProductSchemeId());
+        InvestorBankAccountRepository bankAccountRepository = mock(InvestorBankAccountRepository.class);
+        InvestorService investorService = mock(InvestorService.class);
+
+        TransactionApprovalService approvalService = mock(TransactionApprovalService.class);
+        doThrow(new IllegalStateException(
+                "Investor 2FA approval required: no approved approval exists for this transaction."))
+                .when(approvalService).assertApprovedAndConsume(any(), any());
+
+        InvestorActionService service = new InvestorActionService(
+                orderRepository,
+                investorRepository,
+                bankAccountRepository,
+                schemeRepository,
+                auditService,
+                investorService,
+                passthroughOrderService(),
+                cybrillaClient,
+                approvalService,
+                "http://localhost/investor-actions/{token}/payment-complete",
+                "sandbox",
+                "CYBRILLAPOA",
+                true,
+                true
+        );
+
+        when(orderRepository.findByInvestorActionToken("action-token")).thenReturn(Optional.of(order));
+        when(orderRepository.save(order)).thenReturn(order);
+        when(investorRepository.findById(order.getInvestorId())).thenReturn(Optional.of(investor));
+        when(investorService.ensureMfInvestmentAccount(order.getInvestorId())).thenReturn(investor);
+        when(schemeRepository.findById(order.getProductSchemeId())).thenReturn(Optional.of(scheme));
+        when(bankAccountRepository.findByInvestorId(order.getInvestorId()))
+                .thenReturn(List.of(verifiedBankAccount(order.getInvestorId())));
+        when(cybrillaClient.fetchMfPurchase("mfp_123")).thenReturn(json("""
+                {"object":"mf_purchase","id":"mfp_123","old_id":9123,"state":"pending"}
+                """));
+
+        InvestorActionService.InvestorActionPage page = service.confirmPurchase("action-token");
+
+        assertThat(page.message()).contains("log in to the Platizio investor portal");
+        verify(cybrillaClient, never()).updateMfPurchaseConsent(anyString(), any());
+        verify(cybrillaClient, never()).confirmMfPurchase(anyString());
+        verify(cybrillaClient, never()).createNetbankingPayment(any(), anyString(), anyString(), org.mockito.ArgumentMatchers.anyInt(), anyString());
+    }
+
+    @Test
+    void confirmPurchaseSubmittedStateWithoutApprovalNeverMintsPayment() throws Exception {
+        // BYPASS CLOSED (FIX 1): the FP "submitted" branch mints a fresh payment, but it now
+        // runs only after the relocated Gate A. With no APPROVED challenge the gate throws,
+        // so createNetbankingPayment is NEVER reached and the friendly portal outcome results.
+        assertNoMintWhenGateBlocksForState("submitted");
+    }
+
+    @Test
+    void confirmPurchaseConfirmedStateWithoutApprovalNeverMintsPayment() throws Exception {
+        // BYPASS CLOSED (FIX 1): the FP "confirmed" branch also mints a fresh payment, but it
+        // too now sits behind the relocated Gate A — blocked when no APPROVED challenge exists.
+        assertNoMintWhenGateBlocksForState("confirmed");
+    }
+
+    /**
+     * Drives a fresh-entry lumpsum confirm (no stored redirect) with the given FP purchase
+     * state while the 2FA gate throws (as the real engine does when nothing is APPROVED),
+     * and asserts the money write never fires and the investor is asked to log in.
+     */
+    private void assertNoMintWhenGateBlocksForState(String fpState) throws Exception {
+        TransactionOrderRepository orderRepository = mock(TransactionOrderRepository.class);
+        InvestorRepository investorRepository = mock(InvestorRepository.class);
+        ProductSchemeRepository schemeRepository = mock(ProductSchemeRepository.class);
+        CybrillaClient cybrillaClient = mock(CybrillaClient.class);
+        RecordingAuditService auditService = new RecordingAuditService();
+        TransactionOrder order = pendingOrder();
+        Investor investor = investor(order.getInvestorId());
+        ProductScheme scheme = scheme(order.getProductSchemeId());
+        InvestorBankAccountRepository bankAccountRepository = mock(InvestorBankAccountRepository.class);
+        InvestorService investorService = mock(InvestorService.class);
+
+        TransactionApprovalService approvalService = mock(TransactionApprovalService.class);
+        doThrow(new IllegalStateException(
+                "Investor 2FA approval required: no approved approval exists for this transaction."))
+                .when(approvalService).assertApprovedAndConsume(any(), any());
+
+        InvestorActionService service = new InvestorActionService(
+                orderRepository,
+                investorRepository,
+                bankAccountRepository,
+                schemeRepository,
+                auditService,
+                investorService,
+                passthroughOrderService(),
+                cybrillaClient,
+                approvalService,
+                "http://localhost/investor-actions/{token}/payment-complete",
+                "sandbox",
+                "CYBRILLAPOA",
+                true,
+                true
+        );
+
+        when(orderRepository.findByInvestorActionToken("action-token")).thenReturn(Optional.of(order));
+        when(orderRepository.save(order)).thenReturn(order);
+        when(investorRepository.findById(order.getInvestorId())).thenReturn(Optional.of(investor));
+        when(investorService.ensureMfInvestmentAccount(order.getInvestorId())).thenReturn(investor);
+        when(schemeRepository.findById(order.getProductSchemeId())).thenReturn(Optional.of(scheme));
+        when(bankAccountRepository.findByInvestorId(order.getInvestorId()))
+                .thenReturn(List.of(verifiedBankAccount(order.getInvestorId())));
+        when(cybrillaClient.fetchMfPurchase("mfp_123")).thenReturn(json(
+                "{\"object\":\"mf_purchase\",\"id\":\"mfp_123\",\"old_id\":9123,\"state\":\"" + fpState + "\"}"));
+
+        InvestorActionService.InvestorActionPage page = service.confirmPurchase("action-token");
+
+        // Friendly portal/4xx outcome, no money movement, no provider mutation.
+        assertThat(page.message()).contains("log in to the Platizio investor portal");
+        verify(approvalService).assertApprovedAndConsume(any(), any());
+        verify(cybrillaClient, never()).createNetbankingPayment(any(), anyString(), anyString(), org.mockito.ArgumentMatchers.anyInt(), anyString());
+        verify(cybrillaClient, never()).updateMfPurchaseConsent(anyString(), any());
+        verify(cybrillaClient, never()).confirmMfPurchase(anyString());
+        assertThat(order.getOrderStatus()).isEqualTo(OrderStatus.PENDING_INVESTOR_ACTION);
+    }
+
+    @Test
+    void confirmPurchaseRunsGateBeforeMintingPaymentOnHappyPath() throws Exception {
+        // FIX 1 happy path: with the gate stubbed to succeed, the payment IS minted, and the
+        // gate's assertApprovedAndConsume runs BEFORE createNetbankingPayment (InOrder).
+        TransactionOrderRepository orderRepository = mock(TransactionOrderRepository.class);
+        InvestorRepository investorRepository = mock(InvestorRepository.class);
+        ProductSchemeRepository schemeRepository = mock(ProductSchemeRepository.class);
+        CybrillaClient cybrillaClient = mock(CybrillaClient.class);
+        RecordingAuditService auditService = new RecordingAuditService();
+        TransactionOrder order = pendingOrder();
+        Investor investor = investor(order.getInvestorId());
+        ProductScheme scheme = scheme(order.getProductSchemeId());
+        InvestorBankAccountRepository bankAccountRepository = mock(InvestorBankAccountRepository.class);
+        InvestorService investorService = mock(InvestorService.class);
+        TransactionApprovalService approvalService = approvedApprovalService();
+
+        InvestorActionService service = new InvestorActionService(
+                orderRepository,
+                investorRepository,
+                bankAccountRepository,
+                schemeRepository,
+                auditService,
+                investorService,
+                passthroughOrderService(),
+                cybrillaClient,
+                approvalService,
+                "http://localhost/investor-actions/{token}/payment-complete",
+                "sandbox",
+                "CYBRILLAPOA",
+                true,
+                true
+        );
+
+        when(orderRepository.findByInvestorActionToken("action-token")).thenReturn(Optional.of(order));
+        when(orderRepository.save(order)).thenReturn(order);
+        when(investorRepository.findById(order.getInvestorId())).thenReturn(Optional.of(investor));
+        when(investorService.ensureMfInvestmentAccount(order.getInvestorId())).thenReturn(investor);
+        when(schemeRepository.findById(order.getProductSchemeId())).thenReturn(Optional.of(scheme));
+        when(bankAccountRepository.findByInvestorId(order.getInvestorId()))
+                .thenReturn(List.of(verifiedBankAccount(order.getInvestorId())));
+        when(cybrillaClient.fetchMfPurchase("mfp_123")).thenReturn(json("""
+                {"object":"mf_purchase","id":"mfp_123","old_id":9123,"state":"submitted"}
+                """));
+        // pendingOrder() uses paymentMode BANK_TRANSFER, which the merged service routes to UPI.
+        when(cybrillaClient.createUpiUriPayment(
+                eq(List.of(9123)),
+                eq("http://localhost/investor-actions/action-token/payment-complete"),
+                eq(906),
+                eq("ONDC")
+        )).thenReturn(json("""
+                {"id":1,"token_url":null,"upi":{"type":"uri","uri":"upi://pay?pa=billdesk@hdfcbank&am=25000.00&cu=INR"}}
+                """));
+
+        InvestorActionService.InvestorActionPage page = service.confirmPurchase("action-token");
+
+        assertThat(order.getOrderStatus()).isEqualTo(OrderStatus.PAYMENT_PENDING);
+        assertThat(page.paymentRedirectUrl()).startsWith("upi://pay");
+        org.mockito.InOrder inOrder = org.mockito.Mockito.inOrder(approvalService, cybrillaClient);
+        inOrder.verify(approvalService).assertApprovedAndConsume(any(), any());
+        inOrder.verify(cybrillaClient).createUpiUriPayment(
+                eq(List.of(9123)), anyString(), eq(906), eq("ONDC"));
+    }
+
+    @Test
     void confirmPurchaseResumesExistingPaymentRedirectWithoutCallingProvider() throws Exception {
         TransactionOrderRepository orderRepository = mock(TransactionOrderRepository.class);
         InvestorRepository investorRepository = mock(InvestorRepository.class);
@@ -143,6 +350,7 @@ class InvestorActionServiceTest {
                 investorService,
                 passthroughOrderService(),
                 cybrillaClient,
+                approvedApprovalService(),
                 "http://localhost/investor-actions/{token}/payment-complete",
                 "sandbox",
                 "CYBRILLAPOA",
@@ -185,6 +393,7 @@ class InvestorActionServiceTest {
                 mock(InvestorService.class),
                 passthroughOrderService(),
                 mock(CybrillaClient.class),
+                mock(TransactionApprovalService.class),
                 "http://localhost/investor-actions/{token}/payment-complete",
                 "sandbox",
                 "CYBRILLAPOA",
@@ -226,6 +435,7 @@ class InvestorActionServiceTest {
                 investorService,
                 passthroughOrderService(),
                 cybrillaClient,
+                approvedApprovalService(),
                 "http://localhost/investor-actions/{token}/payment-complete",
                 "sandbox",
                 "CYBRILLAPOA",
@@ -285,6 +495,7 @@ class InvestorActionServiceTest {
                 investorService,
                 passthroughOrderService(),
                 cybrillaClient,
+                approvedApprovalService(),
                 "http://localhost/investor-actions/{token}/payment-complete",
                 "sandbox",
                 "CYBRILLAPOA",

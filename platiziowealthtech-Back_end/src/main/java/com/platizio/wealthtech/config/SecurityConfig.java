@@ -57,6 +57,7 @@ public class SecurityConfig {
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers(
                     "/api/v1/auth/**",
+                    "/api/v1/investor-auth/**",
                     "/actuator/health",
                     "/actuator/info",
                     "/v3/api-docs/**",
@@ -70,6 +71,7 @@ public class SecurityConfig {
                     "/favicon.ico",
                     "/"
                 ).permitAll()
+                .requestMatchers("/api/v1/investor/**").hasRole("INVESTOR")
                 .anyRequest().authenticated()
             )
             .exceptionHandling(ex -> ex

@@ -46,6 +46,17 @@ public class InvestorActionController {
         }
     }
 
+    /**
+     * Legacy un-authenticated secure-link confirm — DISABLED as a provider mutation
+     * (Phase-2 locked decision #1). This server-rendered page no longer touches the
+     * Cybrilla/FP provider on its own: {@link InvestorActionService#confirmPurchase(String)}
+     * routes through the 2FA hard gate ({@code assertApprovedAndConsume}), which the
+     * token path can never satisfy (it creates no APPROVED challenge). The gate's
+     * {@link IllegalStateException} is rendered as a friendly "log in to the Platizio
+     * investor portal to approve" page (HTTP 200) — or a clean 4xx for other
+     * IllegalState/NotFound cases — never a 500, and never a provider write. The page is
+     * intentionally kept (not deleted); only its ability to bypass 2FA is removed.
+     */
     @PostMapping(
             value = {"/investor-actions/{token}/confirm", "/investor-action/{token}/confirm"},
             produces = MediaType.TEXT_HTML_VALUE

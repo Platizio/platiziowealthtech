@@ -3,17 +3,32 @@ package com.platizio.wealthtech.repository;
 import com.platizio.wealthtech.domain.Investor;
 import com.platizio.wealthtech.domain.BankVerificationStatus;
 import com.platizio.wealthtech.domain.KycStatus;
+import jakarta.persistence.LockModeType;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 public interface InvestorRepository extends JpaRepository<Investor, UUID> {
     Optional<Investor> findByPan(String pan);
+
+    /**
+     * SEC-3: pessimistic-write load used to serialize concurrent "Send to Investor"
+     * calls for the same investor. The partial-unique index already blocks two live
+     * PENDING link rows; taking the row lock at the start of {@code sendToInvestor}
+     * makes concurrent sends queue gracefully instead of racing to a constraint error.
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select i from Investor i where i.id = :id")
+    Optional<Investor> findForUpdateById(@Param("id") UUID id);
+
+    /** R5: investors awaiting a given distributor's onboarding approval (distributor_id not yet linked). */
+    List<Investor> findByPendingDistributorId(UUID pendingDistributorId);
 
     @Query(value = "select * from investors where pan = :pan order by updated_at desc limit 1", nativeQuery = true)
     Optional<Investor> findIncludingDeletedByPan(@Param("pan") String pan);

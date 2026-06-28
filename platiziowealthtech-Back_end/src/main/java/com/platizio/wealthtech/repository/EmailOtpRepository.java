@@ -18,6 +18,14 @@ public interface EmailOtpRepository extends JpaRepository<EmailOtp, UUID> {
     Optional<EmailOtp> findFirstByEmailAndPurposeAndConsumedAtIsNullOrderByCreatedAtDesc(
             String email, OtpPurpose purpose);
 
+    // Reference-scoped variants: bind a code to one subject (e.g. a transaction-approval
+    // challenge) so concurrent challenges sharing (email, purpose) can't cross-consume.
+    List<EmailOtp> findByEmailAndPurposeAndReferenceIdAndConsumedAtIsNull(
+            String email, OtpPurpose purpose, UUID referenceId);
+
+    Optional<EmailOtp> findFirstByEmailAndPurposeAndReferenceIdAndConsumedAtIsNullOrderByCreatedAtDesc(
+            String email, OtpPurpose purpose, UUID referenceId);
+
     @Modifying
     @Query("delete from EmailOtp o where o.expiresAt < :cutoff")
     int deleteByExpiresAtBefore(@Param("cutoff") OffsetDateTime cutoff);

@@ -196,6 +196,9 @@ public class AuthService {
         return switch (purpose) {
             case LOGIN -> registered;
             case SIGNUP -> !registered;
+            // Investor-portal, transaction-approval, and profile-change purposes are handled
+            // elsewhere (never via the distributor isOtpEligible path).
+            case INVESTOR_LOGIN, INVESTOR_SIGNUP, TRANSACTION_APPROVAL, PROFILE_APPROVAL -> false;
         };
     }
 

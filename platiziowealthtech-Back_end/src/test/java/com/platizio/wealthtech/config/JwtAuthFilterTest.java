@@ -46,7 +46,7 @@ class JwtAuthFilterTest {
     private JwtAuthFilter filter(boolean blocked) {
         return new JwtAuthFilter(
                 new TestJwtService(),
-                new AuthCookieService("access_token", "refresh_token", false, "Lax", 1_800_000, 604_800_000),
+                new AuthCookieService("access_token", "refresh_token", "investor_access_token", false, "Lax", 1_800_000, 604_800_000, 3_600_000),
                 new TestBlockedTokenService(blocked)
         );
     }

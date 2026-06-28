@@ -22,6 +22,13 @@ public class JwtService {
     @Value("${jwt.expiration-ms}")
     private long expirationMs;
 
+    @Value("${app.auth.investor-access-expiration-ms:3600000}")
+    private long investorExpirationMs;
+
+    /** Token actor-type discriminator (claim {@code typ}). */
+    public static final String TYPE_DISTRIBUTOR = "DISTRIBUTOR";
+    public static final String TYPE_INVESTOR = "INVESTOR";
+
     @PostConstruct
     void validateSecret() {
         Assert.hasText(secret, "JWT_SECRET must be set");
@@ -37,10 +44,32 @@ public class JwtService {
                 .subject(distributorId.toString())
                 .claim("email", email)
                 .claim("role", role)
+                .claim("typ", TYPE_DISTRIBUTOR)
                 .issuedAt(new Date())
                 .expiration(new Date(System.currentTimeMillis() + expirationMs))
                 .signWith(getSigningKey())
                 .compact();
+    }
+
+    /** Investor-portal access token (passwordless). Distinct {@code typ} so the
+     * filter builds an investor principal that can never act as a distributor. */
+    public String generateInvestorToken(UUID investorAccountId, String email) {
+        return Jwts.builder()
+                .id(UUID.randomUUID().toString())
+                .subject(investorAccountId.toString())
+                .claim("email", email)
+                .claim("role", "INVESTOR")
+                .claim("typ", TYPE_INVESTOR)
+                .issuedAt(new Date())
+                .expiration(new Date(System.currentTimeMillis() + investorExpirationMs))
+                .signWith(getSigningKey())
+                .compact();
+    }
+
+    /** Actor type of a token ({@code DISTRIBUTOR} default for legacy tokens without the claim). */
+    public String extractType(String token) {
+        String typ = extractAllClaims(token).get("typ", String.class);
+        return typ == null ? TYPE_DISTRIBUTOR : typ;
     }
 
     public Claims extractAllClaims(String token) {
