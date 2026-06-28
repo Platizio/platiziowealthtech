@@ -1,5 +1,6 @@
 import React from 'react';
 import { motion } from 'motion/react';
+import { LineChart } from 'lucide-react';
 
 export default function LandingPage({
   onLogin,
@@ -31,9 +32,9 @@ export default function LandingPage({
         <div className="flex items-center gap-2">
           <button
             onClick={onInvestorLogin}
-            className="px-5 py-2 text-sm font-medium text-blue-200 hover:text-white transition-colors rounded-xl hover:bg-white/5"
+            className="flex items-center gap-1.5 px-5 py-2 text-sm font-semibold text-white bg-blue-500/90 hover:bg-blue-400 transition-colors rounded-xl shadow-md shadow-blue-500/20"
           >
-            Investor Login
+            <LineChart className="w-4 h-4" /> Investor Login
           </button>
           <button
             onClick={onLogin}
@@ -95,29 +96,35 @@ export default function LandingPage({
           </div>
 
           {/* CTA buttons */}
-          <div className="flex gap-4 justify-center">
+          <div className="flex flex-col sm:flex-row gap-4 justify-center items-center">
+            <button
+              onClick={onInvestorLogin}
+              className="w-full sm:w-auto px-10 py-4 bg-blue-500 text-white font-bold text-base rounded-2xl shadow-2xl shadow-blue-500/40 hover:bg-blue-400 transition-all hover:-translate-y-0.5 duration-200 flex items-center justify-center gap-2"
+            >
+              <LineChart className="w-5 h-5" /> Investor Login
+            </button>
             <button
               onClick={onLogin}
-              className="px-9 py-4 bg-white text-[#0B1B3E] font-semibold text-base rounded-2xl shadow-2xl hover:bg-blue-50 transition-all hover:-translate-y-0.5 duration-200"
+              className="w-full sm:w-auto px-9 py-4 bg-white text-[#0B1B3E] font-semibold text-base rounded-2xl shadow-2xl hover:bg-blue-50 transition-all hover:-translate-y-0.5 duration-200"
             >
-              Log In
+              Distributor Log In
             </button>
             <button
               onClick={onSignUp}
-              className="px-9 py-4 bg-transparent text-white font-semibold text-base rounded-2xl border border-white/25 hover:bg-white/10 transition-all hover:-translate-y-0.5 duration-200 backdrop-blur-sm"
+              className="w-full sm:w-auto px-9 py-4 bg-transparent text-white font-semibold text-base rounded-2xl border border-white/25 hover:bg-white/10 transition-all hover:-translate-y-0.5 duration-200 backdrop-blur-sm"
             >
               Sign Up as Distributor
             </button>
           </div>
 
-          {/* Investor entry */}
-          <p className="mt-6 text-sm text-white/50">
+          {/* Investor entry — secondary reinforcement */}
+          <p className="mt-6 text-base text-white/60">
             Are you an investor?{' '}
             <button
               onClick={onInvestorLogin}
-              className="font-semibold text-blue-300 underline-offset-4 hover:text-white hover:underline transition-colors"
+              className="font-semibold text-blue-300 underline underline-offset-4 hover:text-white transition-colors"
             >
-              Log in to the investor portal
+              Go to the investor portal
             </button>
           </p>
         </motion.div>

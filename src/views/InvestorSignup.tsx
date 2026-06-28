@@ -4,7 +4,7 @@ import {
   AlertCircle, ShieldCheck, CheckCircle2, RefreshCw,
   MessageSquare, ArrowLeft, ArrowRight, Check, UserPlus,
 } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { apiFetch } from '../config/api';
 import { useAppDispatch } from '../store/hooks';
 import { setInvestorUser } from '../store/slices/investorAuthSlice';
@@ -40,17 +40,23 @@ const STEP_LABELS = ['Email', 'Your details', 'Verify & consent', 'Done'];
 export default function InvestorSignup() {
   const navigate = useNavigate();
   const dispatch = useAppDispatch();
+  // Invite-only signup: an investor account is created ONLY after the distributor's
+  // approval link (investor.md D2/R6). `invited` is set when arriving from /investor/link-approve.
+  const [params] = useSearchParams();
+  const invited = params.get('invited') === '1';
 
   const [step, setStep] = useState(1);
 
   // Step 1
-  const [email, setEmail] = useState('');
+  const [email, setEmail] = useState(params.get('email') || '');
   const [devCode, setDevCode] = useState('');
 
   // Step 2
   const [fullName, setFullName] = useState('');
-  const [pan, setPan] = useState('');
+  const [pan, setPan] = useState((params.get('pan') || '').toUpperCase());
   const [mobileNumber, setMobileNumber] = useState('');
+  const [panVerified, setPanVerified] = useState(false);
+  const [phoneVerified, setPhoneVerified] = useState(false);
 
   // Step 3
   const [otpDigits, setOtpDigits] = useState<string[]>(Array(6).fill(''));
@@ -108,14 +114,22 @@ export default function InvestorSignup() {
     }
   };
 
-  /* ── Step 2 → validate details, move to verify ── */
+  /* ── Dummy verifications (no live SMS/PAN check — instant) ── */
+  const verifyPanDummy = () => {
+    if (!PAN_RE.test(pan.trim().toUpperCase())) { setError('Please enter a valid PAN (e.g. ABCDE1234F).'); return; }
+    setError(''); setPanVerified(true);
+  };
+  const verifyPhoneDummy = () => {
+    if (!MOBILE_RE.test(mobileNumber.trim())) { setError('Please enter a valid mobile number.'); return; }
+    setError(''); setPhoneVerified(true);
+  };
+
+  /* ── Step 2 → require dummy PAN + phone verification, move to email verify ── */
   const handleDetailsNext = () => {
     const name = fullName.trim();
-    const panUpper = pan.trim().toUpperCase();
-    const mob = mobileNumber.trim();
     if (!name) { setError('Please enter the investor full name.'); return; }
-    if (!PAN_RE.test(panUpper)) { setError('Please enter a valid PAN (e.g. ABCDE1234F).'); return; }
-    if (!MOBILE_RE.test(mob)) { setError('Please enter a valid mobile number.'); return; }
+    if (!panVerified) { setError('Please verify your PAN to continue.'); return; }
+    if (!phoneVerified) { setError('Please verify your phone number to continue.'); return; }
     setError('');
     setStep(3);
   };
@@ -209,7 +223,7 @@ export default function InvestorSignup() {
         </div>
         <h2 className="text-3xl font-bold text-white mb-3 leading-snug">Create your investor account</h2>
         <p className="text-blue-200/60 text-sm leading-relaxed mb-10">
-          A few details and an email verification — that's all it takes. No password to remember.
+          A few details, an email verification, and quick phone/PAN checks — that's all it takes. Your PAN becomes your password.
         </p>
         <div className="space-y-4">
           {STEP_LABELS.slice(0, 3).map((label, i) => {
@@ -239,6 +253,31 @@ export default function InvestorSignup() {
       </div>
     </div>
   );
+
+  if (!invited) {
+    return (
+      <div className="min-h-screen bg-[#0B1B3E] flex items-center justify-center p-6">
+        <div className="w-full max-w-md rounded-2xl bg-white p-8 shadow-xl text-center">
+          <div className="mb-5 flex items-center justify-center gap-2.5">
+            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-[#0B1B3E] text-base font-bold text-white">P</div>
+            <span className="text-lg font-bold tracking-tight text-slate-800">Platizio</span>
+          </div>
+          <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-blue-50">
+            <ShieldCheck className="h-7 w-7 text-blue-600" />
+          </div>
+          <h1 className="text-xl font-semibold text-slate-800">Registration is by invitation</h1>
+          <p className="mt-2 text-sm text-slate-500 leading-relaxed">
+            Investors are onboarded by their distributor. Open the registration link your distributor emailed you,
+            review and approve it, and you&rsquo;ll be brought here to create your account.
+          </p>
+          <button onClick={() => navigate('/investor/login')}
+            className="mt-6 w-full rounded-xl bg-[#0B1B3E] py-3 text-sm font-semibold text-white hover:bg-[#1A3066]">
+            Go to investor login
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen flex">
@@ -328,19 +367,34 @@ export default function InvestorSignup() {
                     <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5">
                       PAN <span className="text-red-400">*</span>
                     </label>
-                    <input type="text" value={pan}
-                      onChange={e => { setPan(e.target.value.toUpperCase()); setError(''); }}
-                      placeholder="ABCDE1234F" maxLength={10}
-                      className={inp + ' font-mono tracking-widest uppercase'} />
+                    <div className="flex gap-2">
+                      <input type="text" value={pan}
+                        onChange={e => { setPan(e.target.value.toUpperCase()); setPanVerified(false); setError(''); }}
+                        placeholder="ABCDE1234F" maxLength={10}
+                        className={inp + ' font-mono tracking-widest uppercase'} />
+                      {panVerified ? (
+                        <span className="flex items-center gap-1 px-3 rounded-xl bg-green-50 text-green-700 text-xs font-semibold whitespace-nowrap"><Check className="w-3.5 h-3.5" /> Verified</span>
+                      ) : (
+                        <button type="button" onClick={verifyPanDummy} className="px-4 rounded-xl bg-slate-100 text-slate-700 text-xs font-semibold hover:bg-slate-200 transition-colors whitespace-nowrap">Verify</button>
+                      )}
+                    </div>
+                    <p className="text-[11px] text-slate-400 mt-1">Your PAN will also be your login password.</p>
                   </div>
                   <div className="mb-6">
                     <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5">
                       Mobile Number <span className="text-red-400">*</span>
                     </label>
-                    <input type="tel" value={mobileNumber}
-                      onChange={e => { setMobileNumber(e.target.value.replace(/\D/g, '')); setError(''); }}
-                      onKeyDown={e => e.key === 'Enter' && handleDetailsNext()}
-                      placeholder="9876543210" maxLength={13} className={inp} />
+                    <div className="flex gap-2">
+                      <input type="tel" value={mobileNumber}
+                        onChange={e => { setMobileNumber(e.target.value.replace(/\D/g, '')); setPhoneVerified(false); setError(''); }}
+                        onKeyDown={e => e.key === 'Enter' && handleDetailsNext()}
+                        placeholder="9876543210" maxLength={13} className={inp} />
+                      {phoneVerified ? (
+                        <span className="flex items-center gap-1 px-3 rounded-xl bg-green-50 text-green-700 text-xs font-semibold whitespace-nowrap"><Check className="w-3.5 h-3.5" /> Verified</span>
+                      ) : (
+                        <button type="button" onClick={verifyPhoneDummy} className="px-4 rounded-xl bg-slate-100 text-slate-700 text-xs font-semibold hover:bg-slate-200 transition-colors whitespace-nowrap">Verify</button>
+                      )}
+                    </div>
                   </div>
                   <button onClick={handleDetailsNext}
                     className="w-full py-3.5 bg-[#0B1B3E] text-white font-semibold text-sm rounded-xl hover:bg-[#1A3066] transition-all duration-150 hover:-translate-y-0.5 active:translate-y-0 active:scale-[0.99] flex items-center justify-center gap-2 shadow-lg">

@@ -1,14 +1,10 @@
-import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
-import { useNavigate, useSearchParams, useLocation } from 'react-router-dom';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'motion/react';
 import {
-  ArrowLeft, ArrowRight, CheckCircle2, Loader2, Check,
-  ShieldCheck, Upload, Building2, User, AlertTriangle, X, RefreshCw, Fingerprint, Clock,
+  ArrowLeft, ArrowRight, CheckCircle2, Loader2, Check, Copy,
+  ShieldCheck, Upload, Building2, User, AlertTriangle, X, RefreshCw, Clock, Send,
 } from 'lucide-react';
-import CybrillaKycWarnings from '../components/CybrillaKycWarnings';
-import CybrillaKycReasonDialog, { type CybrillaKycReasonDialogContent } from '../components/CybrillaKycReasonDialog';
-import KycFlowPanel from '../components/KycFlowPanel';
-import KycProviderLink from '../components/KycProviderLink';
 import PincodeCityFields from '../components/PincodeCityFields';
 import SandboxDemoGuide from '../components/SandboxDemoGuide';
 import ContactVerification from '../components/ContactVerification';
@@ -20,66 +16,35 @@ import {
   type InvestorDocumentKey,
   type SavedInvestorDocument,
 } from '../utils/investorDocuments';
-import {
-  shouldLockAadhaarStart,
-  shouldLockEsignStart,
-  shouldLockKycRequestCreate,
-  shouldLockPoaRunButton,
-  isPoaPreVerificationComplete,
-  validateInvestorMinimumAge,
-} from '../utils/kycActionLocks';
+import { validateInvestorMinimumAge } from '../utils/kycActionLocks';
 import type { SandboxDemoScenario } from '../utils/sandboxDemoData';
 import { apiFetch } from '../config/api';
 import { buildValidationSummary, mapServerErrorsToState, parseServerValidation } from '../utils/serverValidation';
 import {
-  extractPreVerification,
-  resolvePreVerificationFromPayload,
-  buildPreVerificationFromBackendState,
-  readCybrillaReadinessReason,
-  canCreateFreshKycRequest,
-  isReadinessFailureBlockingKycRequest,
-  getPreVerificationDecision,
-  getPreVerificationRows,
   normalizeMobile,
   normalizePan,
-  parseStoredPreVerification,
-  preVerificationStatusClasses,
   computeIdentityFingerprint,
-  shouldForceNewKycCheck,
   isCybrillaSandboxMode,
   validateInvestorIdentityForKyc,
-  validateIdentityBeforeCybrillaPoa,
-  extractCybrillaWarningsFromPayload,
-  buildKycReasonDialogContent,
-  type KycReasonDialogInput,
-  isIdentityDocumentFetchComplete,
-  isPanAadhaarNotLinked,
-  normalizeAadhaarVerificationResponse,
-  readAadhaarVerificationFromInvestor,
-  type CybrillaKycWarning,
 } from '../utils/kycPreVerification';
-import {
-  normalizeEsignVerificationResponse,
-  normalizeKycFlowStatus,
-  buildKycPostbackUrl,
-  type KycFlowNextAction,
-  type KycFlowStatusView,
-} from '../utils/kycFlow';
-import {
-  canProceedFromKycStep,
-  mapBackendNextStepToWizardStep,
-} from '../utils/onboardingResume';
 
 // ── Step metadata ────────────────────────────────────────────────────────────
+// Compliance re-architecture: KYC is an investor-only step and no longer part of
+// the distributor wizard. Remaining steps: Basic → Consent → Personal → Bank →
+// FATCA → Documents.
 const STEPS = [
   { id: 1, label: 'Basic Info' },
   { id: 2, label: 'Consent' },
   { id: 3, label: 'Personal' },
-  { id: 4, label: 'KYC' },
-  { id: 5, label: 'Bank' },
-  { id: 6, label: 'FATCA' },
-  { id: 7, label: 'Documents' },
+  { id: 4, label: 'Bank' },
+  { id: 5, label: 'FATCA' },
+  { id: 6, label: 'Documents' },
 ];
+
+// ── Onboarding mode (the two compliance options) ─────────────────────────────
+// Option 1 — distributor fills details, investor approves them (approval gate).
+// Option 2 — distributor sends a link, the investor fills it themselves.
+type OnboardingMode = 'distributor-fill' | 'send-link';
 
 // ── Props ────────────────────────────────────────────────────────────────────
 interface Props {
@@ -156,57 +121,51 @@ const clampResumeStep = (value: number | string | null | undefined) => {
   return Number.isFinite(numeric) ? Math.min(Math.max(Math.round(numeric), 1), STEPS.length) : null;
 };
 
+// Maps the backend onboarding-resume `nextStep` to the NEW (KYC-free) wizard
+// numbering: Basic 1 → Consent 2 → Personal 3 → Bank 4 → FATCA 5 → Documents 6.
+// KYC-related next steps (APPLY_KYC/REFRESH_KYC) belong to the investor side now,
+// so they resume the distributor to the first post-KYC stage (Bank).
+const mapBackendNextStepToNewWizardStep = (
+  nextStep?: string | null,
+  documentsComplete?: boolean,
+): number | null => {
+  switch (String(nextStep || '').trim().toUpperCase().replace(/-/g, '_')) {
+    case 'SYNC_INVESTOR_PROFILE':
+      return 3;
+    case 'APPLY_KYC':
+    case 'REFRESH_KYC':
+    case 'ADD_BANK_ACCOUNT':
+    case 'REFRESH_BANK_VERIFICATION':
+      return 4;
+    case 'UPLOAD_DOCUMENTS':
+      return 6;
+    case 'READY_FOR_TRANSACTIONS':
+      return documentsComplete ? 6 : 5;
+    default:
+      return null;
+  }
+};
+
 const deriveResumeStep = (
   investor: any,
   requestedStep?: number | string | null,
   options?: { nextStep?: string; documentsComplete?: boolean },
 ) => {
-  const fromBackend = mapBackendNextStepToWizardStep(options?.nextStep, options?.documentsComplete);
+  const fromBackend = mapBackendNextStepToNewWizardStep(options?.nextStep, options?.documentsComplete);
   if (fromBackend != null) return fromBackend;
 
   const explicitStep = clampResumeStep(requestedStep);
   if (explicitStep) return explicitStep;
 
-  const kycStatus = normalizeStatus(investor?.kycStatus);
+  // KYC is no longer a distributor step. Resume to Bank (4) when bank details are
+  // missing, Documents (6) when documents are incomplete, otherwise FATCA (5).
   const bankStatus = normalizeStatus(investor?.bankVerificationStatus);
-  if (kycStatus !== 'COMPLETED' && kycStatus !== 'VERIFIED') return 4;
-  if (!bankStatus || ['NOT_CAPTURED', 'VERIFICATION_PENDING', 'PENDING', 'FAILED'].includes(bankStatus)) return 5;
-  if (options?.documentsComplete === false) return 7;
-  return 6;
+  if (!bankStatus || ['NOT_CAPTURED', 'VERIFICATION_PENDING', 'PENDING', 'FAILED'].includes(bankStatus)) return 4;
+  if (options?.documentsComplete === false) return 6;
+  return 5;
 };
 
 const REQUIRED_DOCUMENT_KEYS: InvestorDocumentKey[] = ['pan', 'address', 'signature'];
-
-const identitySnapshot = (identity: {
-  firstName?: string;
-  lastName?: string;
-  pan?: string;
-  dob?: string;
-  mobile?: string;
-  email?: string;
-  relationshipType?: string;
-  guardianPan?: string;
-}) => {
-  const fullName = `${identity.firstName || ''} ${identity.lastName || ''}`.replace(/\s+/g, ' ').trim();
-  return JSON.stringify({
-    fullName: fullName.toUpperCase(),
-    pan: normalizePan(identity.pan || ''),
-    dob: identity.dob || '',
-    mobile: normalizeMobile(identity.mobile || ''),
-    email: String(identity.email || '').trim().toLowerCase(),
-    relationshipType: identity.relationshipType || 'SELF',
-    guardianPan: normalizePan(identity.guardianPan || ''),
-  });
-};
-
-const kycPhaseFromInvestor = (investor: any, fallback: 'idle' | 'checking' | 'accepted' | 'verified' | 'failed' | 'retry' | 'pending' = 'idle') => {
-  const status = normalizeStatus(investor?.kycStatus);
-  if (status === 'COMPLETED' || status === 'VERIFIED') return 'verified';
-  if (status === 'IN_PROGRESS' || status === 'PENDING') return 'pending';
-  if (status === 'FAILED' || status === 'REJECTED') return 'failed';
-  if (status === 'RETRY_REQUIRED') return 'retry';
-  return fallback;
-};
 
 const validateDocumentFile = (file: File) => {
   const extension = file.name.split('.').pop()?.toLowerCase() || '';
@@ -258,43 +217,28 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
     guardianPan: resumeInvestor?.guardianPan || '',
   });
 
-  // ── Step 2 — Consent (Aadhaar OTP happens on Cybrilla Digilocker in step 3) ─
+  // ── Onboarding mode chooser (the two compliance options) ────────────────────
+  // null = not chosen yet (show the chooser on entry). Resumed investors skip the
+  // chooser and default to the distributor-fill (approval-gated) path.
+  const [onboardingMode, setOnboardingMode] = useState<OnboardingMode | null>(
+    isResumeMode ? 'distributor-fill' : null,
+  );
+
+  // ── Step 2 — Consent (data-processing only; KYC consent now lives investor-side) ─
   const [consentDataProcessing, setConsentDataProcessing] = useState(false);
-  const [consentCybrillaKyc, setConsentCybrillaKyc] = useState(false);
-  const kycCheckInFlightRef = useRef(false);
-  const kycPollAttemptsRef = useRef(0);
 
-  // ── Step 3 — KYC ────────────────────────────────────────────────────────────
-  const [kycPhase, setKycPhase] = useState<'idle' | 'checking' | 'accepted' | 'verified' | 'failed' | 'retry' | 'pending'>('idle');
+  // ── Investor draft + send-to-investor flow ──────────────────────────────────
   const [draftInvestor, setDraftInvestor] = useState<any | null>(null);
+  // investor.md M2 (R1/R2): "Send to Investor" gated flow state.
+  const [sendToInvestorBusy, setSendToInvestorBusy] = useState(false);
+  const [linkStatus, setLinkStatus] = useState<string>('NONE');
+  const [linkLoading, setLinkLoading] = useState(false);
+  const [linkPendingModal, setLinkPendingModal] = useState<{ approveUrl?: string; emailDelivered?: boolean } | null>(null);
+  const [linkCopied, setLinkCopied] = useState(false);
   const [draftIdentityFingerprint, setDraftIdentityFingerprint] = useState('');
-  const [lastKycIdentityFingerprint, setLastKycIdentityFingerprint] = useState('');
-  const [kycPreVerification, setKycPreVerification] = useState<any | null>(null);
-  const [kycValidationErrors, setKycValidationErrors] = useState<Record<string, string>>({});
-  const [kycActionError, setKycActionError] = useState('');
-  const [kycActionMessage, setKycActionMessage] = useState('');
-  const [creatingKycRequest, setCreatingKycRequest] = useState(false);
-  const [autoRunKycOnStep4, setAutoRunKycOnStep4] = useState(false);
-  const [cybrillaApiWarnings, setCybrillaApiWarnings] = useState<CybrillaKycWarning[]>([]);
-  const [aadhaarRedirectUrl, setAadhaarRedirectUrl] = useState('');
-  const [aadhaarFetchStatus, setAadhaarFetchStatus] = useState('');
-  const [aadhaarDocumentId, setAadhaarDocumentId] = useState('');
-  const [aadhaarProofsAttached, setAadhaarProofsAttached] = useState(false);
-  const [aadhaarActionLoading, setAadhaarActionLoading] = useState('');
-  const [kycFlowStatus, setKycFlowStatus] = useState<KycFlowStatusView | null>(null);
-  const [kycFlowLoading, setKycFlowLoading] = useState(false);
-  const [kycFlowError, setKycFlowError] = useState('');
-  const [kycFlowActionLoading, setKycFlowActionLoading] = useState('');
-  const [kycReasonDialogOpen, setKycReasonDialogOpen] = useState(false);
-  const [kycReasonDialogContent, setKycReasonDialogContent] = useState<CybrillaKycReasonDialogContent | null>(null);
-  const kycReasonDialogSigRef = useRef('');
-  const [esignRedirectUrl, setEsignRedirectUrl] = useState('');
-  const [searchParams] = useSearchParams();
   const navigate = useNavigate();
-  const location = useLocation();
-  const postbackHandledRef = useRef(false);
 
-  // ── Step 4 — Personal ───────────────────────────────────────────────────────
+  // ── Step 3 — Personal ───────────────────────────────────────────────────────
   const [s4, setS4] = useState({
     gender: noteValue(resumeInvestor?.onboardingNotes, 'gender'),
     occupation: noteValue(resumeInvestor?.onboardingNotes, 'occupation'),
@@ -309,8 +253,10 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
   const [showNominee, setShowNominee] = useState(false);
   const [nominee, setNominee] = useState({ name: '', relation: '' });
 
-  // ── Step 5 — Bank ────────────────────────────────────────────────────────────
-  const [s5, setS5] = useState({ accNumber: '', ifsc: '', accType: 'Savings', primary: true });
+  // ── Step 4 — Bank ────────────────────────────────────────────────────────────
+  // REQ #11 — no defaulted values: account type starts empty (placeholder + required),
+  // and "primary" starts unticked. The customer must choose explicitly.
+  const [s5, setS5] = useState({ accNumber: '', ifsc: '', accType: '', primary: false });
   const [bankName, setBankName] = useState('');
   const [ifscBranchName, setIfscBranchName] = useState('');
   const [ifscLookupLoading, setIfscLookupLoading] = useState(false);
@@ -321,7 +267,7 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
   const [bankStepError, setBankStepError] = useState('');
   const [bankStepMessage, setBankStepMessage] = useState('');
 
-  // ── Step 6 — FATCA ───────────────────────────────────────────────────────────
+  // ── Step 5 — FATCA ───────────────────────────────────────────────────────────
   const [s6, setS6] = useState({
     taxResidency: noteValue(resumeInvestor?.onboardingNotes, 'tax_residency') || '', // DF-09: no default
     taxCountry: '',
@@ -331,7 +277,7 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
     termsAccepted: false, // Task 4 / DF-10: T&C acceptance, separate from FATCA declaration
   });
 
-  // ── Step 7 — Documents ───────────────────────────────────────────────────────
+  // ── Step 6 — Documents ───────────────────────────────────────────────────────
   const [docs, setDocs] = useState<{ pan: File | null; address: File | null; signature: File | null }>({
     pan: null,
     address: null,
@@ -388,134 +334,22 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
     }
   }, [draftInvestor, draftIdentityFingerprint, distributorId, identityFingerprint, s1.pan]);
   const activeInvestor = draftInvestor || resumeInvestor;
-  const kycDecision = getPreVerificationDecision(kycPreVerification, { investor: activeInvestor as Record<string, unknown> | null });
-  const poaInvestorId = draftInvestor?.id || resumeInvestor?.id;
-  const poaKycCheckId = kycPreVerification?.id
-    || draftInvestor?.externalKycCheckId
-    || resumeInvestor?.externalKycCheckId;
-  const showPoaRefreshButton = Boolean(poaKycCheckId) && !kycDecision.canProceed;
-  const kycRequestId = activeInvestor?.externalKycRequestId || '';
-  const panAadhaarNotLinked = kycDecision.requiresPanAadhaarLink
-    || isPanAadhaarNotLinked(kycPreVerification, activeInvestor as Record<string, unknown> | null);
-  const aadhaarFetchComplete = isIdentityDocumentFetchComplete(aadhaarFetchStatus) || aadhaarProofsAttached;
-  const esignId = activeInvestor?.externalEsignId || '';
-  const anyKycApiBusy = Boolean(
-    kycFlowActionLoading
-    || aadhaarActionLoading
-    || creatingKycRequest
-    || kycPhase === 'checking',
-  );
-  const poaPreVerificationComplete = isPoaPreVerificationComplete(kycDecision);
-  // When the user goes back and edits identity (PAN / name / DOB / mobile / etc.)
-  // after a prior pre-verification, the saved result is stale: it was computed for
-  // the OLD identity. Treat the prior completion as invalid so "Run pre-verification"
-  // is enabled again and a fresh check can run against the new data.
-  const identityChangedSinceKyc = Boolean(
-    lastKycIdentityFingerprint && lastKycIdentityFingerprint !== identityFingerprint,
-  );
-  const poaRunLocked = shouldLockPoaRunButton({
-    anyBusy: anyKycApiBusy && kycPhase !== 'checking',
-    kycPhase,
-    // `kyc_unavailable` (requiresFreshKyc) is NOT a terminal success — per Cybrilla docs it
-    // means "start a fresh KYC application". Keep "Run pre-verification" enabled so the investor
-    // can re-run it and is never permanently blocked; the "Create KYC request" path stays available too.
-    preVerificationComplete: poaPreVerificationComplete && !identityChangedSinceKyc && !kycDecision.requiresFreshKyc,
-  });
-  const aadhaarStartLocked = shouldLockAadhaarStart({
-    anyBusy: anyKycApiBusy,
-    documentId: aadhaarDocumentId,
-    redirectUrl: aadhaarRedirectUrl,
-    externalDocumentId: activeInvestor?.externalIdentityDocumentId,
-  });
-  const freshKycRequestAllowed = canCreateFreshKycRequest(
-    kycPreVerification,
-    activeInvestor as Record<string, unknown> | null,
-  );
-  const kycRequestCreateLocked = shouldLockKycRequestCreate({
-    anyBusy: anyKycApiBusy,
-    creating: creatingKycRequest,
-    kycRequestId,
-    readinessBlocksCreate: isReadinessFailureBlockingKycRequest(
-      kycPreVerification,
-      activeInvestor as Record<string, unknown> | null,
-    ),
-  });
-  const esignStartLocked = shouldLockEsignStart({
-    anyBusy: anyKycApiBusy,
-    esignId,
-    redirectUrl: esignRedirectUrl,
-  });
-  const aadhaarLinkLocked = anyKycApiBusy || aadhaarFetchComplete || aadhaarStartLocked;
-  const esignLinkLocked = anyKycApiBusy || esignStartLocked;
   const dobAgeError = useMemo(
     () => validateInvestorMinimumAge(s1.dob, { relationshipType: s1.relationshipType }),
     [s1.dob, s1.relationshipType],
   );
 
-  const presentKycReasonDialog = (
-    input: KycReasonDialogInput,
-    options?: { force?: boolean },
-  ) => {
-    const content = buildKycReasonDialogContent(input);
-    if (!content) return;
-    const signature = JSON.stringify(content);
-    if (!options?.force && signature === kycReasonDialogSigRef.current) return;
-    kycReasonDialogSigRef.current = signature;
-    setKycReasonDialogContent(content);
-    setKycReasonDialogOpen(true);
-  };
-
-  const reportKycIssue = (errorMessage: string, extra?: Partial<KycReasonDialogInput>) => {
-    setKycActionError(errorMessage);
-    presentKycReasonDialog({
-      errorMessage,
-      warnings: cybrillaKycWarnings,
-      preVerification: kycPreVerification,
-      decision: kycDecision,
-      flowMessage: kycFlowStatus?.message,
-      ...extra,
-    }, { force: true });
-  };
-
-  const applyAadhaarVerificationState = (view: ReturnType<typeof normalizeAadhaarVerificationResponse>) => {
-    if (!view) return;
-    if (view.identityDocumentId) setAadhaarDocumentId(view.identityDocumentId);
-    if (view.redirectUrl) setAadhaarRedirectUrl(view.redirectUrl);
-    if (view.fetchStatus) setAadhaarFetchStatus(view.fetchStatus);
-    if (view.proofsAttachedToKycRequest) setAadhaarProofsAttached(true);
-    if (view.investor) setDraftInvestor(view.investor);
-  };
-
-  useEffect(() => {
-    const stored = readAadhaarVerificationFromInvestor(activeInvestor as Record<string, unknown> | null);
-    if (stored) applyAadhaarVerificationState(stored);
-  }, [activeInvestor?.id, activeInvestor?.externalIdentityDocumentId, activeInvestor?.aadhaarFetchStatus]);
-
-  const cybrillaKycWarnings = useMemo(() => {
-    if (cybrillaApiWarnings.length > 0) return cybrillaApiWarnings;
-    const investorRecord = (draftInvestor || resumeInvestor) as Record<string, unknown> | null;
-    return extractCybrillaWarningsFromPayload({
-      externalResponse: kycPreVerification,
-      investor: investorRecord,
-    });
-  }, [kycPreVerification, draftInvestor, resumeInvestor, cybrillaApiWarnings]);
   const currentKycStatus = normalizeStatus(draftInvestor?.kycStatus || resumeInvestor?.kycStatus);
   const isExistingKycVerified = currentKycStatus === 'COMPLETED' || currentKycStatus === 'VERIFIED';
-  const isKycFailed =
-    kycPhase === 'failed'
-    || kycPhase === 'retry'
-    || kycDecision.state === 'failed'
-    || kycDecision.state === 'retry'
-    || ['FAILED', 'REJECTED', 'RETRY_REQUIRED'].includes(currentKycStatus);
 
-  // Once an investor's KYC is verified (persisted status), identity/consent/KYC
-  // steps must stay locked so the verified PAN/name/DOB cannot be altered. The
-  // earliest reachable step is the first post-KYC stage (Bank = step 5).
+  // Once an investor's KYC is verified (persisted status), identity/consent steps
+  // must stay locked so the verified PAN/name/DOB cannot be altered. The earliest
+  // reachable step is then the first post-KYC stage (Bank = step 4).
   const kycLocked = isExistingKycVerified;
-  const minStep = kycLocked ? 5 : 1;
+  const minStep = kycLocked ? 4 : 1;
 
-  // Consent is a one-time gate. After acknowledgment (or when resuming past step 2), going
-  // forward from Basic Info jumps straight to KYC — never back through Consent.
+  // Consent is a one-time gate. After acknowledgment (or when resuming past step 2),
+  // going forward from Basic Info jumps straight to Personal — never back through Consent.
   const [consentCompleted, setConsentCompleted] = useState(() => {
     const explicit = clampResumeStep(resumeStep);
     if (explicit != null && explicit >= 3) return true;
@@ -525,9 +359,8 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
     }
     return false;
   });
-  const [editingForKycRetry, setEditingForKycRetry] = useState(false);
 
-  // Verified bank detection for the read-only bank summary (step 5).
+  // Verified bank detection for the read-only bank summary (step 4).
   const bankIsVerified = (bank: any) => {
     const status = normalizeStatus(bank?.verificationStatus || bank?.cybrillaBankVerificationStatus);
     return status === 'VERIFIED' || status === 'COMPLETED';
@@ -538,9 +371,7 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
   const applyResumeInvestorToForm = React.useCallback((investor: any) => {
     if (!investor?.id) return;
     const name = splitFullName(investor.fullName || investor.name);
-    const external = resolvePreVerificationFromPayload({ investor });
     const status = normalizeStatus(investor.kycStatus);
-    const decision = getPreVerificationDecision(external, { investor });
 
     setS1({
       firstName: name.firstName,
@@ -575,45 +406,9 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
     });
     setDraftInvestor(investor);
     setDraftIdentityFingerprint('');
-    setLastKycIdentityFingerprint(
-      external
-        ? computeIdentityFingerprint({
-          fullName: investor.fullName || investor.name || '',
-          pan: investor.pan,
-          dateOfBirth: investor.dateOfBirth || investor.dob,
-          mobile: investor.mobileNumber || investor.mobile,
-          email: investor.email,
-          relationshipType: investor.relationshipType,
-          guardianPan: investor.guardianPan,
-        })
-        : '',
-    );
-    setKycPreVerification(external);
-    setCybrillaApiWarnings(extractCybrillaWarningsFromPayload({ externalResponse: external, investor }));
-    setKycPhase(
-      status === 'COMPLETED' || status === 'VERIFIED'
-        ? 'verified'
-        : status === 'IN_PROGRESS' || status === 'PENDING'
-          ? 'pending'
-          : status === 'FAILED' || status === 'RETRY_REQUIRED' || status === 'REJECTED'
-            ? 'retry'
-            : decision.state,
-    );
-    setKycActionError('');
-    setKycActionMessage(
-      status === 'COMPLETED' || status === 'VERIFIED'
-        ? 'KYC is already verified. Continue with the remaining onboarding stages.'
-        : decision.message,
-    );
-    presentKycReasonDialog({
-      decision,
-      warnings: extractCybrillaWarningsFromPayload({ externalResponse: external, investor }),
-      preVerification: external,
-    });
-    if (status !== 'NOT_STARTED' || external) {
+    if (status !== 'NOT_STARTED' || Boolean(investor.externalKycPayloadJson)) {
       setConsentCompleted(true);
     }
-    setEditingForKycRetry(false);
     setStep(deriveResumeStep(investor, resumeStep, {
       nextStep: investor.onboardingResumeNextStep,
       documentsComplete: investor.onboardingDocumentsComplete,
@@ -768,37 +563,21 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
       setS5({
         accNumber: /^\d{9,18}$/.test(rawAccount) ? rawAccount : '',
         ifsc: verifiedBank.ifscCode || '',
-        accType: verifiedBank.accountType || 'Savings',
-        primary: true,
+        accType: verifiedBank.accountType || '', // REQ #11 — no 'Savings' fallback default
+        primary: verifiedBank.isPrimary === true || verifiedBank.primary === true, // reflect real saved value, not a forced default
       });
     }
     setBankEditMode(true);
   };
 
-  // Reset the POA pre-verification result if identity fields change — including after
-  // going BACK and editing. Keyed off BOTH the draft fingerprint and the last-KYC
-  // fingerprint: on a resumed/loaded investor `draftIdentityFingerprint` is empty, so
-  // without the lastKyc check an edit-after-resume would never clear the stale result.
-  // `lastKycIdentityFingerprint` is intentionally NOT cleared here so the button stays
-  // unlocked (see identityChangedSinceKyc) until a fresh pre-verification actually runs.
-  useEffect(() => {
-    const draftChanged = Boolean(draftIdentityFingerprint) && draftIdentityFingerprint !== identityFingerprint;
-    const kycChanged = Boolean(lastKycIdentityFingerprint) && lastKycIdentityFingerprint !== identityFingerprint;
-    if (!draftChanged && !kycChanged) return;
-    if (draftIdentityFingerprint) setDraftIdentityFingerprint('');
-    setKycPreVerification(null);
-    setKycPhase('idle');
-    setKycActionError('');
-    setKycActionMessage('Identity details changed. Run POA pre-verification again.');
-  }, [draftIdentityFingerprint, lastKycIdentityFingerprint, identityFingerprint]);
-
-  const consentAcknowledged = consentDataProcessing && consentCybrillaKyc;
+  const consentAcknowledged = consentDataProcessing;
 
   const allRequiredDocumentsSaved = REQUIRED_DOCUMENT_KEYS.every(
     key => Boolean(savedDocuments[key]?.id) || Boolean(docs[key]),
   );
 
   // ── Can proceed guard ─────────────────────────────────────────────────────────
+  // Steps: 1 Basic → 2 Consent → 3 Personal → 4 Bank → 5 FATCA → 6 Documents.
   const canNext: boolean = (() => {
     switch (step) {
       case 1: return Object.keys(validateInvestorIdentityForKyc({
@@ -823,29 +602,14 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
         && /^\d{6}$/.test(s4.postalCode.trim())
       );
       case 4:
-        return canProceedFromKycStep({
-          isExistingKycVerified,
-          kycPhase,
-          kycFlowStatus,
-          kycDecisionCanProceed: kycDecision.canProceed,
-          kycDecisionRequiresFreshKyc: kycDecision.requiresFreshKyc,
-          aadhaarFetchComplete,
-          kycRequestId,
-          esignStatus: String(
-            (activeInvestor as Record<string, unknown> | null)?.esignStatus
-            || kycFlowStatus?.investor?.esignStatus
-            || '',
-          ),
-        });
-      case 5:
         if (bankStepBusy) return false;
         if (showBankReadOnly) return true;
         return ACCOUNT_NUMBER_REGEX.test(s5.accNumber)
           && IFSC_REGEX.test(s5.ifsc)
           && Boolean(bankName)
           && !ifscLookupLoading;
-      case 6: return !!(s6.taxResidency && s6.politicalExp && s6.incomeSlab && s6.declared && s6.termsAccepted);
-      case 7: return allRequiredDocumentsSaved;
+      case 5: return !!(s6.taxResidency && s6.politicalExp && s6.incomeSlab && s6.declared && s6.termsAccepted);
+      case 6: return allRequiredDocumentsSaved;
       default: return true;
     }
   })();
@@ -898,7 +662,7 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
           const bankOk = bankStatus === 'VERIFIED';
           const allDocsSaved = REQUIRED_DOCUMENT_KEYS.every(key => Boolean(byKey[key]?.id));
           if (kycOk && bankOk && !allDocsSaved) {
-            setStep(7);
+            setStep(6);
           }
         }
       })
@@ -968,12 +732,6 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
       keys.forEach(key => delete next[key]);
       return next;
     });
-    setKycValidationErrors(prev => {
-      const next = { ...prev };
-      keys.forEach(key => delete next[key]);
-      return next;
-    });
-    setKycActionError('');
   };
 
   const setIdentityField = (field: keyof typeof s1, value: string, warningFields?: string[]) => {
@@ -987,6 +745,9 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
   };
 
   const applySandboxScenario = (scenario: SandboxDemoScenario) => {
+    // REQ #11 — this seeds form fields for QA demos only. It must NEVER run in a
+    // production build, so it never auto-populates/defaults any customer value.
+    if (!import.meta.env.DEV) return;
     setS1(prev => ({
       ...prev,
       firstName: scenario.firstName,
@@ -998,9 +759,6 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
     }));
     setS4(prev => ({
       ...prev,
-      gender: prev.gender || 'Male',
-      occupation: prev.occupation || 'Salaried',
-      income: prev.income || '1-5 L',
       addressLine1: scenario.addressLine1,
       city: scenario.city,
       state: scenario.state,
@@ -1010,53 +768,11 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
       ...prev,
       accNumber: scenario.bankAccount,
       ifsc: scenario.ifsc,
-      accType: 'Savings',
     }));
     setServerErrors({});
-    setKycValidationErrors({});
-    setKycActionError('');
-    setKycActionMessage(`Loaded sandbox scenario: ${scenario.label}. Complete Personal step, then run KYC pre-verification.`);
   };
 
-  const validateIdentityBeforePreVerification = () => {
-    const errors = validateIdentityBeforeCybrillaPoa({
-      firstName: s1.firstName,
-      lastName: s1.lastName,
-      pan: s1.pan,
-      dob: s1.dob,
-      mobile: s1.mobile,
-      email: s1.email,
-      relationshipType: s1.relationshipType,
-      guardianPan: s1.guardianPan,
-    });
-    setKycValidationErrors(errors);
-
-    if (Object.keys(errors).length > 0) {
-      setServerErrors(prev => ({ ...prev, ...errors }));
-      setKycActionError('Fix the highlighted identity fields before running POA pre-verification.');
-      setKycActionMessage('');
-      return false;
-    }
-
-    setServerErrors(prev => {
-      const next = { ...prev };
-      ['firstName', 'lastName', 'fullName', 'pan', 'dob', 'mobile', 'email', 'guardianPan'].forEach(key => delete next[key]);
-      return next;
-    });
-    setKycActionError('');
-    return true;
-  };
-
-  const logKycApiCall = (action: 'create' | 'refresh', details: Record<string, unknown>) => {
-    console.log(`kyc_api_call action=${action}`, {
-      timestamp: new Date().toISOString(),
-      identityFingerprint,
-      lastKycIdentityFingerprint,
-      ...details,
-    });
-  };
-
-  const ensureInvestorDraftForKyc = async () => {
+  const ensureInvestorDraft = async () => {
     if (draftInvestor?.id && draftIdentityFingerprint === identityFingerprint) {
       return draftInvestor;
     }
@@ -1143,655 +859,9 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
     return result;
   };
 
-  const applyPreVerificationResponse = (result: any) => {
-    const external = resolvePreVerificationFromPayload(result);
-    if (!external) {
-      throw new Error('POA pre-verification response was not returned.');
-    }
-    const decision = getPreVerificationDecision(external, {
-      investor: result?.investor,
-      kyc: result?.kyc,
-    });
-    setKycPreVerification(external);
-    setKycPhase(decision.state);
-    setKycActionMessage(decision.message);
-    const warnings = extractCybrillaWarningsFromPayload(result);
-    setCybrillaApiWarnings(warnings);
-    presentKycReasonDialog({
-      decision,
-      warnings,
-      preVerification: external,
-    });
-    setLastKycIdentityFingerprint(identityFingerprint);
-    if (result?.investor) {
-      setDraftInvestor(result.investor);
-      setDraftIdentityFingerprint(identityFingerprint);
-    }
-    return decision;
-  };
-
-  const runPoaPreVerification = async () => {
-    if (!validateIdentityBeforePreVerification()) return;
-    if (poaRunLocked) {
-      console.log('kyc_api_call action=skipped reason=poa_run_locked');
-      return;
-    }
-    if (kycCheckInFlightRef.current) {
-      console.log('kyc_api_call action=skipped reason=in_flight');
-      return;
-    }
-
-    kycCheckInFlightRef.current = true;
-    setKycPhase('checking');
-    setKycActionError('');
-    setKycActionMessage('');
-    setKycValidationErrors({});
-    setCybrillaApiWarnings([]);
-
-    try {
-      const investor = await ensureInvestorDraftForKyc();
-      const shouldForceNew = shouldForceNewKycCheck(
-        lastKycIdentityFingerprint,
-        identityFingerprint,
-        investor,
-      );
-
-      logKycApiCall('create', {
-        endpoint: `POST /api/v1/investors/${investor.id}/kyc-checks`,
-        localInvestorId: investor.id,
-        pan: normalizePan(s1.pan),
-        name: fullName,
-        dateOfBirth: s1.dob,
-        forceNewCheck: shouldForceNew,
-      });
-
-      const response = await apiFetch(`/investors/${investor.id}/kyc-checks`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          dateOfBirth: s1.dob || null,
-          forceNewCheck: shouldForceNew,
-        }),
-      });
-      const result = await readJsonSafely(response);
-      console.log('kyc_api_call action=create_response', {
-        status: response.status,
-        ok: response.ok,
-        forceNewCheck: shouldForceNew,
-        body: result,
-      });
-      if (!response.ok) {
-        const errorMessage = typeof result === 'string'
-          ? result
-          : result?.message || `POA pre-verification failed with HTTP ${response.status}`;
-        console.error('kyc_api_call action=create_failed', {
-          status: response.status,
-          error: typeof result === 'string' ? result : result?.error,
-          message: errorMessage,
-          path: typeof result === 'string' ? undefined : result?.path,
-          body: result,
-        });
-        if (response.status === 400 && /pan|sandbox/i.test(errorMessage)) {
-          setKycValidationErrors(prev => ({ ...prev, pan: errorMessage }));
-          setServerErrors(prev => ({ ...prev, pan: errorMessage }));
-        }
-        if (result && typeof result === 'object') {
-          setCybrillaApiWarnings(extractCybrillaWarningsFromPayload(result));
-        }
-        throw new Error(errorMessage);
-      }
-      applyPreVerificationResponse(result);
-      await loadKycFlowStatus(investor.id);
-    } catch (err) {
-      console.error('kyc_api_call action=create_error', err);
-      setKycPhase('failed');
-      const errorMessage = err instanceof Error ? err.message : 'POA pre-verification failed.';
-      setKycActionError(errorMessage);
-      presentKycReasonDialog({
-        errorMessage,
-        warnings: cybrillaApiWarnings,
-        preVerification: kycPreVerification,
-        decision: kycDecision,
-      }, { force: true });
-    } finally {
-      kycCheckInFlightRef.current = false;
-    }
-  };
-
-  // After editing identity post-KYC failure, auto-run one fresh check on return to step 4.
-  useEffect(() => {
-    if (step !== 4 || !autoRunKycOnStep4) return;
-    setAutoRunKycOnStep4(false);
-    void runPoaPreVerification();
-  }, [step, autoRunKycOnStep4]);
-
-  // Poll Cybrilla while pre-verification is still accepted/pending (backend also polls on create).
-  useEffect(() => {
-    if (step !== 4) {
-      kycPollAttemptsRef.current = 0;
-      return;
-    }
-    if (kycDecision.canProceed || kycPhase === 'verified' || kycPhase === 'failed') {
-      return;
-    }
-    if (kycPhase !== 'accepted' && kycPhase !== 'pending') {
-      return;
-    }
-    const investorId = poaInvestorId;
-    const kycCheckId = poaKycCheckId;
-    if (!investorId || !kycCheckId) return;
-
-    const timer = window.setInterval(() => {
-      if (kycPollAttemptsRef.current >= 12 || kycCheckInFlightRef.current) {
-        return;
-      }
-      kycPollAttemptsRef.current += 1;
-      void refreshPoaPreVerification({ silent: true });
-    }, 2500);
-
-    return () => window.clearInterval(timer);
-  }, [step, kycPhase, kycDecision.canProceed, poaInvestorId, poaKycCheckId]);
-
-  const refreshPoaPreVerification = async (options?: { silent?: boolean }) => {
-    const kycCheckId = poaKycCheckId;
-    const investorId = poaInvestorId;
-    if (!kycCheckId) {
-      if (!options?.silent) {
-        setKycActionError('Run POA pre-verification before refreshing the status.');
-      }
-      return;
-    }
-    if (!investorId) {
-      if (!options?.silent) {
-        setKycActionError('Create the investor draft by running POA pre-verification first.');
-      }
-      return;
-    }
-    if (kycCheckInFlightRef.current) {
-      console.log('kyc_api_call action=skipped reason=in_flight');
-      return;
-    }
-
-    kycCheckInFlightRef.current = true;
-    if (!options?.silent) {
-      setKycPhase('checking');
-      setKycActionError('');
-      setKycActionMessage('');
-    }
-
-    try {
-      logKycApiCall('refresh', {
-        endpoint: `GET /api/v1/investors/${investorId}/kyc-checks/${kycCheckId}`,
-        localInvestorId: investorId,
-        kycCheckId,
-      });
-      const response = await apiFetch(`/investors/${investorId}/kyc-checks/${kycCheckId}`);
-      const result = await readJsonSafely(response);
-      console.log('kyc_api_call action=refresh_response', {
-        status: response.status,
-        ok: response.ok,
-        body: result,
-      });
-      if (!response.ok) {
-        if (result && typeof result === 'object') {
-          setCybrillaApiWarnings(extractCybrillaWarningsFromPayload(result));
-        }
-        throw new Error(typeof result === 'string' ? result : result?.message || `POA pre-verification refresh failed with HTTP ${response.status}`);
-      }
-      applyPreVerificationResponse(result);
-      await loadKycFlowStatus(investorId);
-    } catch (err) {
-      console.error('kyc_api_call action=refresh_error', err);
-      setKycPhase('retry');
-      const errorMessage = err instanceof Error ? err.message : 'POA pre-verification refresh failed.';
-      setKycActionError(errorMessage);
-      presentKycReasonDialog({
-        errorMessage,
-        warnings: cybrillaApiWarnings,
-        preVerification: kycPreVerification,
-        decision: kycDecision,
-      }, { force: true });
-    } finally {
-      kycCheckInFlightRef.current = false;
-    }
-  };
-
-  const applyIdentityDocumentResponse = (result: any) => {
-    applyAadhaarVerificationState(normalizeAadhaarVerificationResponse(result));
-    setCybrillaApiWarnings(extractCybrillaWarningsFromPayload(result));
-  };
-
-  const createAadhaarIdentityDocument = async () => {
-    if (aadhaarStartLocked) {
-      setKycActionMessage('Aadhaar fetch is already started. Use Refresh status after the investor completes Digilocker.');
-      return;
-    }
-    let investor = draftInvestor || resumeInvestor;
-    if (!investor?.id) {
-      try {
-        investor = await ensureInvestorDraftForKyc();
-      } catch {
-        setKycActionError('Create the investor draft by running POA pre-verification first.');
-        return;
-      }
-    }
-    if (!kycRequestId && !investor.externalKycRequestId) {
-      setKycActionError('Create a KYC request before starting Aadhaar verification.');
-      return;
-    }
-
-    setAadhaarActionLoading('create');
-    setKycActionError('');
-    setKycActionMessage('');
-
-    try {
-      const response = await apiFetch(`/investors/${investor.id}/identity-documents`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          type: 'aadhaar',
-          postbackUrl: buildKycPostbackUrl(investor.id, 'aadhaar'),
-        }),
-      });
-      const result = await readJsonSafely(response);
-      if (!response.ok) {
-        if (result && typeof result === 'object') {
-          setCybrillaApiWarnings(extractCybrillaWarningsFromPayload(result));
-        }
-        throw new Error(typeof result === 'string' ? result : result?.message || `Aadhaar verification failed with HTTP ${response.status}`);
-      }
-      applyIdentityDocumentResponse(result);
-      setKycActionMessage('Aadhaar Digilocker flow created. Open the link for the investor to complete OTP verification.');
-      await loadKycFlowStatus(investor.id);
-    } catch (err) {
-      reportKycIssue(err instanceof Error ? err.message : 'Unable to start Aadhaar verification.');
-    } finally {
-      setAadhaarActionLoading('');
-    }
-  };
-
-  const refreshAadhaarIdentityDocument = async () => {
-    const investor = draftInvestor || resumeInvestor;
-    if (!investor?.id) {
-      setKycActionError('Create the investor draft before refreshing Aadhaar status.');
-      return;
-    }
-
-    setAadhaarActionLoading('refresh');
-    setKycActionError('');
-
-    try {
-      const response = await apiFetch(`/investors/${investor.id}/identity-documents/refresh`, {
-        method: 'POST',
-      });
-      const result = await readJsonSafely(response);
-      if (!response.ok) {
-        if (result && typeof result === 'object') {
-          setCybrillaApiWarnings(extractCybrillaWarningsFromPayload(result));
-        }
-        throw new Error(typeof result === 'string' ? result : result?.message || `Aadhaar status refresh failed with HTTP ${response.status}`);
-      }
-      applyIdentityDocumentResponse(result);
-      await loadKycFlowStatus(investor.id);
-      const view = normalizeAadhaarVerificationResponse(result);
-      if (view?.fetchComplete && view.proofsAttachedToKycRequest) {
-        setKycActionMessage('Aadhaar fetched from Digilocker and attached to the KYC request.');
-      } else if (view?.fetchComplete) {
-        setKycActionMessage('Aadhaar fetched successfully from Digilocker.');
-      } else {
-        setKycActionMessage('Digilocker fetch is still in progress. Ask the investor to complete OTP verification.');
-      }
-    } catch (err) {
-      reportKycIssue(err instanceof Error ? err.message : 'Unable to refresh Aadhaar verification status.');
-    } finally {
-      setAadhaarActionLoading('');
-    }
-  };
-
-  const loadKycFlowStatus = async (investorId = poaInvestorId) => {
-    if (!investorId) {
-      setKycFlowStatus(null);
-      setKycFlowError('');
-      return null;
-    }
-    setKycFlowLoading(true);
-    setKycFlowError('');
-    try {
-      const response = await apiFetch(`/investors/${investorId}/kyc-flow/status`);
-      const result = await readJsonSafely(response);
-      if (!response.ok) {
-        throw new Error(typeof result === 'string' ? result : result?.message || `KYC flow status failed with HTTP ${response.status}`);
-      }
-      const flow = normalizeKycFlowStatus(result);
-      setKycFlowStatus(flow);
-      if (flow?.aadhaarRedirectUrl) setAadhaarRedirectUrl(flow.aadhaarRedirectUrl);
-      if (flow?.esignRedirectUrl) setEsignRedirectUrl(flow.esignRedirectUrl);
-      if (flow?.investor) {
-        setDraftInvestor(flow.investor);
-        const storedAadhaar = readAadhaarVerificationFromInvestor(flow.investor);
-        if (storedAadhaar) applyAadhaarVerificationState(storedAadhaar);
-        const rebuiltPreVerification = buildPreVerificationFromBackendState(flow.investor);
-        // Don't resurrect a pre-verification built from the backend's (now stale) identity
-        // once the user has edited identity fields — that would re-lock the Run button and
-        // re-show the old readiness result. The fresh check the user is about to run wins.
-        if (rebuiltPreVerification && !identityChangedSinceKyc) {
-          setKycPreVerification(prev => prev || rebuiltPreVerification);
-          const readinessReason = readCybrillaReadinessReason(rebuiltPreVerification, { investor: flow.investor });
-          const flowDecision = getPreVerificationDecision(rebuiltPreVerification, { investor: flow.investor });
-          if (readinessReason) {
-            setKycActionMessage(readinessReason);
-            if (flowDecision.state === 'failed' || flowDecision.state === 'retry') {
-              setKycPhase(flowDecision.state);
-            }
-          }
-          presentKycReasonDialog({
-            decision: flowDecision,
-            warnings: extractCybrillaWarningsFromPayload({ investor: flow.investor }),
-            preVerification: rebuiltPreVerification,
-            flowMessage: flow.message,
-          });
-        }
-      }
-      return flow;
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Unable to load KYC flow status.';
-      console.warn('kyc_flow_status_error=', err);
-      setKycFlowError(message);
-      reportKycIssue(message);
-      return null;
-    } finally {
-      setKycFlowLoading(false);
-    }
-  };
-
-  const startEsign = async () => {
-    const investor = draftInvestor || resumeInvestor;
-    if (!investor?.id) return;
-    if (esignStartLocked) {
-      setKycActionMessage('eSign is already started. Use Refresh eSign after the investor completes signing.');
-      return;
-    }
-    setKycFlowActionLoading('START_ESIGN');
-    setKycActionError('');
-    try {
-      const response = await apiFetch(`/investors/${investor.id}/esign/start`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          postbackUrl: buildKycPostbackUrl(investor.id, 'esign'),
-        }),
-      });
-      const result = await readJsonSafely(response);
-      if (!response.ok) {
-        throw new Error(typeof result === 'string' ? result : result?.message || `eSign start failed with HTTP ${response.status}`);
-      }
-      const esign = normalizeEsignVerificationResponse(result);
-      if (esign?.redirectUrl) setEsignRedirectUrl(esign.redirectUrl);
-      if (esign?.investor) setDraftInvestor(esign.investor);
-      await loadKycFlowStatus(investor.id);
-      setKycActionMessage('eSign started. Open the link for the investor to sign the KYC application.');
-    } catch (err) {
-      reportKycIssue(err instanceof Error ? err.message : 'Unable to start eSign.');
-    } finally {
-      setKycFlowActionLoading('');
-    }
-  };
-
-  const refreshEsign = async () => {
-    const investor = draftInvestor || resumeInvestor;
-    if (!investor?.id) return;
-    setKycFlowActionLoading('REFRESH_ESIGN');
-    setKycActionError('');
-    try {
-      const response = await apiFetch(`/investors/${investor.id}/esign/refresh`, { method: 'POST' });
-      const result = await readJsonSafely(response);
-      if (!response.ok) {
-        throw new Error(typeof result === 'string' ? result : result?.message || `eSign refresh failed with HTTP ${response.status}`);
-      }
-      const esign = normalizeEsignVerificationResponse(result);
-      if (esign?.redirectUrl) setEsignRedirectUrl(esign.redirectUrl);
-      if (esign?.investor) setDraftInvestor(esign.investor);
-      await loadKycFlowStatus(investor.id);
-      setKycActionMessage(
-        esign?.completed
-          ? 'eSign completed. Platizio KYC application has been submitted.'
-          : 'eSign is still pending. Ask the investor to complete signing.',
-      );
-    } catch (err) {
-      reportKycIssue(err instanceof Error ? err.message : 'Unable to refresh eSign status.');
-    } finally {
-      setKycFlowActionLoading('');
-    }
-  };
-
-  const runKycFlowNextAction = async (requestedAction: KycFlowNextAction) => {
-    if (!requestedAction || requestedAction === 'WAIT' || requestedAction === 'COMPLETE') return;
-    if (kycFlowActionLoading) return;
-
-    if (requestedAction === 'RUN_PRE_VERIFICATION') {
-      if (!validateIdentityBeforePreVerification()) return;
-      if (poaRunLocked) return;
-    }
-    if (requestedAction === 'START_AADHAAR' && aadhaarStartLocked) return;
-    if (requestedAction === 'CREATE_KYC_REQUEST' && kycRequestCreateLocked) return;
-    if (requestedAction === 'START_ESIGN' && esignStartLocked) return;
-
-    setKycFlowActionLoading(requestedAction);
-    setKycActionError('');
-    try {
-      switch (requestedAction) {
-        case 'RUN_PRE_VERIFICATION':
-          await runPoaPreVerification();
-          break;
-        case 'CREATE_KYC_REQUEST':
-          await createFreshKycRequestFromPreVerification();
-          break;
-        case 'START_AADHAAR':
-          await createAadhaarIdentityDocument();
-          break;
-        case 'REFRESH_AADHAAR':
-          await refreshAadhaarIdentityDocument();
-          break;
-        case 'START_ESIGN':
-          await startEsign();
-          break;
-        case 'REFRESH_ESIGN':
-          await refreshEsign();
-          break;
-        default:
-          break;
-      }
-      const investorId = draftInvestor?.id || resumeInvestor?.id || poaInvestorId;
-      if (investorId) {
-        await loadKycFlowStatus(investorId);
-      }
-    } finally {
-      setKycFlowActionLoading('');
-    }
-  };
-
-  useEffect(() => {
-    if (step !== 4) return;
-    if (poaInvestorId) {
-      void loadKycFlowStatus(poaInvestorId);
-    } else {
-      setKycFlowStatus(null);
-      setKycFlowError('');
-    }
-  }, [step, poaInvestorId]);
-
-  useEffect(() => {
-    const investorId = searchParams.get('investorId');
-    const kycReturn = searchParams.get('kycReturn');
-    if (!investorId || !kycReturn || postbackHandledRef.current) return;
-    postbackHandledRef.current = true;
-
-    (async () => {
-      setStep(4);
-      setKycActionMessage(`Returned from ${kycReturn === 'esign' ? 'eSign' : 'Digilocker'}. Refreshing status…`);
-      try {
-        const investorResponse = await apiFetch(`/investors/${investorId}`);
-        const investorResult = await readJsonSafely(investorResponse);
-        if (investorResponse.ok && investorResult?.id) {
-          applyResumeInvestorToForm(investorResult);
-        }
-
-        if (kycReturn === 'aadhaar') {
-          const response = await apiFetch(`/investors/${investorId}/identity-documents/refresh`, { method: 'POST' });
-          const result = await readJsonSafely(response);
-          if (response.ok) {
-            applyIdentityDocumentResponse(result);
-          }
-        } else if (kycReturn === 'esign') {
-          const response = await apiFetch(`/investors/${investorId}/esign/refresh`, { method: 'POST' });
-          const result = await readJsonSafely(response);
-          if (response.ok) {
-            const esign = normalizeEsignVerificationResponse(result);
-            if (esign?.redirectUrl) setEsignRedirectUrl(esign.redirectUrl);
-            if (esign?.investor) setDraftInvestor(esign.investor);
-          }
-        }
-
-        await loadKycFlowStatus(investorId);
-        setKycActionMessage(`Returned from ${kycReturn === 'esign' ? 'eSign' : 'Digilocker'}. Status refreshed.`);
-      } catch (err) {
-        setKycActionError(err instanceof Error ? err.message : 'Unable to refresh KYC status after redirect.');
-      } finally {
-        navigate('/distributor/investor-onboarding', { replace: true, state: location.state });
-      }
-    })();
-  }, [searchParams, navigate, location.state]);
-
-  const createFreshKycRequestFromPreVerification = async () => {
-    if (kycRequestCreateLocked || !freshKycRequestAllowed) return;
-    let investor = draftInvestor || resumeInvestor;
-    if (!investor?.id) {
-      try {
-        investor = await ensureInvestorDraftForKyc();
-      } catch (err) {
-        setKycActionError(err instanceof Error ? err.message : 'Create the investor draft by running POA pre-verification first.');
-        return;
-      }
-    }
-
-    setCreatingKycRequest(true);
-    setKycActionError('');
-    setKycActionMessage('');
-
-    try {
-      console.log('fresh_kyc_request_create_request=', {
-        endpoint: `POST /api/v1/investors/${investor.id}/kyc-requests`,
-      });
-      const response = await apiFetch(`/investors/${investor.id}/kyc-requests`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name: fullName,
-          pan: normalizePan(s1.pan),
-          email: s1.email.trim(),
-          mobile: normalizeMobile(s1.mobile),
-          dateOfBirth: s1.dob || null,
-          fields: {},
-        }),
-      });
-      const result = await readJsonSafely(response);
-      console.log('fresh_kyc_request_create_response=', {
-        status: response.status,
-        ok: response.ok,
-        body: result,
-      });
-      if (!response.ok) {
-        if (result && typeof result === 'object') {
-          setCybrillaApiWarnings(extractCybrillaWarningsFromPayload(result));
-        }
-        throw new Error(typeof result === 'string' ? result : result?.message || `Fresh KYC request failed with HTTP ${response.status}`);
-      }
-      if (result?.investor) {
-        setDraftInvestor(result.investor);
-      }
-      setCybrillaApiWarnings(extractCybrillaWarningsFromPayload(result));
-      setKycActionMessage('Fresh KYC request was created. Fetch Aadhaar from Digilocker to attach identity and address proofs.');
-      await loadKycFlowStatus(investor.id);
-    } catch (err) {
-      console.error('fresh_kyc_request_create_error=', err);
-      reportKycIssue(err instanceof Error ? err.message : 'Fresh KYC request failed.');
-    } finally {
-      setCreatingKycRequest(false);
-    }
-  };
-
-  // Sandbox-only: the Cybrilla sandbox cannot complete a real Digilocker/eSign session, so the
-  // onboarding Aadhaar step would otherwise dead-end. Drive the existing sandbox-gated
-  // POST /kyc-requests/{id}/simulate endpoint to "successful" so the demo KYC completes and the
-  // flow can advance to bank verification. Never shown outside sandbox mode.
-  const simulateKycApprovalSandbox = async () => {
-    const investor = draftInvestor || resumeInvestor;
-    if (!investor?.id || !kycRequestId) {
-      setKycActionError('Create a KYC request before simulating sandbox approval.');
-      return;
-    }
-    setAadhaarActionLoading('simulate-kyc');
-    setKycActionError('');
-    setKycActionMessage('');
-    try {
-      const response = await apiFetch(`/investors/${investor.id}/kyc-requests/${kycRequestId}/simulate`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status: 'successful' }),
-      });
-      const result = await readJsonSafely(response);
-      if (!response.ok) {
-        if (result && typeof result === 'object') {
-          setCybrillaApiWarnings(extractCybrillaWarningsFromPayload(result));
-        }
-        throw new Error(typeof result === 'string'
-          ? result
-          : result?.message || `Sandbox KYC simulation failed with HTTP ${response.status}`);
-      }
-      if (result?.investor) setDraftInvestor(result.investor);
-      setKycActionMessage('Sandbox: KYC request marked successful — KYC is complete. Click Continue to move to Bank verification.');
-      await loadKycFlowStatus(investor.id);
-    } catch (err) {
-      reportKycIssue(err instanceof Error ? err.message : 'Sandbox KYC simulation failed.');
-    } finally {
-      setAadhaarActionLoading('');
-    }
-  };
-
-  const runInitialKycApis = async (createdInvestor: any) => {
-    if (!createdInvestor?.id) return createdInvestor;
-    try {
-      console.log('step_1a_apply_kyc_request=', {
-        endpoint: `POST /api/v1/investors/${createdInvestor.id}/kyc/apply`,
-        pan: createdInvestor.pan,
-      });
-      const response = await apiFetch(`/investors/${createdInvestor.id}/kyc/apply`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ dateOfBirth: createdInvestor.dateOfBirth || s1.dob || null }),
-      });
-      const result = await readJsonSafely(response);
-      console.log('step_1a_apply_kyc_response=', {
-        status: response.status,
-        ok: response.ok,
-        body: result,
-      });
-
-      if (!response.ok) {
-        throw new Error(typeof result === 'string' ? result : result?.message || 'KYC workflow failed');
-      }
-      return result?.investor || createdInvestor;
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Unable to apply KYC workflow';
-      console.warn('step_1a_apply_kyc_external_sync=', message);
-      appendExternalSyncWarning(`Unable to apply KYC workflow through Platizio: ${message}`);
-      return createdInvestor;
-    }
-  };
-
   const syncInvestorProfileForStep = async () => {
     if (!draftInvestor?.id) {
-      return ensureInvestorDraftForKyc();
+      return ensureInvestorDraft();
     }
 
     const updatePayload = buildInvestorUpdatePayload();
@@ -1875,6 +945,12 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
 
     if (showBankReadOnly && verifiedBank) {
       return verifiedBank;
+    }
+
+    // REQ #11 — account type has no default, so the customer must pick one before saving.
+    if (!s5.accType) {
+      setServerErrors(prev => ({ ...prev, accType: 'Select an account type.' }));
+      throw new Error('Select an account type.');
     }
 
     const investor = await syncInvestorProfileForStep();
@@ -1986,8 +1062,46 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
 
   useEffect(() => {
     if (!gateInvestorId) return;
+    // Option 1 (distributor-fill) polls the approval status; Option 2 (send-link)
+    // polls the link status. Avoid the approval poll while the send-link flow is active.
+    if (onboardingMode === 'send-link') return;
     void loadApprovalStatus(gateInvestorId);
-  }, [gateInvestorId, loadApprovalStatus]);
+  }, [gateInvestorId, loadApprovalStatus, onboardingMode]);
+
+  // ── Option 2: send-to-investor link status ──────────────────────────────────
+  const linkAwaiting = ['SENT', 'PENDING_INVESTOR_APPROVAL', 'AWAITING_INVESTOR', 'PENDING', 'AWAITING'].includes(
+    normalizeStatus(linkStatus),
+  );
+  const linkAccepted = ['APPROVED', 'ACCEPTED', 'LINKED', 'COMPLETED'].includes(normalizeStatus(linkStatus));
+
+  // Problem A — in send-link mode (before the link is sent/accepted) the distributor
+  // captures ONLY the Step-1 basics and then generates the link. We never walk steps 2–6.
+  const sendLinkBasicsOnly = onboardingMode === 'send-link' && !linkAwaiting && !linkAccepted;
+
+  const loadLinkStatus = useCallback(async (investorId: string) => {
+    setLinkLoading(true);
+    try {
+      const res = await apiFetch(`/investors/${investorId}/link/status`);
+      const data = await res.json().catch(() => null);
+      if (res.ok && data) {
+        setLinkStatus(normalizeStatus(data.status || data.linkingStatus) || 'SENT');
+      }
+    } catch {
+      // Non-fatal: leave prior status; the banner just won't update this cycle.
+    } finally {
+      setLinkLoading(false);
+    }
+  }, []);
+
+  // Poll the link status while a send-link onboarding is awaiting the investor.
+  useEffect(() => {
+    if (onboardingMode !== 'send-link' || !gateInvestorId) return;
+    if (!linkAwaiting) return;
+    const timer = window.setInterval(() => {
+      void loadLinkStatus(gateInvestorId);
+    }, 5000);
+    return () => window.clearInterval(timer);
+  }, [onboardingMode, gateInvestorId, linkAwaiting, loadLinkStatus]);
 
   const submitForInvestorReview = async () => {
     if (!gateInvestorId) {
@@ -2136,21 +1250,16 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
       setExternalSyncPending(pendingExternalProfile);
       if (pendingExternalProfile) {
         const message = investorResult?.externalSyncMessage
-          || 'Unable to post investor data to Platizio. The investor was saved locally with KYC PENDING.';
+          || 'Unable to post investor data to Platizio. The investor was saved locally.';
         setExternalSyncMessage(message);
         setShowExternalSyncNotice(true);
         console.warn('step_1_create_investor_external_sync=', message);
       }
 
-      const step3KycAlreadyRan = Boolean(
-        kycPreVerification?.id
-        || draftInvestor?.externalKycCheckId
-        || kycDecision.canProceed
-        || isKycComplete(draftInvestor),
-      );
-      if (!isKycComplete(investorResult) && !step3KycAlreadyRan) {
-        investorResult = await runInitialKycApis(investorResult);
-      }
+      // KYC is no longer driven from the distributor wizard — the investor completes
+      // pre-verification / Aadhaar / eSign on their own side. The distributor submit
+      // only persists details, documents, and bank; bank verification stays deferred
+      // until the investor's KYC is marked complete.
       setDraftInvestor(investorResult);
       // Task 4 / DF-10: persist the T&C acceptance now that the investor exists.
       if (s6.termsAccepted && investorResult?.id) {
@@ -2163,9 +1272,6 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
         } catch (termsError) {
           console.warn('terms_accept_failed=', termsError);
         }
-      }
-      if (!isKycComplete(investorResult)) {
-        appendExternalSyncWarning('KYC is not complete yet. Bank verification will start automatically after Platizio marks KYC as completed.');
       }
 
       console.log('step_1b_upload_documents_request=', {
@@ -2256,17 +1362,79 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
   };
 
   // ── Navigation ────────────────────────────────────────────────────────────────
+  // Option 2 of the two compliance options — create the investor as PENDING
+  // (distributor_id NULL, linking_status PENDING_INVESTOR_APPROVAL) and email them a
+  // link to self-onboard, instead of the distributor filling every step. Reachable
+  // from the entry chooser as well as the Step-1 secondary action.
+  const handleSendToInvestor = async () => {
+    if (!distributorId) {
+      setSubmitError('Distributor session was not found. Please log in again and retry.');
+      return;
+    }
+    setSendToInvestorBusy(true);
+    try {
+      const createRes = await apiFetch('/investors', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...buildInvestorPayload(), gatedOnInvestorApproval: true }),
+      });
+      const created = await readJsonSafely(createRes);
+      if (!createRes.ok) {
+        throw new Error(typeof created === 'string' ? created : created?.message || 'Could not create the investor.');
+      }
+      if (created?.id) setDraftInvestor(created);
+      const sendRes = await apiFetch(`/investors/${created.id}/link/send-to-investor`, { method: 'POST' });
+      const sent = await readJsonSafely(sendRes);
+      if (!sendRes.ok) {
+        throw new Error(typeof sent === 'string' ? sent : sent?.message || 'Could not send the approval link.');
+      }
+      setLinkStatus(normalizeStatus(sent?.status) || 'SENT');
+      // The backend now ALWAYS returns approveUrl (not only when email fails),
+      // so the distributor can always copy/share the link. Fall back to the
+      // legacy devApproveUrl field for compatibility.
+      setLinkCopied(false);
+      setLinkPendingModal({ approveUrl: sent?.approveUrl ?? sent?.devApproveUrl, emailDelivered: sent?.emailDelivered });
+      if (created?.id) void loadLinkStatus(created.id);
+    } catch (e) {
+      setSubmitError(e instanceof Error ? e.message : 'Could not send to investor.');
+    } finally {
+      setSendToInvestorBusy(false);
+    }
+  };
+
+  // Option 1 (distributor-fill) final action — the distributor has filled every
+  // step; instead of finalizing, send the EXISTING draft investor an approval link.
+  // The investor approves via the no-auth link (no login needed). Reuses the draft
+  // (ensureInvestorDraft creates/updates it) so we never create a duplicate.
+  const handleGetApproval = async () => {
+    if (!distributorId) { setSubmitError('Distributor session was not found. Please log in again and retry.'); return; }
+    setSendToInvestorBusy(true);
+    try {
+      const inv = await ensureInvestorDraft();            // saves current wizard data to the draft investor
+      const id = inv?.id || draftInvestor?.id;
+      if (!id) throw new Error('Could not prepare the investor record.');
+      const sendRes = await apiFetch(`/investors/${id}/link/send-to-investor`, { method: 'POST' });
+      const sent = await readJsonSafely(sendRes);
+      if (!sendRes.ok) throw new Error(typeof sent === 'string' ? sent : sent?.message || 'Could not send the approval link.');
+      setLinkStatus(normalizeStatus(sent?.status) || 'SENT');
+      setLinkCopied(false);
+      setLinkPendingModal({ approveUrl: sent?.approveUrl ?? sent?.devApproveUrl, emailDelivered: sent?.emailDelivered });
+      void loadLinkStatus(id);
+    } catch (e) {
+      setSubmitError(e instanceof Error ? e.message : 'Could not get approval from investor.');
+    } finally {
+      setSendToInvestorBusy(false);
+    }
+  };
+
   const goNext = () => {
-    if (step === 7) {
-      submitInvestorToBackend();
+    // Step 6 has no "next" — the final action is "Get approval from investor"
+    // (handleGetApproval), rendered as a dedicated button. Never finalize here.
+    if (step === 6) {
       return;
     }
     if (step === 1) {
-      const returningToKycAfterEdit = consentCompleted && isKycFailed;
-      setEditingForKycRetry(false);
-      if (returningToKycAfterEdit) {
-        setAutoRunKycOnStep4(true);
-      }
+      // Skip Consent once it has been acknowledged this session.
       setStep(consentCompleted ? 3 : 2);
       return;
     }
@@ -2281,18 +1449,18 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
           await syncInvestorProfileForStep();
           setStep(4);
         } catch (err) {
-          setKycActionError(err instanceof Error ? err.message : 'Unable to save investor profile before KYC.');
+          setSubmitError(err instanceof Error ? err.message : 'Unable to save investor profile.');
         }
       })();
       return;
     }
-    if (step === 5) {
+    if (step === 4) {
       void (async () => {
         try {
           setBankStepBusy(true);
           setBankStepError('');
           await saveBankAccountAndVerify();
-          setStep(6);
+          setStep(5);
         } catch (err) {
           setBankStepError(err instanceof Error ? err.message : 'Unable to save and verify bank account.');
         } finally {
@@ -2309,12 +1477,9 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
       onBack();
       return;
     }
-    // On KYC: no back unless pre-verification failed — then edit identity only (skip Consent).
-    if (step === 4) {
-      if (!isKycFailed) return;
-      setEditingForKycRetry(true);
+    // From Personal (3) when Consent was already acknowledged, skip back over Consent.
+    if (step === 3 && consentCompleted) {
       setStep(1);
-      setKycActionMessage('Update identity details if needed, then continue to run POA pre-verification again.');
       return;
     }
     if (step === 2) {
@@ -2335,18 +1500,18 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
     const bankVerificationSub = bankVerificationMessage
       || (bankVerificationResult?.cybrillaBankVerificationId
         ? 'Platizio bank verification is in progress'
-        : 'Bank verification will start after KYC completes');
+        : 'Bank verification will start after the investor completes KYC');
     const submittedKycComplete = isKycComplete(draftInvestor);
     const statusRows = externalSyncPending
       ? [
           { label: 'Investor Saved', sub: 'Local profile created successfully', color: 'green', done: true },
-          { label: 'KYC Status', sub: submittedKycComplete ? 'KYC completed through Platizio' : 'PAN/external verification will be retried later', color: submittedKycComplete ? 'green' : 'amber', done: submittedKycComplete },
+          { label: 'KYC Status', sub: submittedKycComplete ? 'Investor KYC is complete' : 'Investor completes KYC on their own side', color: submittedKycComplete ? 'green' : 'blue', done: submittedKycComplete },
           { label: 'Bank Verification', sub: bankVerificationSub, color: bankVerificationFailed ? 'red' : 'amber', done: bankVerificationDone },
           { label: 'Compliance Review', sub: 'FATCA & PMLA check in queue', color: 'blue', done: false },
         ]
       : [
-          { label: 'Identity Verified', sub: 'PAN captured and investor consent recorded', color: 'green', done: true },
-          { label: 'KYC Processed', sub: 'POA pre-verification completed', color: 'green', done: true },
+          { label: 'Details Captured', sub: 'PAN, contact, address, and consent recorded', color: 'green', done: true },
+          { label: 'KYC Status', sub: submittedKycComplete ? 'Investor KYC is complete' : 'Investor completes KYC on their own side', color: submittedKycComplete ? 'green' : 'blue', done: submittedKycComplete },
           { label: 'Bank Verification', sub: bankVerificationSub, color: bankVerificationDone ? 'green' : bankVerificationFailed ? 'red' : 'amber', done: bankVerificationDone },
           { label: 'Compliance Review', sub: 'FATCA & PMLA check in queue', color: 'blue', done: false },
         ];
@@ -2369,15 +1534,15 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
 
           <h1 className="text-2xl font-bold text-slate-800 mb-2">
             {externalSyncPending
-              ? submittedKycComplete ? 'Investor created, bank verification pending' : 'Investor created, KYC incomplete'
+              ? submittedKycComplete ? 'Investor created, bank verification pending' : 'Investor created, sync pending'
               : 'Application Submitted!'}
           </h1>
           <p className="text-slate-500 text-sm mb-6 leading-relaxed">
             {externalSyncPending
               ? (externalSyncMessage || (submittedKycComplete
                 ? `${s1.firstName} ${s1.lastName}'s KYC is complete. Bank verification will be retried once the platform is available.`
-                : `${s1.firstName} ${s1.lastName}'s profile has been saved with KYC pending. External verification will be retried once the platform is available.`))
-              : `${s1.firstName} ${s1.lastName}'s onboarding application has been submitted and is under review.`}
+                : `${s1.firstName} ${s1.lastName}'s profile has been saved locally and will be synced to Platizio once it is available.`))
+              : `${s1.firstName} ${s1.lastName}'s onboarding details have been submitted. The investor completes KYC on their own side.`}
           </p>
 
           <div className="bg-slate-50 border border-slate-200 rounded-2xl p-5 mb-6 text-left">
@@ -2482,16 +1647,80 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
     );
   }
 
+  // ── Entry chooser — the two compliance onboarding options ──────────────────
+  if (!onboardingMode) {
+    return (
+      <div className="p-8 max-w-3xl">
+        <button
+          type="button"
+          onClick={onBack}
+          className="flex items-center gap-2 text-slate-500 hover:text-slate-800 text-sm font-medium transition-colors mb-6"
+        >
+          <ArrowLeft className="w-4 h-4" /> Back
+        </button>
+
+        <div className="mb-8">
+          <h1 className="text-2xl font-semibold text-slate-800">Start investor onboarding</h1>
+          <p className="text-slate-500 text-sm mt-1">
+            Choose how this investor will be onboarded. You may only enter investor
+            <span className="font-medium"> details</span> — pre-verification, PAN verification, KYC,
+            DigiLocker, and eSign are completed by the investor alone.
+          </p>
+        </div>
+
+        <div className="grid gap-5 sm:grid-cols-2">
+          {/* Option 1 — distributor fills, investor approves */}
+          <button
+            type="button"
+            onClick={() => setOnboardingMode('distributor-fill')}
+            className="group flex flex-col items-start gap-3 rounded-2xl border border-slate-200 bg-white p-6 text-left transition-all hover:border-[#0B1B3E] hover:shadow-md"
+          >
+            <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-[#0B1B3E]/5 text-[#0B1B3E] group-hover:bg-[#0B1B3E] group-hover:text-white transition-colors">
+              <User className="h-6 w-6" />
+            </div>
+            <h2 className="text-base font-semibold text-slate-800">I'll fill the details, the investor approves them</h2>
+            <p className="text-sm leading-6 text-slate-500">
+              Enter the investor's details across the wizard. Before finalizing, the investor
+              reviews and approves the exact submission. Finalize stays blocked until they approve.
+            </p>
+            <span className="mt-auto inline-flex items-center gap-1.5 pt-2 text-sm font-semibold text-[#0B1B3E]">
+              Fill details <ArrowRight className="h-4 w-4" />
+            </span>
+          </button>
+
+          {/* Option 2 — send a link, the investor fills it */}
+          <button
+            type="button"
+            onClick={() => setOnboardingMode('send-link')}
+            className="group flex flex-col items-start gap-3 rounded-2xl border border-slate-200 bg-white p-6 text-left transition-all hover:border-[#0B1B3E] hover:shadow-md"
+          >
+            <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-[#0B1B3E]/5 text-[#0B1B3E] group-hover:bg-[#0B1B3E] group-hover:text-white transition-colors">
+              <Send className="h-6 w-6" />
+            </div>
+            <h2 className="text-base font-semibold text-slate-800">Send a link, the investor fills it themselves</h2>
+            <p className="text-sm leading-6 text-slate-500">
+              Capture only the basic details, then email the investor a secure link. They complete
+              their own onboarding and KYC. You'll see the link status while it's pending.
+            </p>
+            <span className="mt-auto inline-flex items-center gap-1.5 pt-2 text-sm font-semibold text-[#0B1B3E]">
+              Choose link flow <ArrowRight className="h-4 w-4" />
+            </span>
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="p-8 max-w-4xl">
 
       {/* Breadcrumb */}
       <button
         type="button"
-        onClick={onBack}
+        onClick={() => (isResumeMode ? onBack() : setOnboardingMode(null))}
         className="flex items-center gap-2 text-slate-500 hover:text-slate-800 text-sm font-medium transition-colors mb-6"
       >
-        <ArrowLeft className="w-4 h-4" /> Back
+        <ArrowLeft className="w-4 h-4" /> {isResumeMode ? 'Back' : 'Change onboarding option'}
       </button>
 
       <div className="mb-6">
@@ -2500,6 +1729,53 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
           {s1.firstName ? `${s1.firstName} ${s1.lastName} — ` : ''}Step {step} of {STEPS.length}
         </p>
       </div>
+
+      {/* ── Send-link mode: surface the action + pending state ─────────────── */}
+      {onboardingMode === 'send-link' && (
+        <div className="mb-6 rounded-xl border border-slate-200 bg-slate-50 px-4 py-4">
+          {linkAccepted ? (
+            <div className="flex items-center gap-2 text-sm font-medium text-emerald-700">
+              <CheckCircle2 className="h-4 w-4 flex-shrink-0" />
+              The investor accepted the link and is completing their own onboarding.
+            </div>
+          ) : linkAwaiting ? (
+            <div>
+              <div className="flex items-start gap-2 text-sm font-medium text-amber-800">
+                <Clock className="mt-0.5 h-4 w-4 flex-shrink-0" />
+                <span>Awaiting investor approval — details are not confirmed until the investor approves.</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => gateInvestorId && void loadLinkStatus(gateInvestorId)}
+                disabled={linkLoading || !gateInvestorId}
+                className="mt-2 inline-flex items-center gap-1.5 text-xs font-semibold text-amber-700 hover:underline disabled:opacity-50"
+              >
+                <RefreshCw className={`h-3 w-3 ${linkLoading ? 'animate-spin' : ''}`} /> Refresh link status
+              </button>
+            </div>
+          ) : (
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex items-start gap-2 text-sm text-slate-600">
+                <Send className="mt-0.5 h-4 w-4 flex-shrink-0 text-slate-400" />
+                <span>
+                  Enter the investor's basic details, then send them a secure link to complete their
+                  own onboarding and KYC.
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => void handleSendToInvestor()}
+                disabled={!canNext || sendToInvestorBusy || submitting}
+                title="Create the investor as pending and email them a link to self-onboard"
+                className="inline-flex flex-shrink-0 items-center gap-2 rounded-xl bg-[#0B1B3E] px-4 py-2 text-xs font-semibold text-white transition-colors hover:bg-[#1A3066] disabled:opacity-50"
+              >
+                {sendToInvestorBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
+                Send link to investor
+              </button>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* ── Progress stepper ──────────────────────────────────────────────── */}
       {isResumeMode && !resumeError && (
@@ -2515,57 +1791,11 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
       {kycLocked && (
         <div className="mb-6 flex items-center gap-2 rounded-xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm font-medium text-blue-700">
           <ShieldCheck className="h-4 w-4 flex-shrink-0" />
-          KYC is verified for this investor. Identity, consent, and KYC steps are locked and can no longer be edited.
+          KYC is verified for this investor. Identity and consent steps are locked and can no longer be edited.
         </div>
       )}
 
-      {/* ── F4: investor-approval gate banner ─────────────────────────────── */}
-      {gateInvestorId && (approvalAwaiting || approvalAttested || approvalError || approvalStatus === 'NONE') && (
-        approvalAttested ? (
-          <div className="mb-6 flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-700">
-            <CheckCircle2 className="h-4 w-4 flex-shrink-0" />
-            Investor approved this submission. You can finalize now. Any edit will require re-approval.
-          </div>
-        ) : approvalAwaiting ? (
-          <div className="mb-6 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
-            <div className="flex items-start gap-2 text-sm font-medium text-amber-800">
-              <Clock className="mt-0.5 h-4 w-4 flex-shrink-0" />
-              <span>
-                Awaiting investor approval — you cannot finalize until the investor approves this exact
-                submission; any edit requires re-approval.
-              </span>
-            </div>
-            <button
-              type="button"
-              onClick={() => void loadApprovalStatus(gateInvestorId)}
-              disabled={approvalLoading}
-              className="mt-2 inline-flex items-center gap-1.5 text-xs font-semibold text-amber-700 hover:underline disabled:opacity-50"
-            >
-              <RefreshCw className={`h-3 w-3 ${approvalLoading ? 'animate-spin' : ''}`} /> Refresh approval status
-            </button>
-          </div>
-        ) : (
-          <div className="mb-6 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
-            <div className="flex items-start gap-2 text-sm text-slate-600">
-              <ShieldCheck className="mt-0.5 h-4 w-4 flex-shrink-0 text-slate-400" />
-              <span>
-                Before finalizing, submit this onboarding for the investor to approve. Finalize stays
-                locked until the investor approves this exact submission.
-              </span>
-            </div>
-            {approvalError && <p className="mt-2 text-xs font-medium text-red-600">{approvalError}</p>}
-            <button
-              type="button"
-              onClick={() => void submitForInvestorReview()}
-              disabled={approvalSubmitting}
-              className="mt-3 inline-flex items-center gap-2 rounded-xl bg-[#0B1B3E] px-4 py-2 text-xs font-semibold text-white transition-colors hover:bg-[#1A3066] disabled:opacity-50"
-            >
-              {approvalSubmitting ? (<><Loader2 className="h-3.5 w-3.5 animate-spin" /> Submitting…</>) : 'Submit for investor approval'}
-            </button>
-          </div>
-        )
-      )}
-
+      {!sendLinkBasicsOnly && (
       <div className="flex items-start mb-8 overflow-x-auto pb-2">
         {STEPS.map((s, i) => {
           const done = s.id < step;
@@ -2591,6 +1821,7 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
           );
         })}
       </div>
+      )}
 
       {/* ── Step card ─────────────────────────────────────────────────────── */}
       <AnimatePresence mode="wait">
@@ -2608,17 +1839,9 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
             <div>
               <h2 className="text-lg font-semibold text-slate-800 mb-1">Basic Identity</h2>
               <p className="text-sm text-slate-500 mb-6">Investor's core identification details</p>
-              {isCybrillaSandboxMode() && (
+              {import.meta.env.DEV && isCybrillaSandboxMode() && (
                 <div className="mb-6">
                   <SandboxDemoGuide onApplyScenario={applySandboxScenario} defaultExpanded />
-                </div>
-              )}
-              {editingForKycRetry && (
-                <div className="mb-5 flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-                  <AlertTriangle className="h-4 w-4 mt-0.5 flex-shrink-0" />
-                  <span>
-                    KYC pre-verification did not pass. Update PAN, name, or date of birth if needed, then continue — you will return directly to the KYC step (consent is not required again).
-                  </span>
                 </div>
               )}
               <div className="grid grid-cols-2 gap-5">
@@ -2695,29 +1918,32 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
                   />
                 </Field>
               </div>
+
+              {/* Problem A — send-link mode: the ONLY action here is to generate the
+                  investor link. No multi-step wizard, no bottom Next. */}
+              {sendLinkBasicsOnly && (
+                <button
+                  type="button"
+                  onClick={() => void handleSendToInvestor()}
+                  disabled={!canNext || sendToInvestorBusy || submitting}
+                  title="Create the investor as pending and email them a secure link to self-onboard"
+                  className="mt-8 flex w-full items-center justify-center gap-2 rounded-xl bg-[#0B1B3E] px-6 py-3 text-sm font-semibold text-white transition-colors hover:bg-[#1A3066] disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  {sendToInvestorBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+                  Generate link to investor
+                </button>
+              )}
             </div>
           )}
 
-          {/* ── Step 2 — Consent (real Aadhaar OTP is on Cybrilla Digilocker in step 3) ─ */}
-          {step === 2 && (
+          {/* ── Step 2 — Consent (data-processing only; KYC consent is investor-side) ─ */}
+          {step === 2 && !sendLinkBasicsOnly && (
             <div className="max-w-lg">
               <h2 className="text-lg font-semibold text-slate-800 mb-1">Investor Consent</h2>
               <p className="text-sm text-slate-500 mb-5">
-                Record consent before Platizio KYC. Aadhaar OTP and biometric verification happen on the official
-                Platizio Digilocker redirect in the next step — not on this screen.
+                Record the investor's consent to collect and process their PAN, contact, address, and
+                bank details for mutual fund onboarding through Platizio.
               </p>
-
-              <div className="mb-5 rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-3 text-sm text-indigo-900">
-                <div className="flex items-start gap-2">
-                  <Fingerprint className="mt-0.5 h-4 w-4 shrink-0" />
-                  <p>
-                    When pre-verification returns <span className="font-mono">kyc_unavailable</span>, Platizio calls
-                    <span className="font-mono">POST /v2/identity_documents</span> and opens the
-                    <span className="font-semibold"> Digilocker redirect URL</span> for the investor. That is the real
-                    Aadhaar authentication step.
-                  </p>
-                </div>
-              </div>
 
               <div className="space-y-4">
                 <label className="flex items-start gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3 cursor-pointer">
@@ -2728,21 +1954,8 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
                     className="mt-1 h-4 w-4 rounded border-slate-300 text-[#0B1B3E] focus:ring-blue-200"
                   />
                   <span className="text-sm text-slate-700">
-                    The investor consents to collection and processing of PAN, bank, and KYC data for mutual fund
-                    onboarding through Platizio.
-                  </span>
-                </label>
-
-                <label className="flex items-start gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={consentCybrillaKyc}
-                    onChange={e => setConsentCybrillaKyc(e.target.checked)}
-                    className="mt-1 h-4 w-4 rounded border-slate-300 text-[#0B1B3E] focus:ring-blue-200"
-                  />
-                  <span className="text-sm text-slate-700">
-                    The investor agrees to complete Platizio KYC when required, including Aadhaar fetch via Digilocker
-                    and eSign on Platizio-hosted pages.
+                    The investor consents to collection and processing of their PAN, contact, address,
+                    and bank details for mutual fund onboarding through Platizio.
                   </span>
                 </label>
               </div>
@@ -2753,366 +1966,18 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
                   animate={{ opacity: 1, y: 0 }}
                   className="mt-4 flex items-center gap-2 text-sm font-semibold text-green-600"
                 >
-                  <CheckCircle2 className="h-4 w-4" /> Consent recorded — continue to Platizio KYC
+                  <CheckCircle2 className="h-4 w-4" /> Consent recorded — continue
                 </motion.p>
               )}
             </div>
           )}
 
-          {/* ── Step 4 — KYC Processing ───────────────────────────────── */}
-          {step === 4 && (
-            <div className="py-6">
-              <div className="text-center">
-                <h2 className="text-lg font-semibold text-slate-800 mb-1">Platizio KYC</h2>
-                <p className="text-sm text-slate-500 mb-6">
-                  Pre-verification, Aadhaar Digilocker, and eSign — all through Platizio backend APIs.
-                </p>
-              </div>
-
-              {isCybrillaSandboxMode() && (
-                <div className="mx-auto mb-4 max-w-2xl">
-                  <SandboxDemoGuide onApplyScenario={applySandboxScenario} compact />
-                </div>
-              )}
-
-                {cybrillaKycWarnings.length > 0 && (
-                  <CybrillaKycWarnings
-                    warnings={cybrillaKycWarnings}
-                    title={kycDecision.requiresFreshKyc || kycDecision.state === 'failed' || kycDecision.state === 'retry'
-                      ? 'Platizio investor readiness'
-                      : 'Warnings from Platizio'}
-                    className="mx-auto mb-4 max-w-2xl"
-                  />
-                )}
-
-                <div className="mx-auto mb-4 max-w-2xl rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-3 text-left">
-                  <p className="text-xs font-semibold text-indigo-900">Guided Platizio KYC flow</p>
-                  <p className="mt-1 text-xs leading-5 text-indigo-800">
-                    Use the checklist below — each step calls Platizio APIs (pre-verification → KYC request → Aadhaar → eSign).
-                    When the flow shows complete, click <span className="font-semibold">Continue</span> to move to Bank verification.
-                  </p>
-                </div>
-
-                <div className="mx-auto max-w-2xl">
-                <KycFlowPanel
-                  flow={kycFlowStatus}
-                  loading={kycFlowLoading}
-                  actionLoading={kycFlowActionLoading || aadhaarActionLoading}
-                  aadhaarRedirectUrl={aadhaarRedirectUrl}
-                  esignRedirectUrl={esignRedirectUrl}
-                  aadhaarLinkDisabled={aadhaarLinkLocked}
-                  esignLinkDisabled={esignLinkLocked}
-                  primaryActionDisabled={
-                    (kycFlowStatus?.nextAction === 'RUN_PRE_VERIFICATION' && poaRunLocked)
-                    || (kycFlowStatus?.nextAction === 'START_AADHAAR' && aadhaarStartLocked)
-                    || (kycFlowStatus?.nextAction === 'CREATE_KYC_REQUEST' && kycRequestCreateLocked)
-                    || (kycFlowStatus?.nextAction === 'START_ESIGN' && esignStartLocked)
-                  }
-                  error={kycFlowError}
-                  alwaysVisible
-                  onRunNext={runKycFlowNextAction}
-                />
-                </div>
-
-                <div className="mx-auto max-w-2xl rounded-2xl border border-slate-200 bg-slate-50 p-5 mt-5">
-                <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-                  <div className="flex gap-3">
-                    <div className={`flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-xl ${
-                      kycDecision.canProceed ? 'bg-green-100 text-green-700' : 'bg-blue-100 text-blue-700'
-                    }`}>
-                      {kycPhase === 'checking'
-                        ? <Loader2 className="h-6 w-6 animate-spin" />
-                        : <ShieldCheck className="h-6 w-6" />
-                      }
-                    </div>
-                    <div>
-                      <h3 className="text-sm font-bold text-slate-800">{kycDecision.title}</h3>
-                      <p className="mt-1 text-xs leading-5 text-slate-500">{kycDecision.message}</p>
-                      {(kycReasonDialogContent || cybrillaKycWarnings.length > 0 || getPreVerificationRows(kycPreVerification).some(row => row.reason)) && (
-                        <button
-                          type="button"
-                          onClick={() => presentKycReasonDialog({
-                            decision: kycDecision,
-                            warnings: cybrillaKycWarnings,
-                            preVerification: kycPreVerification,
-                            flowMessage: kycFlowStatus?.message,
-                          }, { force: true })}
-                          className="mt-2 text-[11px] font-semibold text-indigo-700 underline-offset-2 hover:underline"
-                        >
-                          View all Platizio details
-                        </button>
-                      )}
-                    </div>
-                  </div>
-
-                  <div className="flex flex-shrink-0 flex-wrap gap-2">
-                    <button
-                      type="button"
-                      onClick={runPoaPreVerification}
-                      disabled={poaRunLocked}
-                      className="inline-flex items-center justify-center gap-2 rounded-lg bg-[#0B1B3E] px-4 py-2 text-xs font-semibold text-white transition-colors hover:bg-[#1A3066] disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      {kycPhase === 'checking' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ShieldCheck className="h-3.5 w-3.5" />}
-                      {kycPreVerification ? 'Run again' : 'Run check'}
-                    </button>
-                    {showPoaRefreshButton && (
-                      <button
-                        type="button"
-                        onClick={() => void refreshPoaPreVerification()}
-                        disabled={kycPhase === 'checking' || Boolean(kycFlowActionLoading)}
-                        className="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
-                      >
-                        <RefreshCw className={`h-3.5 w-3.5 ${kycPhase === 'checking' ? 'animate-spin' : ''}`} />
-                        Refresh
-                      </button>
-                    )}
-                  </div>
-                </div>
-
-                {Object.keys(kycValidationErrors).length > 0 && (
-                  <div className="mt-4 rounded-xl border border-red-100 bg-red-50 p-3 text-xs font-medium text-red-700">
-                    {Object.values(kycValidationErrors).slice(0, 3).map(message => (
-                      <p key={message}>{message}</p>
-                    ))}
-                  </div>
-                )}
-
-                {kycActionError && (
-                  <p className="mt-4 flex items-center gap-1.5 text-xs font-medium text-red-600">
-                    <AlertTriangle className="h-3.5 w-3.5" /> {kycActionError}
-                  </p>
-                )}
-                {kycActionMessage && !kycActionError && (
-                  <p className={`mt-4 flex items-center gap-1.5 text-xs font-medium ${kycDecision.canProceed ? 'text-green-600' : 'text-slate-600'}`}>
-                    {kycDecision.canProceed ? <CheckCircle2 className="h-3.5 w-3.5" /> : <ShieldCheck className="h-3.5 w-3.5" />}
-                    {kycActionMessage}
-                  </p>
-                )}
-
-                {getPreVerificationRows(kycPreVerification).length > 0 && (
-                  <div className="mt-5 grid gap-2 sm:grid-cols-2">
-                    {getPreVerificationRows(kycPreVerification).map(row => (
-                      <div key={row.field} className="rounded-xl border border-white bg-white p-3 shadow-sm">
-                        <div className="flex items-center justify-between gap-3">
-                          <p className="text-xs font-semibold text-slate-500">{row.label}</p>
-                          <span className={`rounded-full border px-2 py-0.5 text-[10px] font-bold uppercase ${preVerificationStatusClasses(row.status)}`}>
-                            {row.status || 'pending'}
-                          </span>
-                        </div>
-                        {(row.code || row.reason || row.value) && (
-                          <p className="mt-2 text-[11px] leading-4 text-slate-500">
-                            {[row.value, row.code, row.reason].filter(Boolean).join(' - ')}
-                          </p>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                )}
-
-                {freshKycRequestAllowed && (
-                  <div className="mt-5 flex flex-col gap-3 rounded-xl border border-amber-100 bg-amber-50 p-4 sm:flex-row sm:items-center sm:justify-between">
-                    <div className="min-w-0">
-                      <p className="text-xs font-semibold text-amber-900">Platizio investor readiness</p>
-                      <p className="mt-1 text-xs font-medium leading-5 text-amber-800">
-                        {kycDecision.message}
-                      </p>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={createFreshKycRequestFromPreVerification}
-                      disabled={kycRequestCreateLocked}
-                      className="inline-flex items-center justify-center gap-2 rounded-lg bg-amber-600 px-4 py-2 text-xs font-semibold text-white transition-colors hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      {creatingKycRequest ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ArrowRight className="h-3.5 w-3.5" />}
-                      Create KYC request
-                    </button>
-                  </div>
-                )}
-
-                {isReadinessFailureBlockingKycRequest(
-                  kycPreVerification,
-                  activeInvestor as Record<string, unknown> | null,
-                ) && (
-                  <div className="mt-5 rounded-xl border border-red-100 bg-red-50 p-4">
-                    <p className="text-xs font-semibold text-red-900">Investor readiness failed</p>
-                    <p className="mt-1 text-xs leading-5 text-red-800">
-                      {kycDecision.message || readCybrillaReadinessReason(kycPreVerification, { investor: activeInvestor })}
-                      {' '}Fix PAN, name, or date of birth, then run pre-verification again before creating a KYC request.
-                    </p>
-                  </div>
-                )}
-
-                {panAadhaarNotLinked && (
-                  <div className="mt-5 rounded-xl border border-amber-200 bg-amber-50 p-4">
-                    <div className="flex items-start gap-3">
-                      <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0 text-amber-700" />
-                      <div className="min-w-0 flex-1">
-                        <p className="text-sm font-semibold text-amber-900">PAN–Aadhaar link required</p>
-                        <p className="mt-1 text-xs leading-5 text-amber-800">
-                          Platizio reported code <span className="font-mono">aadhaar_not_linked</span>.
-                          The investor must link PAN with Aadhaar on the Income Tax portal, then run pre-verification again.
-                        </p>
-                        {isCybrillaSandboxMode() && (
-                          <p className="mt-2 text-[11px] leading-4 text-amber-700">
-                            Sandbox simulator: use PAN pattern XXXPANNNNX to test this outcome.
-                          </p>
-                        )}
-                        <button
-                          type="button"
-                          onClick={runPoaPreVerification}
-                          disabled={poaRunLocked}
-                          className="mt-3 inline-flex items-center justify-center gap-2 rounded-lg border border-amber-300 bg-white px-3 py-2 text-xs font-semibold text-amber-800 transition-colors hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50"
-                        >
-                          {kycPhase === 'checking' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
-                          Re-run pre-verification
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {kycRequestId && (
-                  <div className="mt-5 rounded-xl border border-indigo-100 bg-indigo-50/70 p-4">
-                    <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-                      <div className="flex gap-3">
-                        <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl bg-indigo-100 text-indigo-700">
-                          <Fingerprint className="h-5 w-5" />
-                        </div>
-                        <div>
-                          <h4 className="text-sm font-semibold text-slate-800">Aadhaar via Digilocker</h4>
-                          <p className="mt-1 text-xs leading-5 text-slate-600">
-                            Create an identity document and redirect the investor to Digilocker.
-                            OTP authentication during fetch satisfies liveliness for fresh KYC.
-                          </p>
-                          {aadhaarFetchStatus && (
-                            <p className={`mt-2 text-[11px] font-semibold uppercase ${aadhaarFetchComplete ? 'text-green-700' : 'text-indigo-700'}`}>
-                              Fetch status: {aadhaarFetchStatus.replace(/_/g, ' ')}
-                            </p>
-                          )}
-                        </div>
-                      </div>
-                      <div className="flex flex-shrink-0 flex-wrap gap-2">
-                        <button
-                          type="button"
-                          onClick={createAadhaarIdentityDocument}
-                          disabled={aadhaarStartLocked}
-                          className="inline-flex items-center justify-center gap-2 rounded-lg bg-indigo-700 px-3 py-2 text-xs font-semibold text-white transition-colors hover:bg-indigo-800 disabled:cursor-not-allowed disabled:opacity-50"
-                        >
-                          {aadhaarActionLoading === 'create' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Fingerprint className="h-3.5 w-3.5" />}
-                          Start Aadhaar fetch
-                        </button>
-                        {aadhaarDocumentId && (
-                          <button
-                            type="button"
-                            onClick={refreshAadhaarIdentityDocument}
-                            disabled={anyKycApiBusy && aadhaarActionLoading !== 'refresh'}
-                            className="inline-flex items-center justify-center gap-2 rounded-lg border border-indigo-200 bg-white px-3 py-2 text-xs font-semibold text-indigo-700 transition-colors hover:bg-indigo-50 disabled:cursor-not-allowed disabled:opacity-50"
-                          >
-                            {aadhaarActionLoading === 'refresh' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
-                            Refresh status
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                    {aadhaarRedirectUrl && !aadhaarFetchComplete && (
-                      <KycProviderLink
-                        href={aadhaarRedirectUrl}
-                        label="Open Digilocker for investor"
-                        icon={<Fingerprint className="h-3.5 w-3.5" />}
-                        disabled={aadhaarLinkLocked}
-                        disabledReason="Digilocker link is disabled while Aadhaar fetch is starting or already in progress."
-                      />
-                    )}
-                    {aadhaarFetchComplete && (
-                      <p className="mt-3 flex items-center gap-1.5 text-xs font-medium text-green-700">
-                        <CheckCircle2 className="h-3.5 w-3.5" />
-                        {aadhaarProofsAttached
-                          ? 'Aadhaar attached to the KYC request as identity and address proof.'
-                          : 'Aadhaar document fetched from Digilocker.'}
-                      </p>
-                    )}
-                  </div>
-                )}
-
-                {isCybrillaSandboxMode() && kycRequestId
-                  && String(activeInvestor?.kycStatus || '').toUpperCase() !== 'COMPLETED' && (
-                  <div className="mt-5 rounded-xl border border-dashed border-emerald-300 bg-emerald-50/60 p-4">
-                    <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                      <div className="min-w-0">
-                        <p className="text-xs font-semibold text-emerald-900">Sandbox shortcut — simulate KYC approval</p>
-                        <p className="mt-1 text-xs leading-5 text-emerald-800">
-                          The Cybrilla sandbox can't complete a real Digilocker/eSign session, so the Aadhaar step
-                          can't finish here. Use this to mark the KYC request <span className="font-semibold">successful</span>
-                          {' '}and continue the demo. Sandbox only — never shown in production.
-                        </p>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={simulateKycApprovalSandbox}
-                        disabled={anyKycApiBusy}
-                        className="inline-flex flex-shrink-0 items-center justify-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold text-white transition-colors hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
-                      >
-                        {aadhaarActionLoading === 'simulate-kyc' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5" />}
-                        Simulate KYC approval
-                      </button>
-                    </div>
-                  </div>
-                )}
-
-                {kycRequestId && aadhaarFetchComplete && (
-                  <div className="mt-5 rounded-xl border border-violet-100 bg-violet-50/70 p-4">
-                    <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                      <div>
-                        <h4 className="text-sm font-semibold text-slate-800">eSign KYC application</h4>
-                        <p className="mt-1 text-xs leading-5 text-slate-600">
-                          After Aadhaar proofs are attached, the investor must eSign to submit the Platizio KYC application.
-                        </p>
-                      </div>
-                      <div className="flex flex-wrap gap-2">
-                        <button
-                          type="button"
-                          onClick={() => void startEsign()}
-                          disabled={esignStartLocked}
-                          className="inline-flex items-center justify-center gap-2 rounded-lg bg-violet-700 px-3 py-2 text-xs font-semibold text-white transition-colors hover:bg-violet-800 disabled:cursor-not-allowed disabled:opacity-50"
-                        >
-                          {kycFlowActionLoading === 'START_ESIGN' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ShieldCheck className="h-3.5 w-3.5" />}
-                          Start eSign
-                        </button>
-                        {(draftInvestor?.externalEsignId || resumeInvestor?.externalEsignId) && (
-                          <button
-                            type="button"
-                            onClick={() => void refreshEsign()}
-                            disabled={Boolean(kycFlowActionLoading)}
-                            className="inline-flex items-center justify-center gap-2 rounded-lg border border-violet-200 bg-white px-3 py-2 text-xs font-semibold text-violet-700 transition-colors hover:bg-violet-50 disabled:opacity-50"
-                          >
-                            {kycFlowActionLoading === 'REFRESH_ESIGN' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
-                            Refresh eSign
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                    {esignRedirectUrl && (
-                      <KycProviderLink
-                        href={esignRedirectUrl}
-                        label="Open eSign for investor"
-                        disabled={esignLinkLocked}
-                        className="mt-3 inline-flex items-center gap-1.5 text-xs font-semibold text-violet-700 hover:text-violet-800"
-                        disabledReason="eSign link is disabled while signing is starting or already in progress."
-                      />
-                    )}
-                  </div>
-                )}
-              </div>
-
-            </div>
-          )}
-
-          {/* ── Step 3 — Personal Details (required before Cybrilla KYC) ─ */}
-          {step === 3 && (
+          {/* ── Step 3 — Personal Details ─────────────────────────────── */}
+          {step === 3 && !sendLinkBasicsOnly && (
             <div>
               <h2 className="text-lg font-semibold text-slate-800 mb-1">Personal Details</h2>
               <p className="text-sm text-slate-500 mb-6">
-                Address and profile data required by Platizio before KYC and transactions.
+                Address and profile data required by Platizio for the investor's account.
               </p>
               <div className="grid grid-cols-2 gap-5 mb-5">
                 <Field label="Address Line 1" required>
@@ -3200,8 +2065,8 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
             </div>
           )}
 
-          {/* ── Step 5 — Bank Details ─────────────────────────────────── */}
-          {step === 5 && (
+          {/* ── Step 4 — Bank Details ─────────────────────────────────── */}
+          {step === 4 && !sendLinkBasicsOnly && (
             <div>
               <h2 className="text-lg font-semibold text-slate-800 mb-1">Bank Details</h2>
               <p className="text-sm text-slate-500 mb-2">
@@ -3306,9 +2171,10 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
                         className={inp + ' font-mono'}
                       />
                     </Field>
-                    <Field label="Account Type">
+                    <Field label="Account Type" required error={serverErrors.accType}>
                       <select value={s5.accType} onChange={e => setBankField('accType', e.target.value, ['accType', 'accountType'])} className={sel}>
-                        {['Savings', 'Current', 'NRE', 'NRO'].map(t => <option key={t}>{t}</option>)}
+                        <option value="" disabled>Select account type</option>
+                        {['Savings', 'Current', 'NRE', 'NRO'].map(t => <option key={t} value={t}>{t}</option>)}
                       </select>
                     </Field>
                     <div className="col-span-2">
@@ -3380,8 +2246,8 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
             </div>
           )}
 
-          {/* ── Step 6 — FATCA ────────────────────────────────────────── */}
-          {step === 6 && (
+          {/* ── Step 5 — FATCA ────────────────────────────────────────── */}
+          {step === 5 && !sendLinkBasicsOnly && (
             <div>
               <h2 className="text-lg font-semibold text-slate-800 mb-1">FATCA Declaration</h2>
               <p className="text-sm text-slate-500 mb-6">Foreign Account Tax Compliance Act — mandatory for all investors</p>
@@ -3451,13 +2317,13 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
             </div>
           )}
 
-          {/* ── Step 7 — Documents ────────────────────────────────────── */}
-          {step === 7 && (
+          {/* ── Step 6 — Documents ────────────────────────────────────── */}
+          {step === 6 && !sendLinkBasicsOnly && (
             <div>
               <h2 className="text-lg font-semibold text-slate-800 mb-1">Document Upload</h2>
               <p className="text-sm text-slate-500 mb-2">
                 Upload self-attested PAN, address proof, and signature. Each file is saved immediately to Platizio
-                (PostgreSQL backup) — Platizio digital KYC already collects Aadhaar proofs on step 4.
+                (PostgreSQL backup). The investor's Aadhaar proofs are collected separately during their own KYC.
               </p>
               <p className="text-xs text-slate-400 mb-6">
                 Supported: PDF, JPG, PNG (max 5 MB). Sandbox test files: see <span className="font-mono">docs/investor-document-upload-guide.md</span> in the backend repo.
@@ -3471,7 +2337,7 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
 
               {!investorIdForDocuments && (
                 <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-800">
-                  Investor draft not found yet. Complete Personal and KYC steps first, then return here to upload.
+                  Investor draft not found yet. Complete the earlier steps first, then return here to upload.
                 </div>
               )}
 
@@ -3579,27 +2445,24 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
                 </ul>
                 <button
                   type="button"
-                  onClick={() => void submitInvestorToBackend()}
-                  disabled={!allRequiredDocumentsSaved || submitting || !investorIdForDocuments || !approvalAttested}
-                  title={!approvalAttested ? 'Awaiting investor approval — finalize is locked until the investor approves this exact submission.' : undefined}
-                  className="w-full flex items-center justify-center gap-2 px-6 py-3 text-sm font-semibold bg-green-700 text-white rounded-xl hover:bg-green-800 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                  onClick={() => void handleGetApproval()}
+                  disabled={!allRequiredDocumentsSaved || sendToInvestorBusy || !investorIdForDocuments}
+                  className="w-full flex items-center justify-center gap-2 px-6 py-3 text-sm font-semibold bg-[#0B1B3E] text-white rounded-xl hover:bg-[#1A3066] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                 >
-                  {submitting ? (
+                  {sendToInvestorBusy ? (
                     <>
                       <Loader2 className="w-4 h-4 animate-spin" />
-                      Submitting onboarding…
+                      Sending approval link…
                     </>
                   ) : (
                     <>
-                      <CheckCircle2 className="w-4 h-4" />
-                      Submit documents &amp; complete onboarding
+                      <Send className="w-4 h-4" />
+                      Get approval from investor
                     </>
                   )}
                 </button>
                 <p className="mt-3 text-xs text-slate-500 text-center">
-                  {approvalAttested
-                    ? 'This finalizes your investor profile, confirms saved documents, and verifies bank status for SIP/mandate setup.'
-                    : 'Finalize is locked until the investor approves this exact submission. Use “Submit for investor approval” above.'}
+                  The investor will review these details and approve via a secure link — no login needed.
                 </p>
               </div>
             </div>
@@ -3613,42 +2476,65 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
         <button
           type="button"
           onClick={goBack}
-          disabled={step === 4 && !isKycFailed}
-          title={
-            step === 4 && !isKycFailed
-              ? 'Complete or resolve KYC on this step before going back, or use Back at the top to leave onboarding'
-              : step <= minStep
-                ? 'Return to the previous page'
-                : undefined
-          }
+          title={step <= minStep ? 'Return to the previous page' : undefined}
           className="flex items-center gap-2 px-5 py-2.5 text-sm font-semibold text-slate-600 border border-slate-200 bg-white rounded-xl hover:bg-slate-50 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
         >
           <ArrowLeft className="w-4 h-4" />
-          {step <= minStep ? 'Back' : step === 4 && isKycFailed ? 'Edit details' : 'Back'}
+          Back
         </button>
 
         <div className="flex items-center gap-3">
+          {/* Option 2 shortcut — hand control to the investor instead of filling every
+              step. Offered only on Step 1 in distributor-fill mode for a new investor;
+              send-link mode surfaces its own action in the banner above. */}
+          {onboardingMode === 'distributor-fill' && step === 1 && !draftInvestor?.id && !isResumeMode && (
+            <button
+              type="button"
+              onClick={handleSendToInvestor}
+              disabled={!canNext || sendToInvestorBusy || submitting}
+              title="Create the investor as pending and email them a link to self-onboard instead"
+              className="flex items-center gap-2 px-5 py-2.5 text-sm font-semibold text-[#0B1B3E] border border-[#0B1B3E]/30 bg-white rounded-xl hover:bg-slate-50 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              {sendToInvestorBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+              Send to Investor instead
+            </button>
+          )}
           <span className="text-xs text-slate-400 font-medium">{step} / {STEPS.length}</span>
-          <button
-            type="button"
-            onClick={goNext}
-            disabled={!canNext || submitting || bankStepBusy || (step === 7 && !approvalAttested)}
-            title={step === 7 && !approvalAttested ? 'Awaiting investor approval — finalize is locked until the investor approves this exact submission.' : undefined}
-            className="flex items-center gap-2 px-6 py-2.5 text-sm font-semibold bg-[#0B1B3E] text-white rounded-xl hover:bg-[#1A3066] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-          >
-            {submitting
-              ? 'Submitting...'
-              : bankStepBusy
-                ? 'Verifying bank...'
-                : step === 7
-                  ? 'Complete onboarding'
-                  : step === 1 && (consentCompleted || editingForKycRetry)
-                    ? (editingForKycRetry ? 'Continue to KYC' : 'Continue to Personal')
-                    : step === 5 && !showBankReadOnly
-                      ? 'Save & verify bank'
-                      : 'Continue'}
-            {(submitting || bankStepBusy) ? <Loader2 className="w-4 h-4 animate-spin" /> : step < 7 && <ArrowRight className="w-4 h-4" />}
-          </button>
+          {/* Problem A — send-link mode hides the bottom Next; the in-step
+              "Generate link to investor" CTA is the only action. */}
+          {!sendLinkBasicsOnly && (
+            step === 6 ? (
+              /* Problem B — Step 6 final action is "Get approval from investor",
+                 never a finalize/submitInvestorToBackend call. */
+              <button
+                type="button"
+                onClick={() => void handleGetApproval()}
+                disabled={!canNext || sendToInvestorBusy || !investorIdForDocuments}
+                className="flex items-center gap-2 px-6 py-2.5 text-sm font-semibold bg-[#0B1B3E] text-white rounded-xl hover:bg-[#1A3066] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                {sendToInvestorBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+                Get approval from investor
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={goNext}
+                disabled={!canNext || submitting || bankStepBusy}
+                className="flex items-center gap-2 px-6 py-2.5 text-sm font-semibold bg-[#0B1B3E] text-white rounded-xl hover:bg-[#1A3066] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                {submitting
+                  ? 'Submitting...'
+                  : bankStepBusy
+                    ? 'Verifying bank...'
+                    : step === 1 && consentCompleted
+                      ? 'Continue to Personal'
+                      : step === 4 && !showBankReadOnly
+                        ? 'Save & verify bank'
+                        : 'Continue'}
+                {(submitting || bankStepBusy) ? <Loader2 className="w-4 h-4 animate-spin" /> : <ArrowRight className="w-4 h-4" />}
+              </button>
+            )
+          )}
         </div>
       </div>
 
@@ -3705,11 +2591,105 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
         )}
       </AnimatePresence>
 
-      <CybrillaKycReasonDialog
-        open={kycReasonDialogOpen}
-        content={kycReasonDialogContent}
-        onClose={() => setKycReasonDialogOpen(false)}
-      />
+      {/* investor.md M2 (R2): "Investor approval is pending" after Send to Investor. */}
+      <AnimatePresence>
+        {linkPendingModal && (
+          <motion.div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 px-4 backdrop-blur-sm"
+            role="dialog"
+            aria-modal="true"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+          >
+            <motion.div
+              className="w-full max-w-md rounded-2xl border border-slate-100 bg-white p-6 shadow-2xl"
+              initial={{ opacity: 0, y: 18, scale: 0.97 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 12, scale: 0.98 }}
+              transition={{ duration: 0.18 }}
+            >
+              <div className="flex items-start gap-3">
+                <div className="mt-0.5 flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl bg-amber-50 text-amber-600">
+                  <Clock className="h-5 w-5" />
+                </div>
+                <div>
+                  <h2 className="text-base font-semibold text-slate-900">Share the link with your investor</h2>
+                  <p className="mt-1 text-sm leading-6 text-slate-600">
+                    Send this secure link to the investor. They open it (no login needed), review the
+                    prefilled details, and submit — we'll notify you the moment they do.
+                  </p>
+                </div>
+              </div>
+
+              {/* Primary action: always show a copyable link so the distributor can
+                  share it regardless of whether email delivery succeeded. */}
+              {linkPendingModal.approveUrl ? (
+                <div className="mt-4 rounded-xl border border-[#0B1B3E]/15 bg-slate-50 p-4">
+                  <label className="block text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                    Investor link
+                  </label>
+                  <div className="mt-2 flex items-stretch gap-2">
+                    <input
+                      type="text"
+                      readOnly
+                      value={linkPendingModal.approveUrl}
+                      onFocus={(e) => e.currentTarget.select()}
+                      className="min-w-0 flex-1 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-700 focus:outline-none focus:ring-2 focus:ring-[#0B1B3E]/30"
+                    />
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        const url = linkPendingModal.approveUrl;
+                        if (!url) return;
+                        try {
+                          await navigator.clipboard.writeText(url);
+                        } catch {
+                          // Fallback for environments without the async clipboard API.
+                          const ta = document.createElement('textarea');
+                          ta.value = url;
+                          document.body.appendChild(ta);
+                          ta.select();
+                          try { document.execCommand('copy'); } catch { /* noop */ }
+                          document.body.removeChild(ta);
+                        }
+                        setLinkCopied(true);
+                        window.setTimeout(() => setLinkCopied(false), 2000);
+                      }}
+                      className={`inline-flex flex-shrink-0 items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold text-white transition-colors ${
+                        linkCopied ? 'bg-emerald-600 hover:bg-emerald-600' : 'bg-[#0B1B3E] hover:bg-[#1A3066]'
+                      }`}
+                    >
+                      {linkCopied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+                      {linkCopied ? 'Copied' : 'Copy link'}
+                    </button>
+                  </div>
+                  {linkPendingModal.emailDelivered && (
+                    <p className="mt-2 flex items-center gap-1.5 text-[11px] font-medium text-emerald-700">
+                      <CheckCircle2 className="h-3.5 w-3.5 flex-shrink-0" />
+                      We also emailed this link to the investor.
+                    </p>
+                  )}
+                </div>
+              ) : (
+                <p className="mt-4 rounded-xl border border-amber-100 bg-amber-50 px-4 py-3 text-xs font-medium text-amber-800">
+                  The link could not be generated. Please retry sending to the investor.
+                </p>
+              )}
+
+              <div className="mt-5 flex justify-end">
+                <button
+                  type="button"
+                  onClick={() => { setLinkPendingModal(null); navigate('/distributor/investors'); }}
+                  className="rounded-xl bg-[#0B1B3E] px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-[#1A3066]"
+                >
+                  Back to investors
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
     </div>
   );

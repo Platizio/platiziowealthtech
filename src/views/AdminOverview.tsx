@@ -652,9 +652,9 @@ export default function AdminOverview({ userData }: AdminOverviewProps = {}) {
               </span>
             )}
           </div>
-          <div className="h-52">
+          <div className="h-52 min-w-0">
             {aumTrendHasData ? (
-              <ResponsiveContainer width="100%" height="100%">
+              <ResponsiveContainer width="100%" height={208} minWidth={0}>
                 <AreaChart data={aumTrend} margin={{ top: 5, right: 5, left: -20, bottom: 0 }}>
                   <defs>
                     <linearGradient id="aumGrad" x1="0" y1="0" x2="0" y2="1">
@@ -698,8 +698,8 @@ export default function AdminOverview({ userData }: AdminOverviewProps = {}) {
           <p className="text-xs text-blue-300 mb-4">% of total AUM by class</p>
           {assetDist.length > 0 ? (
             <>
-              <div className="h-36">
-                <ResponsiveContainer width="100%" height="100%">
+              <div className="h-36 min-w-0">
+                <ResponsiveContainer width="100%" height={144} minWidth={0}>
                   <PieChart>
                     <Pie data={assetDist} cx="50%" cy="50%" innerRadius={42} outerRadius={62} paddingAngle={3} dataKey="value" stroke="none">
                       {assetDist.map((e, i) => <Cell key={i} fill={e.color} />)}

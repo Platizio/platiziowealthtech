@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   Check, ChevronRight, ChevronLeft, ChevronDown, ChevronUp,
@@ -266,9 +267,20 @@ const CLS_ERR    = 'text-xs text-red-500 mt-1.5 flex items-center gap-1';
 // ─── Main component ───────────────────────────────────────────────────────────
 
 export default function Onboarding({ onComplete, onBack }: { onComplete: () => void; onBack: () => void }) {
+  const navigate = useNavigate();
   const [step,        setStep]        = useState(1);
   const [data,        setData]        = useState<FormData>(initData);
   const [errors,      setErrors]      = useState<Record<string, string>>({});
+
+  // ── Email / phone verification (Step 1 registration gate) ───────────────────
+  const [emailVerified,   setEmailVerified]   = useState(false);
+  const [phoneVerified,   setPhoneVerified]   = useState(false);
+  const [otpSent,         setOtpSent]         = useState(false);
+  const [otpCode,         setOtpCode]         = useState('');
+  const [otpSending,      setOtpSending]      = useState(false);
+  const [otpVerifying,    setOtpVerifying]    = useState(false);
+  const [otpError,        setOtpError]        = useState<string | null>(null);
+  const [otpNotice,       setOtpNotice]       = useState<string | null>(null);
   const [addrTab,     setAddrTab]     = useState<'current' | 'permanent' | 'office'>('current');
   const [openAgr,     setOpenAgr]     = useState<string | null>(null);
   const [bankQuery,   setBankQuery]   = useState('');
@@ -283,6 +295,18 @@ export default function Onboarding({ onComplete, onBack }: { onComplete: () => v
   const set = <K extends keyof FormData>(k: K, v: FormData[K]) => {
     setData(prev => ({ ...prev, [k]: v }));
     setErrors(prev => { const e = { ...prev }; delete e[k as string]; return e; });
+    // Changing the email invalidates any email verification; changing the mobile
+    // invalidates phone verification.
+    if (k === 'email') {
+      setEmailVerified(false);
+      setOtpSent(false);
+      setOtpCode('');
+      setOtpError(null);
+      setOtpNotice(null);
+    }
+    if (k === 'mobile') {
+      setPhoneVerified(false);
+    }
   };
 
   const getAddr = (t: 'current' | 'permanent' | 'office'): AddressData =>
@@ -386,14 +410,127 @@ export default function Onboarding({ onComplete, onBack }: { onComplete: () => v
     return e;
   };
 
+  // ── Email OTP: request a code ──────────────────────────────────────────────
+  const requestEmailOtp = async () => {
+    const email = data.email.trim().toLowerCase();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      setErrors(prev => ({ ...prev, email: 'Enter a valid email address' }));
+      return;
+    }
+    setOtpSending(true);
+    setOtpError(null);
+    setOtpNotice(null);
+    try {
+      const res = await apiFetch('/auth/otp/request', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ email, purpose: 'SIGNUP' }),
+      });
+      if (!res.ok) {
+        const validation = await readServerValidation(res);
+        throw new Error(validation.payload?.message || `Could not send code (${res.status})`);
+      }
+      setOtpSent(true);
+      setOtpCode('');
+      setOtpNotice(`A 6-digit code was sent to ${email}.`);
+    } catch (err: any) {
+      setOtpError(err.message || 'Could not send the verification code. Please try again.');
+    } finally {
+      setOtpSending(false);
+    }
+  };
+
+  // ── Email OTP: confirm a code ──────────────────────────────────────────────
+  const confirmEmailOtp = async () => {
+    const email = data.email.trim().toLowerCase();
+    const code  = otpCode.trim();
+    if (code.length !== 6) {
+      setOtpError('Enter the 6-character code from your email.');
+      return;
+    }
+    setOtpVerifying(true);
+    setOtpError(null);
+    setOtpNotice(null);
+    try {
+      const res = await apiFetch('/auth/otp/verify', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ email, purpose: 'SIGNUP', code }),
+      });
+      if (!res.ok) {
+        const validation = await readServerValidation(res);
+        throw new Error(validation.payload?.message || 'Invalid or expired code. Please try again.');
+      }
+      setEmailVerified(true);
+      setOtpSent(false);
+      setOtpNotice(null);
+    } catch (err: any) {
+      setOtpError(err.message || 'Invalid or expired code. Please try again.');
+    } finally {
+      setOtpVerifying(false);
+    }
+  };
+
+  // ── Phone: instant dummy verify (no API) ───────────────────────────────────
+  const verifyPhone = () => {
+    if (!/^[6-9]\d{9}$/.test(data.mobile.trim())) {
+      setErrors(prev => ({ ...prev, mobile: 'Enter a valid 10-digit mobile number starting with 6–9' }));
+      return;
+    }
+    setPhoneVerified(true);
+  };
+
   const goNext = () => {
     const errs = validate(step);
     if (Object.keys(errs).length > 0) { setErrors(errs); return; }
     setErrors({});
+    // Step 1 is now terminal for registration — instead of advancing to step 2,
+    // create the account and go straight to the dashboard. (Steps 2-5 remain in
+    // the file but are completed later inside the dashboard.)
+    if (step === 1) { handleRegister(); return; }
     if (step < 5) setStep(s => s + 1);
     else handleSubmit();
   };
   const goBack = () => { setErrors({}); setStep(s => s - 1); };
+
+  // ── Single-step registration (basic identity only) ─────────────────────────
+  const handleRegister = async () => {
+    setSubmitError(null);
+    if (!emailVerified) { setSubmitError('Please verify your email address before creating your account.'); return; }
+    if (!phoneVerified) { setSubmitError('Please verify your mobile number before creating your account.'); return; }
+    setIsSubmitting(true);
+    try {
+      const payload = {
+        fullName:     `${data.firstName.trim()} ${data.lastName.trim()}`.trim(),
+        mobileNumber: data.mobile.trim(),
+        email:        data.email.trim().toLowerCase(),
+        password:     data.password,
+      };
+      const res = await apiFetch('/auth/signup', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify(payload),
+      });
+      if (!res.ok) {
+        const validation = await readServerValidation(res);
+        if (res.status === 400) {
+          const mappedErrors = mapServerErrorsToState(validation.fieldErrors, {
+            fullName:     'firstName',
+            mobileNumber: 'mobile',
+          });
+          setErrors(mappedErrors);
+          throw new Error(buildValidationSummary(validation));
+        }
+        throw new Error(validation.payload?.message || `Server error: ${res.status}`);
+      }
+      // Signup sets an HttpOnly session cookie — do NOT log out. Go to the dashboard.
+      navigate('/distributor/dashboard');
+    } catch (err: any) {
+      setSubmitError(err.message || 'Something went wrong. Please try again.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
 
   const handleSubmit = async () => {
     setIsSubmitting(true);
@@ -632,20 +769,77 @@ export default function Onboarding({ onComplete, onBack }: { onComplete: () => v
                   <div className="grid grid-cols-2 gap-4">
                     <div>
                       <label className={CLS_LABEL}>Mobile Number <span className="text-red-400">*</span></label>
-                      <div className="relative">
-                        <span className="absolute left-4 top-2.5 text-slate-400 text-sm font-medium pointer-events-none">+91</span>
-                        <input type="tel" value={data.mobile} placeholder="10-digit mobile"
-                          onChange={e => set('mobile', e.target.value.replace(/\D/g, '').slice(0, 10))}
-                          className={CLS_INPUT + ' pl-12' + (errors.mobile ? ' border-red-300 ring-1 ring-red-200' : '')} />
+                      <div className="flex gap-2">
+                        <div className="relative flex-1">
+                          <span className="absolute left-4 top-2.5 text-slate-400 text-sm font-medium pointer-events-none">+91</span>
+                          <input type="tel" value={data.mobile} placeholder="10-digit mobile" disabled={phoneVerified}
+                            onChange={e => set('mobile', e.target.value.replace(/\D/g, '').slice(0, 10))}
+                            className={CLS_INPUT + ' pl-12 pr-9' + (phoneVerified ? ' bg-green-50 border-green-200' : '') + (errors.mobile ? ' border-red-300 ring-1 ring-red-200' : '')} />
+                          {phoneVerified && (
+                            <span className="absolute right-3 top-2.5 text-green-500 font-bold text-sm pointer-events-none">
+                              <Check className="w-4 h-4" />
+                            </span>
+                          )}
+                        </div>
+                        {phoneVerified ? (
+                          <span className="flex items-center gap-1 px-3 text-xs font-bold text-green-600">
+                            <Check className="w-3.5 h-3.5" /> Verified
+                          </span>
+                        ) : (
+                          <button type="button" onClick={verifyPhone}
+                            className="px-4 rounded-xl bg-slate-100 text-slate-700 text-xs font-semibold hover:bg-slate-200 transition-colors flex-shrink-0">
+                            Verify
+                          </button>
+                        )}
                       </div>
                       {errors.mobile && <p className={CLS_ERR}><AlertCircle className="w-3 h-3" />{errors.mobile}</p>}
                     </div>
                     <div>
                       <label className={CLS_LABEL}>Email ID <span className="text-red-400">*</span></label>
-                      <input type="email" value={data.email} placeholder="you@example.com"
-                        onChange={e => set('email', e.target.value)}
-                        className={CLS_INPUT + (errors.email ? ' border-red-300 ring-1 ring-red-200' : '')} />
+                      <div className="flex gap-2">
+                        <div className="relative flex-1">
+                          <input type="email" value={data.email} placeholder="you@example.com" disabled={emailVerified}
+                            onChange={e => set('email', e.target.value)}
+                            className={CLS_INPUT + ' pr-9' + (emailVerified ? ' bg-green-50 border-green-200' : '') + (errors.email ? ' border-red-300 ring-1 ring-red-200' : '')} />
+                          {emailVerified && (
+                            <span className="absolute right-3 top-2.5 text-green-500 font-bold text-sm pointer-events-none">
+                              <Check className="w-4 h-4" />
+                            </span>
+                          )}
+                        </div>
+                        {emailVerified ? (
+                          <span className="flex items-center gap-1 px-3 text-xs font-bold text-green-600">
+                            <Check className="w-3.5 h-3.5" /> Verified
+                          </span>
+                        ) : (
+                          <button type="button" onClick={requestEmailOtp} disabled={otpSending}
+                            className="px-4 rounded-xl bg-slate-100 text-slate-700 text-xs font-semibold hover:bg-slate-200 transition-colors flex-shrink-0 disabled:opacity-60 disabled:cursor-not-allowed">
+                            {otpSending ? 'Sending…' : otpSent ? 'Resend' : 'Verify'}
+                          </button>
+                        )}
+                      </div>
                       {errors.email && <p className={CLS_ERR}><AlertCircle className="w-3 h-3" />{errors.email}</p>}
+
+                      {/* OTP entry — revealed after a code is sent */}
+                      <AnimatePresence>
+                        {otpSent && !emailVerified && (
+                          <motion.div
+                            initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }}
+                            className="overflow-hidden">
+                            <div className="mt-2.5 flex gap-2">
+                              <input type="text" value={otpCode} placeholder="6-digit code" maxLength={6}
+                                onChange={e => { setOtpCode(e.target.value.replace(/\s/g, '').slice(0, 6)); setOtpError(null); }}
+                                className={CLS_INPUT + ' flex-1 tracking-[0.3em] font-mono text-center' + (otpError ? ' border-red-300 ring-1 ring-red-200' : '')} />
+                              <button type="button" onClick={confirmEmailOtp} disabled={otpVerifying || otpCode.length !== 6}
+                                className="px-4 rounded-xl bg-[#0B1B3E] text-white text-xs font-semibold hover:bg-[#1A3066] transition-colors flex-shrink-0 disabled:opacity-60 disabled:cursor-not-allowed">
+                                {otpVerifying ? 'Verifying…' : 'Confirm'}
+                              </button>
+                            </div>
+                          </motion.div>
+                        )}
+                      </AnimatePresence>
+                      {otpNotice && !emailVerified && <p className="text-[11px] text-slate-400 mt-1.5">{otpNotice}</p>}
+                      {otpError && <p className={CLS_ERR}><AlertCircle className="w-3 h-3" />{otpError}</p>}
                     </div>
                   </div>
 
@@ -1104,15 +1298,24 @@ export default function Onboarding({ onComplete, onBack }: { onComplete: () => v
                 <ChevronLeft className="w-4 h-4" /> Back
               </button>
             )}
-            <button onClick={goNext} disabled={isSubmitting}
+            <button onClick={goNext} disabled={isSubmitting || (step === 1 && (!emailVerified || !phoneVerified))}
               className="flex-1 py-3 bg-[#0B1B3E] text-white font-semibold text-sm rounded-xl hover:bg-[#1A3066] transition-colors flex items-center justify-center gap-2 shadow-sm disabled:opacity-60 disabled:cursor-not-allowed">
-              {step === 5 ? (isSubmitting ? 'Submitting…' : 'Submit Application') : 'Save & Continue'}
-              {step < 5 && <ChevronRight className="w-4 h-4" />}
+              {step === 1
+                ? (isSubmitting ? 'Creating account…' : 'Create account')
+                : step === 5
+                  ? (isSubmitting ? 'Submitting…' : 'Submit Application')
+                  : 'Save & Continue'}
+              {step > 1 && step < 5 && <ChevronRight className="w-4 h-4" />}
             </button>
           </div>
           {submitError && (
             <p className={CLS_ERR + ' justify-center mt-2'}>
               <AlertCircle className="w-3 h-3" />{submitError}
+            </p>
+          )}
+          {step === 1 && (!emailVerified || !phoneVerified) && !submitError && (
+            <p className="text-center text-[11px] text-slate-400 mt-2">
+              Verify your email and mobile number to create your account.
             </p>
           )}
           <p className="text-center text-xs text-slate-400 mt-4">

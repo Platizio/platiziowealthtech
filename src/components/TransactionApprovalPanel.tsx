@@ -126,6 +126,9 @@ export default function TransactionApprovalPanel({
   const [challenge, setChallenge] = useState<ApprovalChallenge>(initialChallenge);
 
   const [consentAccepted, setConsentAccepted] = useState(false);
+  // Compliance: a SEPARATE, explicit consent captured AT THE TIME OF OTP ENTRY.
+  // Starts UNCHECKED and gates the Approve/verify button alongside a complete OTP.
+  const [verifyConsent, setVerifyConsent] = useState(false);
   const [otpDigits, setOtpDigits] = useState<string[]>(Array(6).fill(''));
   const [error, setError] = useState('');
   const [sending, setSending] = useState(false);
@@ -150,6 +153,7 @@ export default function TransactionApprovalPanel({
   useEffect(() => {
     setChallenge(initialChallenge);
     setConsentAccepted(false);
+    setVerifyConsent(false);
     setOtpDigits(Array(6).fill(''));
     setError('');
     setCountdown(0);
@@ -256,13 +260,19 @@ export default function TransactionApprovalPanel({
       setError('Please enter the complete 6-digit code.');
       return;
     }
+    // Compliance: the explicit consent must be ticked AT OTP ENTRY before approving.
+    if (!verifyConsent) {
+      setError('Please tick the authorisation consent to approve this transaction.');
+      return;
+    }
     setApproving(true);
     setError('');
     try {
       const res = await apiFetch(`/investor/approvals/${challenge.id}/approve`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ consentAccepted: true, code: entered }),
+        // Only send consentAccepted:true because the user ticked it at OTP entry.
+        body: JSON.stringify({ consentAccepted: verifyConsent, code: entered }),
       });
       const data = await res.json().catch(() => null);
       if (!res.ok) {
@@ -290,6 +300,7 @@ export default function TransactionApprovalPanel({
     // Reset to the consent step so the investor restarts cleanly; the parent
     // re-fetches the live challenge when this one is superseded.
     setConsentAccepted(false);
+    setVerifyConsent(false);
     setOtpDigits(Array(6).fill(''));
     setError('');
     setCountdown(0);
@@ -298,6 +309,42 @@ export default function TransactionApprovalPanel({
   };
 
   const typeLabel = String(challenge.transactionType || 'transaction').replace(/_/g, ' ');
+
+  // Pull amount / scheme out of the frozen snapshot so the consent is INFORMED.
+  // Works for PURCHASE, REDEMPTION and SIP snapshots (best-effort, read-only).
+  const snapshotSummary = useMemo(() => {
+    let snap: Record<string, unknown> | null = null;
+    try {
+      const parsed =
+        typeof challenge.snapshotJson === 'string'
+          ? JSON.parse(challenge.snapshotJson)
+          : challenge.snapshotJson;
+      if (parsed && typeof parsed === 'object') snap = parsed as Record<string, unknown>;
+    } catch {
+      snap = null;
+    }
+    if (!snap) return null;
+    const pick = (...keys: string[]) => {
+      for (const k of keys) {
+        const v = snap?.[k];
+        if (v !== undefined && v !== null && v !== '') return v;
+      }
+      return undefined;
+    };
+    const amountRaw = pick('amount', 'amountInRupees', 'orderAmount', 'investmentAmount');
+    const amountNum = typeof amountRaw === 'number' ? amountRaw : Number(amountRaw);
+    const amount =
+      Number.isFinite(amountNum) && amountNum > 0
+        ? `₹${amountNum.toLocaleString('en-IN')}`
+        : undefined;
+    const scheme = pick('schemeName', 'productSchemeName', 'fundName', 'productName', 'scheme');
+    const units = pick('units', 'unitsToRedeem', 'quantity');
+    return {
+      amount,
+      scheme: scheme != null ? String(scheme) : undefined,
+      units: units != null ? String(units) : undefined,
+    };
+  }, [challenge.snapshotJson]);
 
   return (
     <div className="space-y-6">
@@ -509,10 +556,48 @@ export default function TransactionApprovalPanel({
                 )}
               </div>
 
+              {/* Compliance: clear, informed consent captured AT OTP ENTRY.
+                  Applies for PURCHASE, REDEMPTION and SIP challenge types. */}
+              <div className="mb-5 rounded-xl border border-slate-200 bg-slate-50 p-4">
+                {(snapshotSummary?.amount || snapshotSummary?.scheme || snapshotSummary?.units) && (
+                  <div className="mb-3 space-y-1 text-xs text-slate-600">
+                    {snapshotSummary?.scheme && (
+                      <p className="flex justify-between gap-3">
+                        <span className="text-slate-400">Scheme</span>
+                        <span className="text-right font-medium text-slate-700">{snapshotSummary.scheme}</span>
+                      </p>
+                    )}
+                    {snapshotSummary?.amount && (
+                      <p className="flex justify-between gap-3">
+                        <span className="text-slate-400">Amount</span>
+                        <span className="text-right font-semibold text-slate-800">{snapshotSummary.amount}</span>
+                      </p>
+                    )}
+                    {snapshotSummary?.units && (
+                      <p className="flex justify-between gap-3">
+                        <span className="text-slate-400">Units</span>
+                        <span className="text-right font-medium text-slate-700">{snapshotSummary.units}</span>
+                      </p>
+                    )}
+                  </div>
+                )}
+                <label className="flex cursor-pointer select-none items-start gap-3">
+                  <input
+                    type="checkbox"
+                    checked={verifyConsent}
+                    onChange={(e) => { setVerifyConsent(e.target.checked); setError(''); }}
+                    className="mt-0.5 h-4 w-4 rounded border-slate-300 text-[#0B1B3E] focus:ring-blue-200"
+                  />
+                  <span className="text-sm leading-relaxed text-slate-700">
+                    I authorise this {typeLabel} and confirm the details above are correct.
+                  </span>
+                </label>
+              </div>
+
               <button
                 type="button"
                 onClick={() => void handleApprove()}
-                disabled={otpDigits.some((d) => !d) || approving}
+                disabled={otpDigits.some((d) => !d) || !verifyConsent || approving}
                 className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#0B1B3E] px-6 py-3.5 text-sm font-semibold text-white transition-colors hover:bg-[#1A3066] disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {approving ? (<><Loader2 className="h-4 w-4 animate-spin" /> Approving…</>) : (<><ShieldCheck className="h-4 w-4" /> Approve</>)}
