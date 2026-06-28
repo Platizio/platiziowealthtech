@@ -16,6 +16,7 @@ import com.platizio.wealthtech.domain.InvestorLinkRequestStatus;
 import com.platizio.wealthtech.domain.InvestorLinkingStatus;
 import com.platizio.wealthtech.domain.NotificationType;
 import com.platizio.wealthtech.domain.OnboardingSubmission;
+import com.platizio.wealthtech.repository.DistributorRepository;
 import com.platizio.wealthtech.repository.InvestorLinkRequestRepository;
 import com.platizio.wealthtech.repository.InvestorRepository;
 import jakarta.persistence.EntityNotFoundException;
@@ -25,6 +26,7 @@ import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.security.access.AccessDeniedException;
@@ -37,6 +39,8 @@ class InvestorLinkRequestServiceTest {
     @Mock private OnboardingSubmissionService onboardingSubmissionService;
     @Mock private InvestorAccountOwnershipGuard ownershipGuard;
     @Mock private NotificationService notificationService;
+    @Mock private EmailService emailService;
+    @Mock private DistributorRepository distributorRepository;
     private InvestorLinkRequestService service;
 
     private final UUID investorId = UUID.randomUUID();
@@ -48,7 +52,7 @@ class InvestorLinkRequestServiceTest {
     void setUp() {
         service = new InvestorLinkRequestService(
                 linkRequestRepository, investorRepository, onboardingSubmissionService, ownershipGuard,
-                notificationService);
+                notificationService, emailService, distributorRepository, "http://localhost:3000");
         lenient().when(linkRequestRepository.save(any(InvestorLinkRequest.class)))
                 .thenAnswer(inv -> inv.getArgument(0));
         lenient().when(investorRepository.save(any(Investor.class)))
@@ -108,6 +112,54 @@ class InvestorLinkRequestServiceTest {
         assertThat(inv.getDistributorId()).isNull();
         // a submission was frozen for investor review
         verify(onboardingSubmissionService).submitForInvestorReview(investorId, "{\"a\":1}", distributorId);
+    }
+
+    @Test
+    void sendToInvestorEmailsTheInvestorTheApprovalLink() {
+        Investor inv = investor();
+        when(investorRepository.findForUpdateById(investorId)).thenReturn(Optional.of(inv));
+        when(linkRequestRepository.findFirstByInvestorIdAndStatusOrderByCreatedAtDesc(
+                eq(investorId), eq(InvestorLinkRequestStatus.PENDING))).thenReturn(Optional.empty());
+        when(onboardingSubmissionService.submitForInvestorReview(any(), any(), any())).thenReturn(submission());
+
+        InvestorLinkRequest result = service.sendToInvestor(investorId, distributorId, "{\"a\":1}");
+
+        ArgumentCaptor<String> to = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<String> body = ArgumentCaptor.forClass(String.class);
+        verify(emailService).sendHtml(to.capture(), any(), body.capture());
+        assertThat(to.getValue()).isEqualTo("asha@example.com");
+        assertThat(body.getValue()).contains("/investor/approve?token=" + result.getToken());
+    }
+
+    @Test
+    void sendToInvestorStillCreatesTheLinkWhenEmailThrows() {
+        Investor inv = investor();
+        when(investorRepository.findForUpdateById(investorId)).thenReturn(Optional.of(inv));
+        when(linkRequestRepository.findFirstByInvestorIdAndStatusOrderByCreatedAtDesc(
+                eq(investorId), eq(InvestorLinkRequestStatus.PENDING))).thenReturn(Optional.empty());
+        when(onboardingSubmissionService.submitForInvestorReview(any(), any(), any())).thenReturn(submission());
+        when(emailService.sendHtml(any(), any(), any())).thenThrow(new IllegalStateException("smtp down"));
+
+        // best-effort: a mail failure must NOT propagate or roll back the link request
+        InvestorLinkRequest result = service.sendToInvestor(investorId, distributorId, "{\"a\":1}");
+
+        assertThat(result.getStatus()).isEqualTo(InvestorLinkRequestStatus.PENDING);
+        assertThat(result.getToken()).isNotBlank();
+    }
+
+    @Test
+    void sendToInvestorStillCreatesTheLinkWhenEmailDisabled() {
+        Investor inv = investor();
+        when(investorRepository.findForUpdateById(investorId)).thenReturn(Optional.of(inv));
+        when(linkRequestRepository.findFirstByInvestorIdAndStatusOrderByCreatedAtDesc(
+                eq(investorId), eq(InvestorLinkRequestStatus.PENDING))).thenReturn(Optional.empty());
+        when(onboardingSubmissionService.submitForInvestorReview(any(), any(), any())).thenReturn(submission());
+        when(emailService.sendHtml(any(), any(), any())).thenReturn(false); // SMTP disabled → no-op
+
+        InvestorLinkRequest result = service.sendToInvestor(investorId, distributorId, "{\"a\":1}");
+
+        assertThat(result.getStatus()).isEqualTo(InvestorLinkRequestStatus.PENDING);
+        assertThat(result.getToken()).isNotBlank();
     }
 
     @Test

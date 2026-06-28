@@ -195,6 +195,10 @@ app:
     cookie-same-site: ${AUTH_COOKIE_SAME_SITE:Lax}
     blocked-token-purge-interval-ms: ${AUTH_BLOCKED_TOKEN_PURGE_INTERVAL_MS:3600000}
     blocked-token-purge-initial-delay-ms: ${AUTH_BLOCKED_TOKEN_PURGE_INITIAL_DELAY_MS:${random.int[30000,90000]}}
+  frontend:
+    # Base origin of the deployed frontend; used to build investor-facing links
+    # (e.g. the approval-link email -> <origin>/investor/approve?token=...).
+    origin: ${APP_FRONTEND_ORIGIN:http://localhost:3000}
   otp:
     # One-time passcode for email login/signup verification.
     length: ${OTP_LENGTH:6}
