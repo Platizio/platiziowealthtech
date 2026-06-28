@@ -21,6 +21,10 @@ app:
     # Local dev only: echo the OTP in the response when SMTP is disabled. Never
     # set true in application.yml or any deployed/demo profile (DF-13).
     expose-dev-code: ${OTP_EXPOSE_DEV_CODE:true}
+    # Local dev only: a fixed master passcode accepted for ANY login/signup OTP
+    # (never for transaction-approval). Lets anyone sign in without SMTP. MUST stay
+    # blank in application.yml / any deployed profile (DF-13).
+    dev-master-code: ${OTP_DEV_MASTER_CODE:000000}
   demo:
     # Local dev keeps the order simulator so transactions reach SUCCESSFUL (DF-12).
     order-advancer-enabled: ${DEMO_ORDER_ADVANCER_ENABLED:true}

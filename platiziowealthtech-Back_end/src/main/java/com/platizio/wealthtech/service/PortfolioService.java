@@ -16,9 +16,13 @@ import com.platizio.wealthtech.dto.PortfolioDto.PortfolioSummaryDto;
 import com.platizio.wealthtech.domain.BankVerificationStatus;
 import com.platizio.wealthtech.domain.InvestorBankAccount;
 import com.platizio.wealthtech.dto.HoldingResponse;
+import com.platizio.wealthtech.domain.RedemptionRecord;
+import com.platizio.wealthtech.domain.RedemptionStatus;
+import org.springframework.security.access.AccessDeniedException;
 import com.platizio.wealthtech.repository.InvestorBankAccountRepository;
 import com.platizio.wealthtech.repository.InvestorRepository;
 import com.platizio.wealthtech.repository.ProductSchemeRepository;
+import com.platizio.wealthtech.repository.RedemptionRecordRepository;
 import com.platizio.wealthtech.repository.TransactionOrderRepository;
 import com.platizio.wealthtech.service.ProductSchemeOrderSupport;
 import java.math.BigDecimal;
@@ -46,10 +50,32 @@ public class PortfolioService {
             OrderStatus.ACTIVE
     );
 
+    /**
+     * Redemption statuses that have permanently removed units from a holding
+     * (units have settled out / left the folio).
+     */
+    private static final Set<RedemptionStatus> SETTLED_OUT_REDEMPTION_STATUSES = Set.of(
+            RedemptionStatus.SUCCESSFUL,
+            RedemptionStatus.BANK_CREDIT_COMPLETED
+    );
+    /**
+     * Redemption statuses where a redemption is in flight: the units are committed
+     * to a redemption but have not yet settled out, so they are blocked (cannot be
+     * redeemed again) but still part of the holding. FAILED releases the units.
+     */
+    private static final Set<RedemptionStatus> BLOCKING_REDEMPTION_STATUSES = Set.of(
+            RedemptionStatus.CREATED,
+            RedemptionStatus.PENDING_INVESTOR_ACTION,
+            RedemptionStatus.SUBMITTED,
+            RedemptionStatus.PROCESSING,
+            RedemptionStatus.BANK_CREDIT_PENDING
+    );
+
     private final TransactionOrderRepository orderRepository;
     private final InvestorRepository investorRepository;
     private final ProductSchemeRepository schemeRepository;
     private final InvestorBankAccountRepository bankAccountRepository;
+    private final RedemptionRecordRepository redemptionRecordRepository;
     private final ObjectMapper objectMapper;
 
     public PortfolioService(
@@ -57,12 +83,14 @@ public class PortfolioService {
             InvestorRepository investorRepository,
             ProductSchemeRepository schemeRepository,
             InvestorBankAccountRepository bankAccountRepository,
+            RedemptionRecordRepository redemptionRecordRepository,
             ObjectMapper objectMapper
     ) {
         this.orderRepository = orderRepository;
         this.investorRepository = investorRepository;
         this.schemeRepository = schemeRepository;
         this.bankAccountRepository = bankAccountRepository;
+        this.redemptionRecordRepository = redemptionRecordRepository;
         this.objectMapper = objectMapper;
     }
 
@@ -231,6 +259,18 @@ public class PortfolioService {
      * carries no fresh as-of timestamp is reported {@code STALE}.
      */
     @Transactional(readOnly = true)
+    /**
+     * Distributor-facing: an individual investor's holdings, but only if that investor
+     * belongs to the requesting distributor. ADMIN-scoped callers pass their own checks.
+     */
+    public List<HoldingResponse> getInvestorHoldingsForDistributor(UUID distributorId, UUID investorId) {
+        Investor investor = investorRepository.findById(investorId).orElse(null);
+        if (investor == null || !distributorId.equals(investor.getDistributorId())) {
+            throw new AccessDeniedException("Investor does not belong to this distributor");
+        }
+        return getInvestorHoldings(investorId);
+    }
+
     public List<HoldingResponse> getInvestorHoldings(UUID investorId) {
         if (investorId == null) {
             return List.of();
@@ -248,6 +288,14 @@ public class PortfolioService {
 
         String maskedPayoutBank = resolveMaskedPayoutBank(investorId);
 
+        // Redemptions are tracked per source holding order. Group them so each holding
+        // reports its REAL blocked units (in-flight redemptions) and NET redeemable
+        // units (gross units minus blocked minus already-settled-out) — never hardcoded.
+        Map<UUID, List<RedemptionRecord>> redemptionsByOrder = redemptionRecordRepository
+                .findByInvestorId(investorId).stream()
+                .filter(r -> r.getOrderId() != null)
+                .collect(Collectors.groupingBy(RedemptionRecord::getOrderId));
+
         List<HoldingResponse> holdings = new ArrayList<>();
         for (TransactionOrder order : orders) {
             if (!isHoldingOrder(order)) {
@@ -258,25 +306,40 @@ public class PortfolioService {
             boolean schemeKnown = scheme != null;
 
             NavSnapshot nav = resolveNav(scheme);
-            BigDecimal units = positiveOrNull(order.getUnits());
+            BigDecimal grossUnits = positiveOrNull(order.getUnits());
+
+            List<RedemptionRecord> orderRedemptions =
+                    redemptionsByOrder.getOrDefault(order.getId(), List.of());
+            BigDecimal blockedUnits = sumRedemptionUnits(orderRedemptions, BLOCKING_REDEMPTION_STATUSES);
+            BigDecimal settledOutUnits = sumRedemptionUnits(orderRedemptions, SETTLED_OUT_REDEMPTION_STATUSES);
+
+            // NET redeemable = gross holding units − units still locked in flight − units
+            // that have already settled out of the folio. Floored at zero, never negative.
+            BigDecimal availableUnits = grossUnits == null
+                    ? null
+                    : grossUnits.subtract(blockedUnits).subtract(settledOutUnits).max(BigDecimal.ZERO);
 
             BigDecimal currentValue;
             HoldingResponse.DataQuality quality;
-            if (units == null || nav.value == null) {
+            if (availableUnits == null || nav.value == null) {
                 // FR-HLD-005 / locked decision #4: never fall back to order amount/zero.
                 currentValue = null;
                 quality = HoldingResponse.DataQuality.UNAVAILABLE;
             } else if (nav.asOf == null) {
-                currentValue = nav.value.multiply(units);
+                // Value the NET redeemable units the investor can actually act on.
+                currentValue = nav.value.multiply(availableUnits);
                 quality = HoldingResponse.DataQuality.STALE;
             } else {
-                currentValue = nav.value.multiply(units);
+                currentValue = nav.value.multiply(availableUnits);
                 quality = HoldingResponse.DataQuality.OK;
             }
 
+            // Only redeemable when there are NET units left to redeem.
             boolean redeemable = schemeKnown
                     && StringUtils.hasText(order.getExternalOrderId())
-                    && order.getOrderStatus() != OrderStatus.CANCELLED;
+                    && order.getOrderStatus() != OrderStatus.CANCELLED
+                    && availableUnits != null
+                    && availableUnits.signum() > 0;
 
             holdings.add(new HoldingResponse(
                     order.getId(),
@@ -285,8 +348,8 @@ public class PortfolioService {
                     schemeKnown ? ProductSchemeOrderSupport.displayName(scheme) : "Unknown fund",
                     schemeKnown ? scheme.getAmcName() : "—",
                     resolveCategory(order, scheme),
-                    units,
-                    BigDecimal.ZERO,
+                    availableUnits,
+                    blockedUnits,
                     nav.value,
                     nav.asOf,
                     currentValue,
@@ -305,11 +368,32 @@ public class PortfolioService {
         if (order.getProductSchemeId() == null) {
             return false;
         }
-        boolean isSip = order.getTransactionType() == TransactionType.SIP;
-        if (isSip && order.getOrderStatus() != OrderStatus.ACTIVE) {
+        // Only funds the investor actually holds units in are withdrawable — matches the
+        // dashboard's holding definition (HoldingsService) and excludes in-flight or
+        // zero/null-unit orders that otherwise surfaced as "random funds" to redeem.
+        if (order.getUnits() == null || order.getUnits().signum() <= 0) {
             return false;
         }
+        // A SIP that produced units is held whether ACTIVE or SUCCESSFUL — units>0 above
+        // already excludes mandates that haven't transacted (consistent with the dashboard).
         return AUM_STATUSES.contains(order.getOrderStatus());
+    }
+
+    /** Sum the positive units across redemption records whose status is in {@code statuses}. */
+    private static BigDecimal sumRedemptionUnits(
+            List<RedemptionRecord> records, Set<RedemptionStatus> statuses) {
+        BigDecimal total = BigDecimal.ZERO;
+        for (RedemptionRecord record : records) {
+            if (record.getRedemptionStatus() == null
+                    || !statuses.contains(record.getRedemptionStatus())) {
+                continue;
+            }
+            BigDecimal units = positiveOrNull(record.getUnits());
+            if (units != null) {
+                total = total.add(units);
+            }
+        }
+        return total;
     }
 
     private String resolveMaskedPayoutBank(UUID investorId) {

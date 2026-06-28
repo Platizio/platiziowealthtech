@@ -9,9 +9,14 @@ import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.platizio.wealthtech.domain.InvestorBankAccount;
 import com.platizio.wealthtech.domain.OnboardingSubmission;
 import com.platizio.wealthtech.domain.OnboardingSubmissionStatus;
+import com.platizio.wealthtech.repository.InvestorBankAccountRepository;
+import com.platizio.wealthtech.repository.InvestorRepository;
+import com.platizio.wealthtech.repository.NomineeRepository;
 import com.platizio.wealthtech.repository.OnboardingSubmissionRepository;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
@@ -26,6 +31,9 @@ class OnboardingSubmissionServiceTest {
 
     @Mock private OnboardingSubmissionRepository repository;
     @Mock private AuditService auditService;
+    @Mock private InvestorRepository investorRepository;
+    @Mock private InvestorBankAccountRepository bankAccountRepository;
+    @Mock private NomineeRepository nomineeRepository;
     private OnboardingSubmissionService service;
 
     private final UUID investorId = UUID.randomUUID();
@@ -34,7 +42,8 @@ class OnboardingSubmissionServiceTest {
 
     @BeforeEach
     void setUp() {
-        service = new OnboardingSubmissionService(repository, auditService);
+        service = new OnboardingSubmissionService(
+                repository, auditService, investorRepository, bankAccountRepository, nomineeRepository);
         lenient().when(repository.save(any(OnboardingSubmission.class))).thenAnswer(inv -> inv.getArgument(0));
     }
 
@@ -57,7 +66,9 @@ class OnboardingSubmissionServiceTest {
 
         assertThat(saved.getRevisionNo()).isEqualTo(1);
         assertThat(saved.getStatus()).isEqualTo(OnboardingSubmissionStatus.DRAFT_AWAITING_INVESTOR);
-        assertThat(saved.getContentSha256()).isEqualTo(ConsentRecordService.sha256("{\"a\":1}"));
+        // The stored payload is WIDENED (bank/FATCA/nominee appended); the frozen hash is of the widened payload.
+        assertThat(saved.getContentSha256()).isEqualTo(ConsentRecordService.sha256(saved.getPayloadJson()));
+        assertThat(saved.getPayloadJson()).contains("\"a\":1").contains("bankAccounts").contains("nominees");
         verify(auditService).log(eq("INVESTOR"), eq(investorId), eq("ONBOARDING_SUBMITTED_FOR_REVIEW"), eq(distributorId), any());
     }
 
@@ -104,13 +115,29 @@ class OnboardingSubmissionServiceTest {
 
     @Test
     void assertFinalizablePassesOnlyWhenAttestedAndUnchanged() {
-        OnboardingSubmission attested = live(OnboardingSubmissionStatus.ATTESTED, 1, "H");
+        // Submit freezes a WIDENED snapshot (bank/FATCA/nominee from live data) + its hash;
+        // assertFinalizable recomputes the widened hash from live data and compares.
         when(repository.findFirstByInvestorIdAndStatusNotOrderByRevisionNoDesc(eq(investorId), any()))
-                .thenReturn(Optional.of(attested));
+                .thenReturn(Optional.empty());
+        when(repository.findFirstByInvestorIdOrderByRevisionNoDesc(investorId)).thenReturn(Optional.empty());
+        OnboardingSubmission saved = service.submitForInvestorReview(investorId, "{\"a\":1}", distributorId);
+        saved.setStatus(OnboardingSubmissionStatus.ATTESTED);
+        when(repository.findFirstByInvestorIdAndStatusNotOrderByRevisionNoDesc(eq(investorId), any()))
+                .thenReturn(Optional.of(saved));
 
-        assertThatCode(() -> service.assertFinalizable(investorId, "H")).doesNotThrowAnyException();
-        // edited after attestation → hash differs → blocked
-        assertThatThrownBy(() -> service.assertFinalizable(investorId, "CHANGED"))
+        // Unchanged live data → re-widened hash matches the attested hash → finalize passes
+        // (the caller-supplied hash arg is intentionally ignored by the live-recompute gate).
+        assertThatCode(() -> service.assertFinalizable(investorId, "ignored")).doesNotThrowAnyException();
+
+        // A post-attestation change to live data (a bank account added) → hash differs → blocked.
+        InvestorBankAccount bank = new InvestorBankAccount();
+        bank.setInvestorId(investorId);
+        bank.setAccountHolderName("Anita");
+        bank.setAccountNumber("000123456");
+        bank.setIfscCode("HDFC0000001");
+        bank.setBankName("HDFC Bank");
+        when(bankAccountRepository.findByInvestorId(investorId)).thenReturn(List.of(bank));
+        assertThatThrownBy(() -> service.assertFinalizable(investorId, "ignored"))
                 .isInstanceOf(IllegalStateException.class);
     }
 

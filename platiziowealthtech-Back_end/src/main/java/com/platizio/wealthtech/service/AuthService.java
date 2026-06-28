@@ -49,7 +49,8 @@ public class AuthService {
 
     @Transactional
     public AuthResponse signup(AuthSignupRequest request) {
-        if (distributorRepository.existsByArnNumber(request.arnNumber())) {
+        if (request.arnNumber() != null && !request.arnNumber().isBlank()
+                && distributorRepository.existsByArnNumber(request.arnNumber())) {
             throw new IllegalArgumentException("Distributor with same ARN already exists");
         }
         if (distributorRepository.findByEmail(request.email()).isPresent()) {
@@ -72,21 +73,28 @@ public class AuthService {
         distributor.setRole(role);
         distributor.setMasterDistributorId(request.masterDistributorId());
         distributor.setInternalRm(Boolean.TRUE.equals(request.internalRm()));
-        distributor.setStatus(DistributorStatus.PENDING_APPROVAL);
-        distributor.setProfileCompletionPercent(85);
+        // Basic-identity registration: the distributor goes straight to the dashboard and completes
+        // ARN/NISM/compliance there. Approve immediately + issue a session so the dashboard is reachable.
+        boolean profileComplete = request.arnNumber() != null && !request.arnNumber().isBlank();
+        distributor.setStatus(DistributorStatus.APPROVED);
+        distributor.setProfileCompletionPercent(profileComplete ? 85 : 40);
         distributor.setPasswordHash(passwordEncoder.encode(request.password()));
 
         Distributor saved = distributorRepository.save(distributor);
-        auditService.log("DISTRIBUTOR", saved.getId(), "SIGNUP_SUBMITTED", saved.getId(), "{\"status\":\"PENDING_APPROVAL\"}");
+        auditService.log("DISTRIBUTOR", saved.getId(), "SIGNUP_REGISTERED", saved.getId(),
+                "{\"status\":\"APPROVED\",\"profileComplete\":" + profileComplete + "}");
 
+        String token = jwtService.generateToken(saved.getId(), saved.getEmail(), saved.getRole().name());
         return new AuthResponse(
-                null,
+                token,
                 saved.getId(),
                 saved.getEmail(),
                 saved.getFullName(),
                 saved.getRole(),
                 saved.getStatus(),
-                "Approval remaining. Your account is pending admin approval."
+                profileComplete
+                        ? "Welcome to Platizio!"
+                        : "Welcome! Complete your ARN & NISM details to start onboarding investors."
         );
     }
 
@@ -121,8 +129,8 @@ public class AuthService {
         return switch (purpose) {
             case LOGIN -> registered;
             case SIGNUP -> !registered;
-            // Investor-portal + transaction-approval purposes are handled elsewhere, never here.
-            case INVESTOR_LOGIN, INVESTOR_SIGNUP, TRANSACTION_APPROVAL -> false;
+            // Investor-portal + approval purposes are handled elsewhere, never here.
+            case INVESTOR_LOGIN, INVESTOR_SIGNUP, TRANSACTION_APPROVAL, PROFILE_CHANGE_APPROVAL -> false;
         };
     }
 

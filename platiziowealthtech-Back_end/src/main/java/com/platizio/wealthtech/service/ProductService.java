@@ -129,7 +129,10 @@ public class ProductService {
         if (local || "local".equals(catalogueSource)) {
             return listSchemesPage(query, active, assetClass, category, productType, page, size);
         }
-        return listSchemesPageFromCybrilla(query, active, assetClass, category, productType, page, size);
+        return liveCataloguePageOrCachedFallback(
+                () -> listSchemesPageFromCybrilla(query, active, assetClass, category, productType, page, size),
+                () -> listSchemesPage(query, active, assetClass, category, productType, page, size)
+        );
     }
 
     public Page<ProductScheme> listSchemesPage(String query, Boolean active, int page, int size) {
@@ -294,7 +297,10 @@ public class ProductService {
             int size
     ) {
         if (usesCybrillaCatalogueByDefault() && !explicitSyncRequest) {
-            return listSchemesPageFromCybrilla(query, active, assetClass, category, productType, page, size);
+            return liveCataloguePageOrCachedFallback(
+                    () -> listSchemesPageFromCybrilla(query, active, assetClass, category, productType, page, size),
+                    () -> listSchemesPage(query, active, assetClass, category, productType, page, size)
+            );
         }
         return refreshThenListOrCachedFallback(
                 forceCatalogueRefresh || explicitSyncRequest,
@@ -381,6 +387,26 @@ public class ProductService {
             throw ex;
         }
         return localPageSupplier.get();
+    }
+
+    private Page<ProductScheme> liveCataloguePageOrCachedFallback(
+            Supplier<Page<ProductScheme>> livePageSupplier,
+            Supplier<Page<ProductScheme>> localPageSupplier
+    ) {
+        try {
+            return livePageSupplier.get();
+        } catch (CybrillaApiException | IllegalStateException ex) {
+            Page<ProductScheme> cachedPage = localPageSupplier.get();
+            if (cachedPage.hasContent() || productSchemeRepository.count() > 0) {
+                logger.warn(
+                        "product_scheme_read status='fallback_to_cache' reason='{}' cached_page_count='{}'",
+                        ex.getMessage(),
+                        cachedPage.getNumberOfElements()
+                );
+                return cachedPage;
+            }
+            throw ex;
+        }
     }
 
     private List<ProductScheme> saveSchemesInBatches(List<ProductScheme> schemes) {

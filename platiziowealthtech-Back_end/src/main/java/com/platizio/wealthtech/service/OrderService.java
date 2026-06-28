@@ -2,6 +2,7 @@ package com.platizio.wealthtech.service;
 
 import com.platizio.wealthtech.domain.*;
 import com.platizio.wealthtech.dto.BulkOrderCreateRequest;
+import com.platizio.wealthtech.dto.InvestorOrderRequest;
 import com.platizio.wealthtech.dto.OrderCreateRequest;
 import com.platizio.wealthtech.dto.SipCancelRequest;
 import com.platizio.wealthtech.dto.WithdrawalRequest;
@@ -354,7 +355,10 @@ public class OrderService {
         if (investor.getKycStatus() != KycStatus.COMPLETED) {
             throw new IllegalStateException("KYC must be completed before order creation");
         }
-        if (investor.getBankVerificationStatus() != BankVerificationStatus.VERIFIED) {
+        // Order-readiness needs a verified bank. The investor-level flag can lag behind (adding a new
+        // unverified bank resets it), so also accept the investor having ANY verified bank account.
+        if (investor.getBankVerificationStatus() != BankVerificationStatus.VERIFIED
+                && !investorService.hasVerifiedBank(request.investorId())) {
             throw new IllegalStateException("Verified bank account is required before order creation");
         }
         validateSipRequest(request);
@@ -439,6 +443,44 @@ public class OrderService {
         auditService.log("ORDER", saved.getId(), "ORDER_CREATED", distributorId, auditDetails);
         notificationService.createForDistributor(distributorId, request.investorId(), NotificationType.PAYMENT_PENDING, "Investor action pending", "Order created and waiting for investor action.");
         return saved;
+    }
+
+    /**
+     * Investor-self order placement (buy funds from the investor portal). The investor
+     * session already authorizes {@code investorId}; the owning distributor is resolved as
+     * the order actor (orders are distributor-scoped) without a caller-ownership check —
+     * mirrors the A1 *AsInvestor pattern. KYC COMPLETED + verified bank are still enforced
+     * by {@link #createOrder}.
+     */
+    @Transactional
+    public TransactionOrder createOrderAsInvestor(UUID investorId, InvestorOrderRequest req) {
+        Investor investor = investorService.getInvestor(investorId);
+        UUID distributorId = investor.getDistributorId();
+        if (distributorId == null) {
+            throw new IllegalStateException(
+                    "Your account is not linked to a distributor yet, so orders cannot be placed.");
+        }
+        OrderCreateRequest order = new OrderCreateRequest(
+                investorId,
+                req.productSchemeId(),
+                null,
+                req.transactionType(),
+                req.amount(),
+                req.units(),
+                req.paymentMode(),
+                req.mandateMode(),
+                req.sipFrequency(),
+                req.sipStartDate(),
+                req.sipInstalments(),
+                req.externalSchemeCode(),
+                req.externalIsin());
+        TransactionOrder created = createOrder(order, distributorId);
+        // Investor-self purchase: create the transaction-2FA challenge so the investor approves it
+        // with an email OTP in their Approval Center before payment — the same hard gate the
+        // distributor flow uses. No payment can proceed without an APPROVED challenge.
+        InvestorAccount account = resolveInvestorAccount(investorId);
+        transactionApprovalService.createChallenge(created.getId(), challengeTypeFor(created), account.getId());
+        return created;
     }
 
     /**

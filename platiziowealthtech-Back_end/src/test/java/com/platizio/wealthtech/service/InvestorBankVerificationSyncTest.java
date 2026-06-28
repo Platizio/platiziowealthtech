@@ -19,6 +19,7 @@ import com.platizio.wealthtech.domain.KycStatus;
 import com.platizio.wealthtech.dto.ExternalBankSyncResponse;
 import com.platizio.wealthtech.integration.CybrillaApiException;
 import com.platizio.wealthtech.integration.CybrillaClient;
+import com.platizio.wealthtech.integration.MockCybrillaClient;
 import com.platizio.wealthtech.repository.InvestorBankAccountRepository;
 import com.platizio.wealthtech.repository.InvestorRepository;
 import java.util.LinkedHashMap;
@@ -354,6 +355,52 @@ class InvestorBankVerificationSyncTest {
     }
 
     @Test
+    void retryableBankFailureDoesNotDowngradeInvestorWhenAnotherBankIsVerified() throws Exception {
+        UUID distributorId = UUID.randomUUID();
+        Investor investor = investor(UUID.randomUUID(), distributorId);
+        investor.setBankVerificationStatus(BankVerificationStatus.VERIFIED);
+
+        InvestorBankAccount verifiedBank = bankAccount(UUID.randomUUID(), investor.getId(), "pv_verified");
+        verifiedBank.setVerificationStatus(BankVerificationStatus.VERIFIED);
+        InvestorBankAccount retryableBank = bankAccount(UUID.randomUUID(), investor.getId(), "pv_retryable");
+
+        InvestorRepository investorRepository = mock(InvestorRepository.class);
+        InvestorBankAccountRepository bankAccountRepository = mock(InvestorBankAccountRepository.class);
+        CybrillaClient cybrillaClient = mock(CybrillaClient.class);
+
+        when(bankAccountRepository.findBankVerificationSyncCandidates(
+                eq(List.of(BankVerificationStatus.VERIFICATION_PENDING, BankVerificationStatus.CAPTURED)),
+                any(Pageable.class)
+        )).thenReturn(List.of(retryableBank));
+        when(investorRepository.findById(investor.getId())).thenReturn(Optional.of(investor));
+        when(bankAccountRepository.findByInvestorId(investor.getId())).thenReturn(List.of(verifiedBank, retryableBank));
+        when(bankAccountRepository.save(any(InvestorBankAccount.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(investorRepository.save(any(Investor.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(cybrillaClient.fetchBankAccountVerificationWithPayloadSnapshot(eq("pv_retryable"), any(Map.class))).thenReturn(json("""
+                {
+                  "object":"pre_verification",
+                  "id":"pv_retryable",
+                  "status":"completed",
+                  "bank_accounts":[{"status":"failed","code":"bank_verification_failed","reason":null}]
+                }
+                """));
+
+        InvestorService service = new InvestorService(
+                investorRepository,
+                bankAccountRepository,
+                null,
+                new NoopAuditService(),
+                cybrillaClient
+        );
+
+        service.syncOutstandingBankVerificationStatuses(10);
+
+        assertThat(retryableBank.getVerificationStatus()).isEqualTo(BankVerificationStatus.VERIFICATION_PENDING);
+        assertThat(investor.getBankVerificationStatus()).isEqualTo(BankVerificationStatus.VERIFIED);
+        assertThat(investor.getInvestorStatus()).isEqualTo(com.platizio.wealthtech.domain.InvestorStatus.READY_FOR_TRANSACTIONS);
+    }
+
+    @Test
     void handleBankPreVerificationWebhookSyncsMatchingBankAccount() throws Exception {
         UUID distributorId = UUID.randomUUID();
         Investor investor = investor(UUID.randomUUID(), distributorId);
@@ -502,6 +549,54 @@ class InvestorBankVerificationSyncTest {
         // No new external profile / MF account creation either (both already exist).
         verify(cybrillaClient, never()).createInvestorProfile(any(Investor.class));
         verify(cybrillaClient, never()).createMfInvestmentAccount(any(Investor.class));
+    }
+
+    @Test
+    void ensureMfInvestmentAccountAcceptsMockCombinedPoaBankVerificationForSandboxPassAccount() {
+        UUID investorId = UUID.randomUUID();
+        UUID distributorId = UUID.randomUUID();
+        UUID bankAccountId = UUID.randomUUID();
+
+        Investor investor = new Investor();
+        ReflectionTestUtils.setField(investor, "id", investorId);
+        investor.setDistributorId(distributorId);
+        investor.setFullName("Anita Verma");
+        investor.setPan("KRTPX3751K");
+        investor.setDateOfBirth(java.time.LocalDate.of(1985, 11, 8));
+        investor.setKycStatus(KycStatus.COMPLETED);
+        investor.setBankVerificationStatus(BankVerificationStatus.VERIFIED);
+        investor.setCybrillaInvestorId("invp_12345678");
+
+        InvestorBankAccount bankAccount = new InvestorBankAccount();
+        ReflectionTestUtils.setField(bankAccount, "id", bankAccountId);
+        bankAccount.setInvestorId(investorId);
+        bankAccount.setAccountHolderName("Anita Verma");
+        bankAccount.setAccountNumber("98123451193");
+        bankAccount.setIfscCode("HDFC0001330");
+        bankAccount.setVerificationStatus(BankVerificationStatus.VERIFIED);
+
+        InvestorRepository investorRepository = mock(InvestorRepository.class);
+        InvestorBankAccountRepository bankAccountRepository = mock(InvestorBankAccountRepository.class);
+
+        when(investorRepository.findById(investorId)).thenReturn(Optional.of(investor));
+        when(bankAccountRepository.findByInvestorId(investorId)).thenReturn(List.of(bankAccount));
+        when(bankAccountRepository.save(any(InvestorBankAccount.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(investorRepository.save(any(Investor.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        InvestorService service = new InvestorService(
+                investorRepository,
+                bankAccountRepository,
+                null,
+                new NoopAuditService(),
+                new MockCybrillaClient()
+        );
+
+        Investor result = service.ensureMfInvestmentAccount(investorId);
+
+        assertThat(result.getExternalMfInvestmentAccountId()).startsWith("mfia_");
+        assertThat(bankAccount.getVerificationStatus()).isEqualTo(BankVerificationStatus.VERIFIED);
+        assertThat(bankAccount.getCybrillaBankVerificationStatus()).isEqualTo("verified");
+        assertThat(investor.getBankVerificationStatus()).isEqualTo(BankVerificationStatus.VERIFIED);
     }
 
     private JsonNode json(String value) throws Exception {

@@ -28,13 +28,17 @@ import com.platizio.wealthtech.dto.KycFlowStatusResponse;
 import com.platizio.wealthtech.dto.InvestorUpdateRequest;
 import com.platizio.wealthtech.dto.UploadedInvestorDocumentResponse;
 import com.platizio.wealthtech.security.JwtAuthPrincipal;
+import com.platizio.wealthtech.domain.InvestorLinkingStatus;
 import com.platizio.wealthtech.domain.OnboardingSubmission;
+import com.platizio.wealthtech.domain.ProfileChangeType;
 import com.platizio.wealthtech.service.ConsentRecordService;
 import com.platizio.wealthtech.service.InvestorContactVerificationService;
 import com.platizio.wealthtech.service.InvestorDocumentService;
 import com.platizio.wealthtech.service.InvestorKycService;
+import com.platizio.wealthtech.service.InvestorLinkService;
 import com.platizio.wealthtech.service.InvestorService;
 import com.platizio.wealthtech.service.OnboardingSubmissionService;
+import com.platizio.wealthtech.service.ProfileChangeApprovalService;
 import com.platizio.wealthtech.service.TermsAcceptanceService;
 import jakarta.servlet.http.HttpServletRequest;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -46,7 +50,9 @@ import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import org.springframework.data.domain.Page;
 import org.springframework.security.access.AccessDeniedException;
@@ -69,6 +75,8 @@ public class InvestorController {
     private final InvestorContactVerificationService contactVerificationService;
     private final TermsAcceptanceService termsAcceptanceService;
     private final OnboardingSubmissionService onboardingSubmissionService;
+    private final InvestorLinkService investorLinkService;
+    private final ProfileChangeApprovalService profileChangeApprovalService;
 
     public InvestorController(
             InvestorService investorService,
@@ -76,7 +84,9 @@ public class InvestorController {
             InvestorKycService investorKycService,
             InvestorContactVerificationService contactVerificationService,
             TermsAcceptanceService termsAcceptanceService,
-            OnboardingSubmissionService onboardingSubmissionService
+            OnboardingSubmissionService onboardingSubmissionService,
+            InvestorLinkService investorLinkService,
+            ProfileChangeApprovalService profileChangeApprovalService
     ) {
         this.investorService = investorService;
         this.investorDocumentService = investorDocumentService;
@@ -84,6 +94,8 @@ public class InvestorController {
         this.contactVerificationService = contactVerificationService;
         this.termsAcceptanceService = termsAcceptanceService;
         this.onboardingSubmissionService = onboardingSubmissionService;
+        this.investorLinkService = investorLinkService;
+        this.profileChangeApprovalService = profileChangeApprovalService;
     }
 
     @Operation(summary = "List investors", description = "Returns paginated investors visible to the authenticated distributor.")
@@ -110,6 +122,46 @@ public class InvestorController {
     @PostMapping
     public Investor create(@Valid @RequestBody InvestorCreateRequest request, Authentication auth) {
         return investorService.createInvestor(request, actorId(auth));
+    }
+
+    // ── Investor-approval linking (investor.md M2 · R1/R2/R3) ─────────────────────
+
+    @Operation(summary = "Send the Step-1 identity to the investor for approval (R1)",
+            description = "Freezes the entered details, mints an email-link token, and emails the investor. "
+                    + "The investor must approve before the distributor can continue.")
+    @PostMapping("/{id}/link/send-to-investor")
+    public Map<String, Object> sendToInvestor(@PathVariable UUID id, Authentication auth) {
+        return investorLinkService.sendToInvestor(id, actorId(auth));
+    }
+
+    @Operation(summary = "Poll the investor-approval linking status (R2)",
+            description = "Returns the current linking_status and whether a link is still pending approval.")
+    @GetMapping("/{id}/link/status")
+    public Map<String, Object> linkStatus(@PathVariable UUID id, Authentication auth) {
+        return investorLinkService.linkStatus(id, actorId(auth));
+    }
+
+    // ── Profile-change approvals (investor.md R9/R10 · distributor proposes) ──────
+
+    @Operation(summary = "Propose a profile change for investor approval (R9/R10)",
+            description = "Stages the proposed profile as a hashed challenge; the live profile is NOT changed "
+                    + "until the investor approves via OTP + consent. linking_status → PENDING_PROFILE_APPROVAL.")
+    @PostMapping("/{id}/profile-change/propose")
+    public Map<String, Object> proposeProfileChange(
+            @PathVariable UUID id, @Valid @RequestBody(required = false) JsonNode body, Authentication auth) {
+        UUID actorId = actorId(auth);
+        investorService.getInvestor(id, actorId); // asserts the distributor owns this investor
+        String changeTypeStr = body != null && body.hasNonNull("changeType") ? body.get("changeType").asText() : "PROFILE_EDIT";
+        ProfileChangeType changeType = "INITIAL_DISTRIBUTOR_FILL".equalsIgnoreCase(changeTypeStr)
+                ? ProfileChangeType.INITIAL_DISTRIBUTOR_FILL : ProfileChangeType.PROFILE_EDIT;
+        JsonNode snapshot = body != null && body.has("snapshot") ? body.get("snapshot") : body;
+        String snapshotJson = snapshot == null ? "{}" : snapshot.toString();
+        var challenge = profileChangeApprovalService.createChallenge(id, changeType, snapshotJson, actorId);
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("challengeId", challenge.getId());
+        out.put("status", challenge.getStatus().name());
+        out.put("linkingStatus", InvestorLinkingStatus.PENDING_PROFILE_APPROVAL.name());
+        return out;
     }
 
     // ── Contact verification (email + mobile OTP via Supabase / self-declaration) ──

@@ -58,6 +58,7 @@ public class SecurityConfig {
                 .requestMatchers(
                     "/api/v1/auth/**",
                     "/api/v1/investor-auth/**",
+                    "/api/v1/investor/link/**",
                     "/actuator/health",
                     "/actuator/info",
                     "/v3/api-docs/**",
@@ -72,6 +73,23 @@ public class SecurityConfig {
                     "/"
                 ).permitAll()
                 .requestMatchers("/api/v1/investor/**").hasRole("INVESTOR")
+                // Compliance: the distributor may only enter investor details. The
+                // investor alone performs pre-verification, PAN verification, KYC
+                // submission, DigiLocker and eSign. Deny the distributor KYC surface
+                // (under /api/v1/investors/** = distributor base) before the
+                // authenticated() fallthrough. These patterns use /kyc/... /kyc-checks
+                // /kyc-flow etc. and never bare /kyc or /bank-verify, so the admin
+                // overrides (PATCH /api/v1/investors/{id}/kyc, /bank-verify) keep working.
+                .requestMatchers("/api/v1/investors/*/kyc-checks", "/api/v1/investors/*/kyc-checks/**").denyAll()
+                .requestMatchers("/api/v1/investors/*/kyc-compliance-check").denyAll()
+                .requestMatchers("/api/v1/investors/*/kyc/apply", "/api/v1/investors/*/kyc/rekyc", "/api/v1/investors/*/kyc/reapply", "/api/v1/investors/*/kyc/re-apply").denyAll()
+                .requestMatchers("/api/v1/investors/*/kyc-sync", "/api/v1/investors/*/kyc/refresh").denyAll()
+                .requestMatchers("/api/v1/investors/*/kyc-flow/**").denyAll()
+                .requestMatchers("/api/v1/investors/*/kyc-requests", "/api/v1/investors/*/kyc-requests/**").denyAll()
+                .requestMatchers("/api/v1/investors/*/identity-documents", "/api/v1/investors/*/identity-documents/**").denyAll()
+                .requestMatchers("/api/v1/investors/*/esign/**").denyAll()
+                .requestMatchers("/api/v1/investors/pre-verifications/**").denyAll()
+                .requestMatchers("/api/v1/investors/*/kyc-form/**").denyAll()
                 .anyRequest().authenticated()
             )
             .exceptionHandling(ex -> ex

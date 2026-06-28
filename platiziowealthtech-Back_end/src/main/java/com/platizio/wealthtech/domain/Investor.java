@@ -13,8 +13,20 @@ import org.hibernate.annotations.SQLRestriction;
 @SQLRestriction("is_deleted = false")
 public class Investor extends BaseEntity {
 
-    @Column(nullable = false)
+    // Approval-gated (investor.md R5): NULL until the investor approves the link.
+    // Nullable as of V62; parked meanwhile in pendingDistributorId.
+    @Column
     private UUID distributorId;
+
+    // The distributor that initiated onboarding, held until the investor approves (V62).
+    @Column
+    private UUID pendingDistributorId;
+
+    // Investor<->distributor linking lifecycle (investor.md), distinct from investorStatus.
+    // Existing rows default to READY (already linked).
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false)
+    private InvestorLinkingStatus linkingStatus = InvestorLinkingStatus.READY;
 
     @Column(nullable = false)
     private String fullName;
@@ -110,6 +122,12 @@ public class Investor extends BaseEntity {
     private Boolean isDeleted = Boolean.FALSE;
     private LocalDateTime deletedAt;
 
+    // REQUIREMENT #4: the investor explicitly chose not to nominate anyone.
+    // Distinct from "no nominees yet" — set true only after an informed opt-out
+    // (recorded with a consent record). Never defaulted on the customer's behalf.
+    @Column(nullable = false)
+    private Boolean nominationOptedOut = Boolean.FALSE;
+
     // Contact verification / self-declaration (Tier 2). Each channel is verified
     // via an OTP round-trip (Supabase Auth) or distributor self-declaration.
     // method = OTP | SELF_DECLARED; belongsTo = self | spouse | dependent_child |
@@ -128,6 +146,12 @@ public class Investor extends BaseEntity {
 
     public UUID getDistributorId() { return distributorId; }
     public void setDistributorId(UUID distributorId) { this.distributorId = distributorId; }
+
+    public UUID getPendingDistributorId() { return pendingDistributorId; }
+    public void setPendingDistributorId(UUID pendingDistributorId) { this.pendingDistributorId = pendingDistributorId; }
+
+    public InvestorLinkingStatus getLinkingStatus() { return linkingStatus; }
+    public void setLinkingStatus(InvestorLinkingStatus linkingStatus) { this.linkingStatus = linkingStatus; }
     public String getFullName() { return fullName; }
     public void setFullName(String fullName) { this.fullName = fullName; }
     public String getMobileNumber() { return mobileNumber; }
@@ -230,6 +254,8 @@ public class Investor extends BaseEntity {
     public void setIsDeleted(Boolean isDeleted) { this.isDeleted = isDeleted; }
     public LocalDateTime getDeletedAt() { return deletedAt; }
     public void setDeletedAt(LocalDateTime deletedAt) { this.deletedAt = deletedAt; }
+    public Boolean getNominationOptedOut() { return nominationOptedOut; }
+    public void setNominationOptedOut(Boolean nominationOptedOut) { this.nominationOptedOut = nominationOptedOut; }
     public Boolean getEmailVerified() { return emailVerified; }
     public void setEmailVerified(Boolean emailVerified) { this.emailVerified = emailVerified; }
     public OffsetDateTime getEmailVerifiedAt() { return emailVerifiedAt; }

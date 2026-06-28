@@ -20,7 +20,7 @@ class InvestorControllerListTest {
     @Test
     void listInvestorsUsesAuthenticatedDistributorWhenQueryDistributorIsAbsent() {
         RecordingInvestorService investorService = new RecordingInvestorService();
-        InvestorController controller = new InvestorController(investorService, null, null, null, null, null);
+        InvestorController controller = new InvestorController(investorService, null, null, null, null, null, null, null);
         UUID actorId = UUID.randomUUID();
 
         controller.listAll(null, false, false, 0, 20, auth(actorId));
@@ -34,7 +34,7 @@ class InvestorControllerListTest {
     @Test
     void searchInvestorsUsesAuthenticatedDistributorInsteadOfRequesterQueryParam() {
         RecordingInvestorService investorService = new RecordingInvestorService();
-        InvestorController controller = new InvestorController(investorService, null, null, null, null, null);
+        InvestorController controller = new InvestorController(investorService, null, null, null, null, null, null, null);
         UUID actorId = UUID.randomUUID();
 
         controller.search("jane", null, false, false, 10, auth(actorId));

@@ -1,22 +1,27 @@
 package com.platizio.wealthtech.controller;
 
+import com.platizio.wealthtech.domain.DistributorNotification;
 import com.platizio.wealthtech.domain.DistributorRole;
 import com.platizio.wealthtech.dto.ActionItemDto;
 import com.platizio.wealthtech.dto.OnboardingPipelineDto;
+import com.platizio.wealthtech.dto.HoldingResponse;
 import com.platizio.wealthtech.dto.PortfolioDto;
 import com.platizio.wealthtech.dto.SipDashboardDto;
 import com.platizio.wealthtech.security.AuthenticatedDistributorPrincipal;
 import com.platizio.wealthtech.service.DashboardService;
+import com.platizio.wealthtech.service.DistributorNotificationService;
 import com.platizio.wealthtech.service.PortfolioService;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 @RestController
@@ -25,10 +30,13 @@ public class DashboardController {
 
     private final DashboardService dashboardService;
     private final PortfolioService portfolioService;
+    private final DistributorNotificationService notificationService;
 
-    public DashboardController(DashboardService dashboardService, PortfolioService portfolioService) {
+    public DashboardController(DashboardService dashboardService, PortfolioService portfolioService,
+            DistributorNotificationService notificationService) {
         this.dashboardService = dashboardService;
         this.portfolioService = portfolioService;
+        this.notificationService = notificationService;
     }
 
     @GetMapping("/{distributorId}/portfolio")
@@ -39,6 +47,16 @@ public class DashboardController {
     ) {
         assertDistributorAccess(principal, distributorId);
         return portfolioService.getPortfolio(distributorId, category);
+    }
+
+    @GetMapping("/{distributorId}/investors/{investorId}/holdings")
+    public List<HoldingResponse> getInvestorHoldings(
+            @PathVariable UUID distributorId,
+            @PathVariable UUID investorId,
+            @AuthenticationPrincipal AuthenticatedDistributorPrincipal principal
+    ) {
+        assertDistributorAccess(principal, distributorId);
+        return portfolioService.getInvestorHoldingsForDistributor(distributorId, investorId);
     }
 
     @GetMapping("/{distributorId}/sips")
@@ -66,6 +84,46 @@ public class DashboardController {
     ) {
         assertDistributorAccess(principal, distributorId);
         return dashboardService.getOnboardingPipeline(distributorId);
+    }
+
+    // ── Notifications feed (investor.md R8 / M5) ─────────────────────────────
+    @GetMapping("/{distributorId}/notifications")
+    public List<DistributorNotification> notifications(
+            @PathVariable UUID distributorId,
+            @RequestParam(defaultValue = "false") boolean unreadOnly,
+            @AuthenticationPrincipal AuthenticatedDistributorPrincipal principal
+    ) {
+        assertDistributorAccess(principal, distributorId);
+        return unreadOnly ? notificationService.listUnread(distributorId) : notificationService.list(distributorId);
+    }
+
+    @GetMapping("/{distributorId}/notifications/unread-count")
+    public Map<String, Long> unreadNotificationCount(
+            @PathVariable UUID distributorId,
+            @AuthenticationPrincipal AuthenticatedDistributorPrincipal principal
+    ) {
+        assertDistributorAccess(principal, distributorId);
+        return Map.of("unread", notificationService.unreadCount(distributorId));
+    }
+
+    @PostMapping("/{distributorId}/notifications/{notificationId}/read")
+    public Map<String, Boolean> markNotificationRead(
+            @PathVariable UUID distributorId,
+            @PathVariable UUID notificationId,
+            @AuthenticationPrincipal AuthenticatedDistributorPrincipal principal
+    ) {
+        assertDistributorAccess(principal, distributorId);
+        notificationService.markRead(distributorId, notificationId);
+        return Map.of("ok", Boolean.TRUE);
+    }
+
+    @PostMapping("/{distributorId}/notifications/read-all")
+    public Map<String, Integer> markAllNotificationsRead(
+            @PathVariable UUID distributorId,
+            @AuthenticationPrincipal AuthenticatedDistributorPrincipal principal
+    ) {
+        assertDistributorAccess(principal, distributorId);
+        return Map.of("marked", notificationService.markAllRead(distributorId));
     }
 
     private void assertDistributorAccess(AuthenticatedDistributorPrincipal principal, UUID distributorId) {

@@ -16,6 +16,7 @@ import com.platizio.wealthtech.domain.InvestorAccount;
 import com.platizio.wealthtech.domain.InvestorAccountStatus;
 import com.platizio.wealthtech.domain.OtpPurpose;
 import com.platizio.wealthtech.dto.InvestorSignupRequest;
+import com.platizio.wealthtech.repository.DistributorRepository;
 import com.platizio.wealthtech.repository.InvestorAccountRepository;
 import com.platizio.wealthtech.repository.InvestorRepository;
 import java.util.Optional;
@@ -39,13 +40,14 @@ class InvestorAuthServiceTest {
     @Mock private JwtService jwtService;
     @Mock private TermsAcceptanceService termsAcceptanceService;
     @Mock private ConsentRecordService consentRecordService;
+    @Mock private DistributorRepository distributorRepository;
 
     private InvestorAuthService service;
 
     @BeforeEach
     void setUp() {
         service = new InvestorAuthService(accountRepository, investorRepository, otpService, jwtService,
-                termsAcceptanceService, consentRecordService);
+                termsAcceptanceService, consentRecordService, distributorRepository);
         lenient().when(accountRepository.save(any(InvestorAccount.class))).thenAnswer(inv -> inv.getArgument(0));
         lenient().when(jwtService.generateInvestorToken(any(), anyString())).thenReturn("investor.jwt.token");
     }
@@ -82,7 +84,10 @@ class InvestorAuthServiceTest {
     void signupVerifiesOtpCreatesActiveAccountAndRecordsConsent() {
         when(accountRepository.existsByEmailIgnoreCase("priya@example.com")).thenReturn(false);
         when(accountRepository.existsByPan("ABCDE1234F")).thenReturn(false);
-        when(investorRepository.findByPan("ABCDE1234F")).thenReturn(Optional.empty());
+        // Invite-only signup: a distributor must have already onboarded this PAN.
+        Investor invited = new Investor();
+        ReflectionTestUtils.setField(invited, "id", UUID.randomUUID());
+        when(investorRepository.findByPan("ABCDE1234F")).thenReturn(Optional.of(invited));
 
         InvestorAuthService.InvestorAuthResult result = service.signup(signupRequest(), "203.0.113.7", "UA");
 
@@ -95,7 +100,7 @@ class InvestorAuthServiceTest {
         assertThat(saved.getPan()).isEqualTo("ABCDE1234F");
         assertThat(saved.getMobileNumber()).isEqualTo("9876543210");
         assertThat(saved.getEmailVerified()).isTrue();
-        assertThat(saved.getMobileVerified()).isFalse();
+        assertThat(saved.getMobileVerified()).isTrue();   // dummy-verified at registration (no live SMS yet)
         assertThat(saved.getStatus()).isEqualTo(InvestorAccountStatus.ACTIVE);
         assertThat(result.token()).isEqualTo("investor.jwt.token");
         // T&C + email-ownership consent evidence persisted
@@ -135,6 +140,9 @@ class InvestorAuthServiceTest {
     void signupPropagatesBadOtp() {
         when(accountRepository.existsByEmailIgnoreCase(anyString())).thenReturn(false);
         when(accountRepository.existsByPan(anyString())).thenReturn(false);
+        Investor invited = new Investor();
+        ReflectionTestUtils.setField(invited, "id", UUID.randomUUID());
+        when(investorRepository.findByPan(anyString())).thenReturn(Optional.of(invited));
         doThrow(new BadCredentialsException("bad code"))
                 .when(otpService).verify("priya@example.com", OtpPurpose.INVESTOR_SIGNUP, "123456");
 
@@ -150,6 +158,7 @@ class InvestorAuthServiceTest {
         ReflectionTestUtils.setField(active, "id", UUID.randomUUID());
         active.setEmail("a@example.com");
         active.setStatus(InvestorAccountStatus.ACTIVE);
+        active.setInvestorId(UUID.randomUUID()); // R6: login requires a linked distributor
         when(accountRepository.findByEmailIgnoreCase("a@example.com")).thenReturn(Optional.of(active));
 
         InvestorAuthService.InvestorAuthResult result = service.otpLogin("A@Example.com", "654321");

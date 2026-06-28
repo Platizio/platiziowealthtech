@@ -35,7 +35,7 @@ class AuditActorControllerTest {
     @Test
     void investorAuditEndpointsUseAuthenticatedActor() {
         RecordingInvestorService investorService = new RecordingInvestorService();
-        InvestorController controller = new InvestorController(investorService, null, null, null, null, null);
+        InvestorController controller = new InvestorController(investorService, null, null, null, null, null, null, null);
         UUID actorId = UUID.randomUUID();
         Authentication auth = auth(actorId);
 

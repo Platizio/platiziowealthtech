@@ -26,7 +26,7 @@ public class EmailOtp extends BaseEntity {
     private String email;
 
     @Enumerated(EnumType.STRING)
-    @Column(nullable = false, length = 20)
+    @Column(nullable = false, length = 48)
     private OtpPurpose purpose;
 
     @Column(nullable = false, length = 64)

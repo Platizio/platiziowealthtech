@@ -12,5 +12,7 @@ public enum OtpPurpose {
     /** Investor-portal self-signup email verification. */
     INVESTOR_SIGNUP,
     /** Investor approval of a transaction (purchase / SIP / redemption) — 2FA. */
-    TRANSACTION_APPROVAL
+    TRANSACTION_APPROVAL,
+    /** Investor approval of a distributor-proposed profile change (investor.md R9/R10). */
+    PROFILE_CHANGE_APPROVAL
 }
