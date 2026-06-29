@@ -1660,7 +1660,45 @@ public class InvestorService implements BankVerificationStarter {
         applyBooleanField(node, "pep", investor::setPep);
         applyBooleanField(node, "relativeOfPep", investor::setRelativeOfPep);
         applyBooleanField(node, "displayNominees", investor::setDisplayNominees);
+        // Phase 2: a distributor-filled profile also carries contact + bank — persist them so an
+        // approved distributor fill actually saves the bank account (not just freezes/shows it).
+        applyTextField(node, "mobileNumber", investor::setMobileNumber);
+        applyTextField(node, "email", investor::setEmail);
+        applyBankAccount(investor, node);
         applyNominees(investor, node.get("nominees"));
+    }
+
+    /**
+     * Phase 2: persist the distributor-filled bank account on approval. Upserts the investor's
+     * bank account from the frozen {@code accountNumber}/{@code ifsc}/{@code accountType} (a blank
+     * account number is a no-op), marking it VERIFICATION_PENDING so the existing bank-verification
+     * flow can pick it up. Without this, distributor-entered bank details would be frozen + shown in
+     * the approval diff but never saved.
+     */
+    private void applyBankAccount(Investor investor, JsonNode node) {
+        JsonNode acctNode = node.get("accountNumber");
+        String accountNumber = (acctNode == null || acctNode.isNull()) ? null : acctNode.asText();
+        if (!hasText(accountNumber)) {
+            return;
+        }
+        InvestorBankAccount bank = investorBankAccountRepository.findByInvestorId(investor.getId())
+                .stream().findFirst().orElseGet(() -> {
+                    InvestorBankAccount fresh = new InvestorBankAccount();
+                    fresh.setInvestorId(investor.getId());
+                    return fresh;
+                });
+        bank.setAccountNumber(cleanText(accountNumber));
+        JsonNode ifscNode = node.get("ifsc");
+        if (ifscNode != null && !ifscNode.isNull() && hasText(ifscNode.asText())) {
+            bank.setIfscCode(normalizeIfscCode(ifscNode.asText()));
+        }
+        JsonNode typeNode = node.get("accountType");
+        if (typeNode != null && !typeNode.isNull() && hasText(typeNode.asText())) {
+            bank.setAccountType(normalizeBankAccountType(typeNode.asText()));
+        }
+        bank.setVerificationStatus(BankVerificationStatus.VERIFICATION_PENDING);
+        investorBankAccountRepository.save(bank);
+        investor.setBankVerificationStatus(BankVerificationStatus.VERIFICATION_PENDING);
     }
 
     private void applyTextField(JsonNode node, String field, java.util.function.Consumer<String> setter) {

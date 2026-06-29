@@ -42,6 +42,7 @@ class InvestorServiceSkipFormTest {
     @Mock private AuditService auditService;
     @Mock private ProfileChangeApprovalService profileChangeApprovalService;
     @Mock private com.platizio.wealthtech.repository.InvestorNomineeRepository investorNomineeRepository;
+    @Mock private com.platizio.wealthtech.repository.InvestorBankAccountRepository investorBankAccountRepository;
 
     private InvestorService service;
 
@@ -68,7 +69,7 @@ class InvestorServiceSkipFormTest {
     void setUp() {
         service = new InvestorService(
                 investorRepository,
-                null,
+                investorBankAccountRepository,
                 null,
                 auditService,
                 null,
@@ -251,6 +252,134 @@ class InvestorServiceSkipFormTest {
         assertThat(nomineeCaptor.getValue().getInvestorId()).isEqualTo(investorId);
         assertThat(nomineeCaptor.getValue().getDateOfBirth()).isEqualTo(LocalDate.of(2001, 2, 3));
         assertThat(nomineeCaptor.getValue().getSharePercent()).isEqualByComparingTo("100.00");
+    }
+
+    /**
+     * Phase 2: a distributor-filled profile carrying bank + contact persists those on approval —
+     * the bank account is UPSERTED (not just frozen + shown in the diff), and mobile/email land on
+     * the investor. Without applyBankAccount, distributor-entered bank details silently vanished.
+     */
+    @Test
+    void applyProfileChange_distributorFillBank_upsertsBankAccountAndContact() {
+        String bankJson = "{\"mobileNumber\":\"9876543210\",\"email\":\"new@x.com\","
+                + "\"accountNumber\":\"123456789012\",\"ifsc\":\"hdfc0001234\",\"accountType\":\"Savings\"}";
+        String bankHash = ConsentRecordService.sha256(bankJson);
+        ProfileChangeApprovalChallenge ch = new ProfileChangeApprovalChallenge();
+        ReflectionTestUtils.setField(ch, "id", challengeId);
+        ch.setInvestorId(investorId);
+        ch.setStatus(ProfileChangeApprovalStatus.CONSUMED);
+        ch.setPendingProfileJson(bankJson);
+        ch.setProfileChangeSha256(bankHash);
+        ch.setConsumedAt(OffsetDateTime.now());
+
+        stubInvestor(investor(InvestorLinkingStatus.PENDING_PROFILE_APPROVAL, distributorId));
+        when(profileChangeApprovalService.listForInvestor(investorId)).thenReturn(List.of(ch));
+        when(investorBankAccountRepository.findByInvestorId(investorId)).thenReturn(List.of());
+
+        Investor result = service.applyProfileChange(investorId, bankHash);
+
+        // contact applied onto the investor
+        assertThat(result.getMobileNumber()).isEqualTo("9876543210");
+        assertThat(result.getEmail()).isEqualTo("new@x.com");
+        // bank account upserted (no existing → created), marked verification-pending
+        org.mockito.ArgumentCaptor<com.platizio.wealthtech.domain.InvestorBankAccount> bankCaptor =
+                org.mockito.ArgumentCaptor.forClass(com.platizio.wealthtech.domain.InvestorBankAccount.class);
+        verify(investorBankAccountRepository).save(bankCaptor.capture());
+        assertThat(bankCaptor.getValue().getInvestorId()).isEqualTo(investorId);
+        assertThat(bankCaptor.getValue().getAccountNumber()).isEqualTo("123456789012");
+        assertThat(bankCaptor.getValue().getIfscCode()).isEqualToIgnoringCase("HDFC0001234");
+        assertThat(result.getBankVerificationStatus())
+                .isEqualTo(com.platizio.wealthtech.domain.BankVerificationStatus.VERIFICATION_PENDING);
+    }
+
+    /**
+     * Phase 2 confirming pass: the distributor-fill RICH payload (the 12 IRIS scalars +
+     * a TWO-nominee array with a 60/40 share split) round-trips through the field-agnostic
+     * apply path. Proves the distributor-fill parity — every scalar lands on the investor
+     * AND both nominees are upserted (delete-then-insert) with the right per-index share —
+     * with the same approval engine, no Phase-2-specific apply code. Non-vacuous: distinct
+     * values, two saves, ordered index/share assertions.
+     */
+    @Test
+    void applyProfileChange_distributorFillRichPayload_appliesAllScalarsAndUpsertsBothNominees() {
+        String richProfileJson =
+                "{\"dateOfBirth\":\"1985-12-25\",\"addressLine1\":\"7 Brigade Road\",\"city\":\"Bengaluru\","
+                        + "\"state\":\"KA\",\"postalCode\":\"560001\","
+                        + "\"holdingMode\":\"joint\",\"category\":\"nri\",\"gender\":\"male\","
+                        + "\"countryOfBirth\":\"India\",\"countryOfCitizenship\":\"USA\","
+                        + "\"taxResidentOtherCountry\":true,\"annualIncome\":\"above_1cr\","
+                        + "\"occupation\":\"business\",\"sourceOfWealth\":\"business_income\","
+                        + "\"pep\":false,\"relativeOfPep\":true,\"displayNominees\":true,"
+                        + "\"nominees\":["
+                        + "{\"nomineeIndex\":0,\"fullName\":\"Primary Nominee\",\"dateOfBirth\":\"1990-06-15\","
+                        + "\"relationship\":\"spouse\",\"sharePercent\":\"60.00\",\"sameAsApplicant\":false},"
+                        + "{\"nomineeIndex\":1,\"fullName\":\"Secondary Nominee\",\"dateOfBirth\":\"2010-03-09\","
+                        + "\"relationship\":\"child\",\"sharePercent\":\"40.00\",\"sameAsApplicant\":false}"
+                        + "]}";
+        String richHash = ConsentRecordService.sha256(richProfileJson);
+
+        ProfileChangeApprovalChallenge consumed = new ProfileChangeApprovalChallenge();
+        ReflectionTestUtils.setField(consumed, "id", challengeId);
+        consumed.setInvestorId(investorId);
+        consumed.setStatus(ProfileChangeApprovalStatus.CONSUMED);
+        consumed.setPendingProfileJson(richProfileJson);
+        consumed.setProfileChangeSha256(richHash);
+        consumed.setConsumedAt(OffsetDateTime.now());
+
+        stubInvestor(investor(InvestorLinkingStatus.PENDING_PROFILE_APPROVAL, distributorId));
+        when(profileChangeApprovalService.listForInvestor(investorId))
+                .thenReturn(List.of(consumed));
+
+        Investor result = service.applyProfileChange(investorId, richHash);
+
+        // Gate ran FIRST (exactly-once), then the field copy read.
+        InOrder order = inOrder(profileChangeApprovalService);
+        order.verify(profileChangeApprovalService).assertApprovedAndConsume(investorId, richHash);
+        order.verify(profileChangeApprovalService).listForInvestor(investorId);
+
+        assertThat(result.getLinkingStatus()).isEqualTo(InvestorLinkingStatus.READY);
+        // Every scalar from the distributor-filled snapshot landed on the investor.
+        assertThat(result.getDateOfBirth()).isEqualTo(LocalDate.of(1985, 12, 25));
+        assertThat(result.getAddressLine1()).isEqualTo("7 Brigade Road");
+        assertThat(result.getCity()).isEqualTo("Bengaluru");
+        assertThat(result.getState()).isEqualTo("KA");
+        assertThat(result.getPostalCode()).isEqualTo("560001");
+        assertThat(result.getHoldingMode()).isEqualTo("joint");
+        assertThat(result.getCategory()).isEqualTo("nri");
+        assertThat(result.getGender()).isEqualTo("male");
+        assertThat(result.getCountryOfBirth()).isEqualTo("India");
+        assertThat(result.getCountryOfCitizenship()).isEqualTo("USA");
+        assertThat(result.getTaxResidentOtherCountry()).isTrue();
+        assertThat(result.getAnnualIncome()).isEqualTo("above_1cr");
+        assertThat(result.getOccupation()).isEqualTo("business");
+        assertThat(result.getSourceOfWealth()).isEqualTo("business_income");
+        assertThat(result.getPep()).isFalse();
+        assertThat(result.getRelativeOfPep()).isTrue();
+        assertThat(result.getDisplayNominees()).isTrue();
+
+        // Both nominees upserted: delete-then-insert, then one save per nominee with the
+        // right index/share, in array order.
+        InOrder nomineeOrder = inOrder(investorNomineeRepository);
+        nomineeOrder.verify(investorNomineeRepository).deleteByInvestorId(investorId);
+        org.mockito.ArgumentCaptor<com.platizio.wealthtech.domain.InvestorNominee> nomineeCaptor =
+                org.mockito.ArgumentCaptor.forClass(com.platizio.wealthtech.domain.InvestorNominee.class);
+        nomineeOrder.verify(investorNomineeRepository, org.mockito.Mockito.times(2))
+                .save(nomineeCaptor.capture());
+
+        List<com.platizio.wealthtech.domain.InvestorNominee> saved = nomineeCaptor.getAllValues();
+        assertThat(saved).hasSize(2);
+        assertThat(saved.get(0).getInvestorId()).isEqualTo(investorId);
+        assertThat(saved.get(0).getNomineeIndex()).isEqualTo(0);
+        assertThat(saved.get(0).getFullName()).isEqualTo("Primary Nominee");
+        assertThat(saved.get(0).getRelationship()).isEqualTo("spouse");
+        assertThat(saved.get(0).getDateOfBirth()).isEqualTo(LocalDate.of(1990, 6, 15));
+        assertThat(saved.get(0).getSharePercent()).isEqualByComparingTo("60.00");
+        assertThat(saved.get(1).getInvestorId()).isEqualTo(investorId);
+        assertThat(saved.get(1).getNomineeIndex()).isEqualTo(1);
+        assertThat(saved.get(1).getFullName()).isEqualTo("Secondary Nominee");
+        assertThat(saved.get(1).getRelationship()).isEqualTo("child");
+        assertThat(saved.get(1).getDateOfBirth()).isEqualTo(LocalDate.of(2010, 3, 9));
+        assertThat(saved.get(1).getSharePercent()).isEqualByComparingTo("40.00");
     }
 
     @Test
