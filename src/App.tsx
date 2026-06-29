@@ -73,8 +73,6 @@ const InvestorMgmt        = lazy(() => import('./views/InvestorMgmt'));
 // Investor portal views (Phase 1)
 const InvestorLoginPage      = lazy(() => import('./views/InvestorLoginPage'));
 const InvestorSignup         = lazy(() => import('./views/InvestorSignup'));
-const InvestorLinkApprove    = lazy(() => import('./views/InvestorLinkApprove'));
-const InvestorLinkForm       = lazy(() => import('./views/InvestorLinkForm'));
 const InvestorOnboardingReview = lazy(() => import('./views/InvestorOnboardingReview'));
 const InvestorLinkApproval    = lazy(() => import('./views/InvestorLinkApproval'));
 
@@ -87,8 +85,6 @@ const InvestorDashboard      = lazy(() => import('./views/InvestorDashboard'));
 const InvestorKyc            = lazy(() => import('./views/InvestorKyc'));
 const InvestorProfile        = lazy(() => import('./views/InvestorProfile'));
 const InvestorInvest         = lazy(() => import('./views/InvestorInvest'));
-const InvestorProfileForm    = lazy(() => import('./views/InvestorProfileForm'));
-const InvestorApprovals      = lazy(() => import('./views/InvestorApprovals'));
 const InvestorNominees       = lazy(() => import('./views/InvestorNominees'));
 const InvestorDashboardLuxe  = lazy(() => import('./views/InvestorDashboardLuxe'));
 
@@ -228,10 +224,6 @@ export default function App() {
           purpose — the page itself prompts an unauthenticated investor through
           the OTP auth (with a return-to back here) before showing the review. */}
       <Route path="/investor/approve" element={<InvestorLinkApproval />} />
-      {/* Net-new public investor routes (mine): no-auth link-approve + editable
-          onboarding/link form. Both target views are present in the merged tree. */}
-      <Route path="/investor/link-approve" element={<InvestorLinkApprove />} />
-      <Route path="/investor/link-form" element={<InvestorLinkForm />} />
       {investorSession ? (
         <>
           {/* Full-screen immersive "Luxe" dashboard — rendered OUTSIDE the sidebar
@@ -246,8 +238,6 @@ export default function App() {
             <Route path="/investor/onboarding" element={<InvestorOnboardingReview />} />
             <Route path="/investor/kyc" element={<InvestorKyc />} />
             <Route path="/investor/invest" element={<InvestorInvest />} />
-            <Route path="/investor/profile-form" element={<InvestorProfileForm />} />
-            <Route path="/investor/profile-approvals" element={<InvestorApprovals />} />
             <Route path="/investor/nominations" element={<InvestorNominees />} />
             <Route path="/investor/approvals" element={<InvestorApprovalCenter />} />
             <Route path="/investor/withdrawals" element={<InvestorWithdrawal />} />
@@ -434,7 +424,7 @@ function InvestorShell({
               </button>
               <button
                 type="button"
-                onClick={() => navigate('/investor/profile-form')}
+                onClick={() => navigate('/investor/profile')}
                 className="rounded-lg px-3 py-1.5 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-900"
               >
                 My Profile
@@ -445,13 +435,6 @@ function InvestorShell({
                 className="rounded-lg px-3 py-1.5 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-900"
               >
                 Approvals
-              </button>
-              <button
-                type="button"
-                onClick={() => navigate('/investor/profile-approvals')}
-                className="rounded-lg px-3 py-1.5 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-900"
-              >
-                Change Requests
               </button>
               <button
                 type="button"
