@@ -43,7 +43,7 @@ class InvestorControllerSendToInvestorTest {
     @BeforeEach
     void setUp() {
         controller = new InvestorController(
-                investorService, null, null, null, null, null, investorLinkRequestService);
+                investorService, null, null, null, null, null, investorLinkRequestService, null);
     }
 
     private SendToInvestorRequest request() {

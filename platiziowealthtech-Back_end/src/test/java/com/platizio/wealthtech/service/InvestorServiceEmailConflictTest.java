@@ -167,7 +167,8 @@ class InvestorServiceEmailConflictTest {
                 null,
                 null,
                 null,
-                null
+                null,
+                null, null, null, null, null, null, null, null, null, null, null, null, null
         );
     }
 
@@ -191,7 +192,8 @@ class InvestorServiceEmailConflictTest {
                 InvestorRelationshipType.MINOR,
                 null,
                 null,
-                null
+                null,
+                null, null, null, null, null, null, null, null, null, null, null, null, null
         );
     }
 

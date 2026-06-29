@@ -135,6 +135,30 @@ public class Investor extends BaseEntity {
     private String mobileVerificationMethod;
     private String mobileBelongsTo;
 
+    // IRIS rich onboarding fields (Phase 1). All nullable — promoted out of the legacy
+    // onboarding_notes key=value smuggling into proper columns. These join the canonical
+    // onboarding freeze and apply-back and are fed to Cybrilla kyc_form.
+    @Column(length = 32)
+    private String holdingMode;
+    @Column(length = 16)
+    private String category;
+    @Column(length = 16)
+    private String gender;
+    @Column(length = 64)
+    private String countryOfBirth;
+    @Column(length = 64)
+    private String countryOfCitizenship;
+    private Boolean taxResidentOtherCountry;
+    @Column(length = 32)
+    private String annualIncome;
+    @Column(length = 48)
+    private String occupation;
+    @Column(length = 48)
+    private String sourceOfWealth;
+    private Boolean pep;
+    private Boolean relativeOfPep;
+    private Boolean displayNominees;
+
     public UUID getDistributorId() { return distributorId; }
     public void setDistributorId(UUID distributorId) { this.distributorId = distributorId; }
 
@@ -261,4 +285,29 @@ public class Investor extends BaseEntity {
     public void setMobileVerificationMethod(String mobileVerificationMethod) { this.mobileVerificationMethod = mobileVerificationMethod; }
     public String getMobileBelongsTo() { return mobileBelongsTo; }
     public void setMobileBelongsTo(String mobileBelongsTo) { this.mobileBelongsTo = mobileBelongsTo; }
+
+    public String getHoldingMode() { return holdingMode; }
+    public void setHoldingMode(String holdingMode) { this.holdingMode = holdingMode; }
+    public String getCategory() { return category; }
+    public void setCategory(String category) { this.category = category; }
+    public String getGender() { return gender; }
+    public void setGender(String gender) { this.gender = gender; }
+    public String getCountryOfBirth() { return countryOfBirth; }
+    public void setCountryOfBirth(String countryOfBirth) { this.countryOfBirth = countryOfBirth; }
+    public String getCountryOfCitizenship() { return countryOfCitizenship; }
+    public void setCountryOfCitizenship(String countryOfCitizenship) { this.countryOfCitizenship = countryOfCitizenship; }
+    public Boolean getTaxResidentOtherCountry() { return taxResidentOtherCountry; }
+    public void setTaxResidentOtherCountry(Boolean taxResidentOtherCountry) { this.taxResidentOtherCountry = taxResidentOtherCountry; }
+    public String getAnnualIncome() { return annualIncome; }
+    public void setAnnualIncome(String annualIncome) { this.annualIncome = annualIncome; }
+    public String getOccupation() { return occupation; }
+    public void setOccupation(String occupation) { this.occupation = occupation; }
+    public String getSourceOfWealth() { return sourceOfWealth; }
+    public void setSourceOfWealth(String sourceOfWealth) { this.sourceOfWealth = sourceOfWealth; }
+    public Boolean getPep() { return pep; }
+    public void setPep(Boolean pep) { this.pep = pep; }
+    public Boolean getRelativeOfPep() { return relativeOfPep; }
+    public void setRelativeOfPep(Boolean relativeOfPep) { this.relativeOfPep = relativeOfPep; }
+    public Boolean getDisplayNominees() { return displayNominees; }
+    public void setDisplayNominees(Boolean displayNominees) { this.displayNominees = displayNominees; }
 }

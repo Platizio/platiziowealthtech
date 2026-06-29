@@ -2,6 +2,8 @@ package com.platizio.wealthtech.controller;
 
 import com.platizio.wealthtech.domain.Investor;
 import com.platizio.wealthtech.domain.InvestorBankAccount;
+import com.platizio.wealthtech.domain.InvestorNominee;
+import com.platizio.wealthtech.repository.InvestorNomineeRepository;
 import com.platizio.wealthtech.domain.KycStatus;
 import com.platizio.wealthtech.domain.TermsAcceptance;
 import com.platizio.wealthtech.dto.ContactDeclarationRequest;
@@ -79,6 +81,10 @@ public class InvestorController {
     private final TermsAcceptanceService termsAcceptanceService;
     private final OnboardingSubmissionService onboardingSubmissionService;
     private final InvestorLinkRequestService investorLinkRequestService;
+    // IRIS Phase 1: read-only source for the nominees frozen into the onboarding snapshot.
+    // Optional (nullable) so the many pure-Mockito controller tests that do not exercise
+    // the freeze path can keep passing null; onboardingSnapshotJson null-guards on it.
+    private final InvestorNomineeRepository investorNomineeRepository;
 
     public InvestorController(
             InvestorService investorService,
@@ -87,7 +93,8 @@ public class InvestorController {
             InvestorContactVerificationService contactVerificationService,
             TermsAcceptanceService termsAcceptanceService,
             OnboardingSubmissionService onboardingSubmissionService,
-            InvestorLinkRequestService investorLinkRequestService
+            InvestorLinkRequestService investorLinkRequestService,
+            InvestorNomineeRepository investorNomineeRepository
     ) {
         this.investorService = investorService;
         this.investorDocumentService = investorDocumentService;
@@ -96,6 +103,7 @@ public class InvestorController {
         this.termsAcceptanceService = termsAcceptanceService;
         this.onboardingSubmissionService = onboardingSubmissionService;
         this.investorLinkRequestService = investorLinkRequestService;
+        this.investorNomineeRepository = investorNomineeRepository;
     }
 
     @Operation(summary = "List investors", description = "Returns paginated investors visible to the authenticated distributor.")
@@ -779,11 +787,62 @@ public class InvestorController {
         snapshot.put("postalCode", investor.getPostalCode());
         snapshot.put("mobileNumber", investor.getMobileNumber());
         snapshot.put("email", investor.getEmail());
+        // IRIS Phase 1 rich fields — appended with stable keys so the hash extends to
+        // them. InvestorService.applyApprovedProfileFields applies these back, keeping
+        // the freeze ↔ apply-back field set identical across every approval path.
+        snapshot.put("holdingMode", investor.getHoldingMode());
+        snapshot.put("category", investor.getCategory());
+        snapshot.put("gender", investor.getGender());
+        snapshot.put("countryOfBirth", investor.getCountryOfBirth());
+        snapshot.put("countryOfCitizenship", investor.getCountryOfCitizenship());
+        snapshot.put("taxResidentOtherCountry", investor.getTaxResidentOtherCountry());
+        snapshot.put("annualIncome", investor.getAnnualIncome());
+        snapshot.put("occupation", investor.getOccupation());
+        snapshot.put("sourceOfWealth", investor.getSourceOfWealth());
+        snapshot.put("pep", investor.getPep());
+        snapshot.put("relativeOfPep", investor.getRelativeOfPep());
+        snapshot.put("displayNominees", investor.getDisplayNominees());
+        snapshot.put("nominees", onboardingNomineesSnapshot(investor.getId()));
         try {
             return SNAPSHOT_MAPPER.writeValueAsString(snapshot);
         } catch (com.fasterxml.jackson.core.JsonProcessingException ex) {
             throw new IllegalStateException("Failed to serialize onboarding snapshot", ex);
         }
+    }
+
+    /**
+     * Builds the frozen {@code "nominees"} array in {@code nomineeIndex} order, each
+     * nominee a fixed-key-order {@link java.util.LinkedHashMap} so the snapshot hash is
+     * deterministic. Null-guards the (optional) repository — an absent repo yields an
+     * empty list rather than an NPE.
+     */
+    private List<java.util.Map<String, Object>> onboardingNomineesSnapshot(UUID investorId) {
+        List<java.util.Map<String, Object>> nominees = new java.util.ArrayList<>();
+        if (investorNomineeRepository == null || investorId == null) {
+            return nominees;
+        }
+        for (InvestorNominee nominee : investorNomineeRepository.findByInvestorIdOrderByNomineeIndexAsc(investorId)) {
+            java.util.LinkedHashMap<String, Object> entry = new java.util.LinkedHashMap<>();
+            entry.put("nomineeIndex", nominee.getNomineeIndex());
+            entry.put("fullName", nominee.getFullName());
+            entry.put("dateOfBirth", nominee.getDateOfBirth() == null ? null : nominee.getDateOfBirth().toString());
+            entry.put("relationship", nominee.getRelationship());
+            entry.put("sharePercent", nominee.getSharePercent() == null ? null : nominee.getSharePercent().toPlainString());
+            entry.put("mobileNumber", nominee.getMobileNumber());
+            entry.put("email", nominee.getEmail());
+            entry.put("idType", nominee.getIdType());
+            entry.put("idNumber", nominee.getIdNumber());
+            entry.put("addressLine1", nominee.getAddressLine1());
+            entry.put("addressLine2", nominee.getAddressLine2());
+            entry.put("addressLine3", nominee.getAddressLine3());
+            entry.put("city", nominee.getCity());
+            entry.put("state", nominee.getState());
+            entry.put("postalCode", nominee.getPostalCode());
+            entry.put("country", nominee.getCountry());
+            entry.put("sameAsApplicant", nominee.getSameAsApplicant());
+            nominees.add(entry);
+        }
+        return nominees;
     }
 
     @GetMapping("/{investorId}/documents")

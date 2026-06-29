@@ -95,7 +95,8 @@ class InvestorCreateRequestValidationTest {
                 mobile,
                 "priya@example.com",
                 "ABCDE1234F",
-                null, null, null, null, null, null, null, null, null, null, null, null, null, null);
+                null, null, null, null, null, null, null, null, null, null, null, null, null, null,
+                null, null, null, null, null, null, null, null, null, null, null, null, null);
     }
 
     private static InvestorCreateRequest requestWithPan(String pan) {
@@ -118,7 +119,8 @@ class InvestorCreateRequestValidationTest {
                 null,
                 null,
                 null,
-                null
+                null,
+                null, null, null, null, null, null, null, null, null, null, null, null, null
         );
     }
 

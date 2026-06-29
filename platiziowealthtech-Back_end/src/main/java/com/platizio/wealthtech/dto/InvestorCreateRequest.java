@@ -9,6 +9,7 @@ import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 import java.time.LocalDate;
+import java.util.List;
 import java.util.UUID;
 
 public record InvestorCreateRequest(
@@ -37,5 +38,19 @@ public record InvestorCreateRequest(
         @Size(min = 10, max = 10, message = "Guardian PAN must be exactly 10 characters")
         @Pattern(regexp = PanFormat.INDIAN_PAN_REGEX, message = PanFormat.INDIAN_PAN_MESSAGE)
         String guardianPan,
-        String onboardingNotes
+        String onboardingNotes,
+        // IRIS rich onboarding fields (Phase 1).
+        String holdingMode,
+        String category,
+        String gender,
+        String countryOfBirth,
+        String countryOfCitizenship,
+        Boolean taxResidentOtherCountry,
+        String annualIncome,
+        String occupation,
+        String sourceOfWealth,
+        Boolean pep,
+        Boolean relativeOfPep,
+        Boolean displayNominees,
+        List<NomineeDto> nominees
 ) {}

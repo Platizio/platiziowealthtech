@@ -41,6 +41,7 @@ class InvestorServiceSkipFormTest {
     @Mock private InvestorRepository investorRepository;
     @Mock private AuditService auditService;
     @Mock private ProfileChangeApprovalService profileChangeApprovalService;
+    @Mock private com.platizio.wealthtech.repository.InvestorNomineeRepository investorNomineeRepository;
 
     private InvestorService service;
 
@@ -48,9 +49,19 @@ class InvestorServiceSkipFormTest {
     private final UUID distributorId = UUID.randomUUID();
     private final UUID investorAccountId = UUID.randomUUID();
     private final UUID challengeId = UUID.randomUUID();
+    // IRIS Phase 1: the frozen snapshot now carries the rich scalars + nominees array;
+    // applyApprovedProfileFields must apply every one of them back (shared by Phase 2).
     private final String profileJson =
             "{\"dateOfBirth\":\"1990-01-01\",\"addressLine1\":\"12 MG Road\",\"city\":\"Pune\","
-                    + "\"state\":\"MH\",\"postalCode\":\"411001\"}";
+                    + "\"state\":\"MH\",\"postalCode\":\"411001\","
+                    + "\"holdingMode\":\"single\",\"category\":\"resident_individual\",\"gender\":\"female\","
+                    + "\"countryOfBirth\":\"India\",\"countryOfCitizenship\":\"India\","
+                    + "\"taxResidentOtherCountry\":false,\"annualIncome\":\"upto_1lakh\","
+                    + "\"occupation\":\"service\",\"sourceOfWealth\":\"salary\","
+                    + "\"pep\":true,\"relativeOfPep\":false,\"displayNominees\":true,"
+                    + "\"nominees\":[{\"nomineeIndex\":0,\"fullName\":\"Nom One\","
+                    + "\"dateOfBirth\":\"2001-02-03\",\"relationship\":\"spouse\",\"sharePercent\":\"100.00\","
+                    + "\"sameAsApplicant\":false}]}";
     private final String hash = ConsentRecordService.sha256(profileJson);
 
     @BeforeEach
@@ -67,6 +78,7 @@ class InvestorServiceSkipFormTest {
                 null,
                 null,
                 profileChangeApprovalService);
+        service.setInvestorNomineeRepository(investorNomineeRepository);
         lenient().when(investorRepository.save(any(Investor.class)))
                 .thenAnswer(inv -> inv.getArgument(0));
     }
@@ -216,6 +228,29 @@ class InvestorServiceSkipFormTest {
         assertThat(result.getCity()).isEqualTo("Pune");
         assertThat(result.getState()).isEqualTo("MH");
         assertThat(result.getPostalCode()).isEqualTo("411001");
+        // IRIS Phase 1 scalars applied back from the same frozen snapshot.
+        assertThat(result.getHoldingMode()).isEqualTo("single");
+        assertThat(result.getCategory()).isEqualTo("resident_individual");
+        assertThat(result.getGender()).isEqualTo("female");
+        assertThat(result.getCountryOfBirth()).isEqualTo("India");
+        assertThat(result.getCountryOfCitizenship()).isEqualTo("India");
+        assertThat(result.getTaxResidentOtherCountry()).isFalse();
+        assertThat(result.getAnnualIncome()).isEqualTo("upto_1lakh");
+        assertThat(result.getOccupation()).isEqualTo("service");
+        assertThat(result.getSourceOfWealth()).isEqualTo("salary");
+        assertThat(result.getPep()).isTrue();
+        assertThat(result.getRelativeOfPep()).isFalse();
+        assertThat(result.getDisplayNominees()).isTrue();
+        // Nominees upserted from the snapshot's "nominees" array (delete-then-insert).
+        InOrder nomineeOrder = inOrder(investorNomineeRepository);
+        nomineeOrder.verify(investorNomineeRepository).deleteByInvestorId(investorId);
+        org.mockito.ArgumentCaptor<com.platizio.wealthtech.domain.InvestorNominee> nomineeCaptor =
+                org.mockito.ArgumentCaptor.forClass(com.platizio.wealthtech.domain.InvestorNominee.class);
+        nomineeOrder.verify(investorNomineeRepository).save(nomineeCaptor.capture());
+        assertThat(nomineeCaptor.getValue().getFullName()).isEqualTo("Nom One");
+        assertThat(nomineeCaptor.getValue().getInvestorId()).isEqualTo(investorId);
+        assertThat(nomineeCaptor.getValue().getDateOfBirth()).isEqualTo(LocalDate.of(2001, 2, 3));
+        assertThat(nomineeCaptor.getValue().getSharePercent()).isEqualByComparingTo("100.00");
     }
 
     @Test

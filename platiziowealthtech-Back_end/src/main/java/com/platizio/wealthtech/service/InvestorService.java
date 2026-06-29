@@ -11,12 +11,14 @@ import com.platizio.wealthtech.integration.PincodeLookupResult;
 import com.platizio.wealthtech.dto.InvestorCreateRequest;
 import com.platizio.wealthtech.dto.InvestorOnboardingResumeResponse;
 import com.platizio.wealthtech.dto.InvestorUpdateRequest;
+import com.platizio.wealthtech.dto.NomineeDto;
 import com.platizio.wealthtech.dto.SendToInvestorRequest;
 import com.platizio.wealthtech.integration.CybrillaClient;
 import com.platizio.wealthtech.integration.CybrillaApiException;
 import com.platizio.wealthtech.integration.ExternalReferenceIds;
 import com.platizio.wealthtech.validation.PanFormat;
 import com.platizio.wealthtech.repository.InvestorBankAccountRepository;
+import com.platizio.wealthtech.repository.InvestorNomineeRepository;
 import com.platizio.wealthtech.repository.InvestorDocumentRepository;
 import com.platizio.wealthtech.repository.InvestorRepository;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -53,7 +55,10 @@ import org.springframework.transaction.support.TransactionTemplate;
 public class InvestorService implements BankVerificationStarter {
 
     private static final Logger logger = LoggerFactory.getLogger(InvestorService.class);
-    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+    // Java-time module registered so the apply-back can convertValue a frozen nominee
+    // (ISO date string) into a NomineeDto whose dateOfBirth is a LocalDate.
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper()
+            .registerModule(new com.fasterxml.jackson.datatype.jsr310.JavaTimeModule());
     private static final List<BankVerificationStatus> AUTO_BANK_SYNC_STATUSES = List.of(
             BankVerificationStatus.VERIFICATION_PENDING,
             BankVerificationStatus.CAPTURED
@@ -73,6 +78,10 @@ public class InvestorService implements BankVerificationStarter {
     // short constructors) need not thread it through. Injected by Spring at runtime
     // and by tests via setNotificationService; null-guarded at the single emit point.
     private NotificationService notificationService;
+    // IRIS Phase 1: optional so the many test/legacy constructors need not thread it
+    // through. Injected by Spring at runtime, by tests via setInvestorNomineeRepository;
+    // null-guarded inside replaceNominees so nominee persistence is a no-op when absent.
+    private InvestorNomineeRepository investorNomineeRepository;
     private final long scheduledBankSyncFailureBackoffMs;
     private volatile long scheduledBankSyncBackoffUntilEpochMillis;
     private final TransactionTemplate deferredPersistTx;
@@ -176,6 +185,17 @@ public class InvestorService implements BankVerificationStarter {
     @Autowired(required = false)
     public void setNotificationService(NotificationService notificationService) {
         this.notificationService = notificationService;
+    }
+
+    /**
+     * IRIS Phase 1: setter-based optional injection of the nominee repository. Kept off
+     * the constructors so the existing (and test) constructor signatures are unchanged;
+     * Spring wires it at runtime, tests inject a mock. {@code required = false} keeps it
+     * optional; {@link #replaceNominees} null-guards on it.
+     */
+    @Autowired(required = false)
+    public void setInvestorNomineeRepository(InvestorNomineeRepository investorNomineeRepository) {
+        this.investorNomineeRepository = investorNomineeRepository;
     }
 
     private void ensurePoaReadinessBeforeOrderPlacement(UUID investorId, UUID actorId) {
@@ -525,6 +545,21 @@ public class InvestorService implements BankVerificationStarter {
         investor.setState(cleanText(request.state()));
         investor.setPostalCode(cleanText(request.postalCode()));
         investor.setOnboardingNotes(cleanText(request.onboardingNotes()));
+        applyIrisFields(
+                investor,
+                request.holdingMode(),
+                request.category(),
+                request.gender(),
+                request.countryOfBirth(),
+                request.countryOfCitizenship(),
+                request.taxResidentOtherCountry(),
+                request.annualIncome(),
+                request.occupation(),
+                request.sourceOfWealth(),
+                request.pep(),
+                request.relativeOfPep(),
+                request.displayNominees()
+        );
         investor.setInvestorStatus(InvestorStatus.ONBOARDING);
         investor.setKycStatus(KycStatus.PENDING);
         applyFamilyStructure(
@@ -543,6 +578,8 @@ public class InvestorService implements BankVerificationStarter {
             saved = investorRepository.save(saved);
         }
         investorRepository.flush();
+
+        replaceNominees(saved.getId(), request.nominees());
 
         auditService.log("INVESTOR", saved.getId(), "CREATED", request.distributorId(), "{\"pan_provided\":true}");
 
@@ -1608,6 +1645,22 @@ public class InvestorService implements BankVerificationStarter {
         applyTextField(node, "city", investor::setCity);
         applyTextField(node, "state", investor::setState);
         applyTextField(node, "postalCode", investor::setPostalCode);
+        // IRIS Phase 1 scalars — frozen by onboardingSnapshotJson, applied back here so
+        // the rich fields survive every approval path with no change to the approval
+        // engines (this is shared by Phase 2's distributor-fill apply path too).
+        applyTextField(node, "holdingMode", investor::setHoldingMode);
+        applyTextField(node, "category", investor::setCategory);
+        applyTextField(node, "gender", investor::setGender);
+        applyTextField(node, "countryOfBirth", investor::setCountryOfBirth);
+        applyTextField(node, "countryOfCitizenship", investor::setCountryOfCitizenship);
+        applyBooleanField(node, "taxResidentOtherCountry", investor::setTaxResidentOtherCountry);
+        applyTextField(node, "annualIncome", investor::setAnnualIncome);
+        applyTextField(node, "occupation", investor::setOccupation);
+        applyTextField(node, "sourceOfWealth", investor::setSourceOfWealth);
+        applyBooleanField(node, "pep", investor::setPep);
+        applyBooleanField(node, "relativeOfPep", investor::setRelativeOfPep);
+        applyBooleanField(node, "displayNominees", investor::setDisplayNominees);
+        applyNominees(investor, node.get("nominees"));
     }
 
     private void applyTextField(JsonNode node, String field, java.util.function.Consumer<String> setter) {
@@ -1621,6 +1674,116 @@ public class InvestorService implements BankVerificationStarter {
         JsonNode value = node.get(field);
         if (value != null && !value.isNull() && hasText(value.asText())) {
             setter.accept(java.time.LocalDate.parse(value.asText().trim()));
+        }
+    }
+
+    private void applyBooleanField(JsonNode node, String field, java.util.function.Consumer<Boolean> setter) {
+        JsonNode value = node.get(field);
+        if (value != null && !value.isNull()) {
+            setter.accept(value.asBoolean());
+        }
+    }
+
+    /**
+     * IRIS Phase 1: upserts nominees from the frozen {@code "nominees"} JSON array.
+     * Parses each element into a {@link NomineeDto} and reuses {@link #replaceNominees}
+     * (delete-then-insert) so the apply-back and the create/update paths share one
+     * persistence + validation routine. A null array (key absent) is a no-op.
+     */
+    private void applyNominees(Investor investor, JsonNode nomineesNode) {
+        if (nomineesNode == null || nomineesNode.isNull()) {
+            return;
+        }
+        List<NomineeDto> nominees = new java.util.ArrayList<>();
+        if (nomineesNode.isArray()) {
+            for (JsonNode element : nomineesNode) {
+                nominees.add(OBJECT_MAPPER.convertValue(element, NomineeDto.class));
+            }
+        }
+        replaceNominees(investor.getId(), nominees);
+    }
+
+    /** Copies the 12 IRIS scalar fields onto the investor (shared by create/update). */
+    private void applyIrisFields(
+            Investor investor,
+            String holdingMode,
+            String category,
+            String gender,
+            String countryOfBirth,
+            String countryOfCitizenship,
+            Boolean taxResidentOtherCountry,
+            String annualIncome,
+            String occupation,
+            String sourceOfWealth,
+            Boolean pep,
+            Boolean relativeOfPep,
+            Boolean displayNominees) {
+        investor.setHoldingMode(cleanText(holdingMode));
+        investor.setCategory(cleanText(category));
+        investor.setGender(cleanText(gender));
+        investor.setCountryOfBirth(cleanText(countryOfBirth));
+        investor.setCountryOfCitizenship(cleanText(countryOfCitizenship));
+        investor.setTaxResidentOtherCountry(taxResidentOtherCountry);
+        investor.setAnnualIncome(cleanText(annualIncome));
+        investor.setOccupation(cleanText(occupation));
+        investor.setSourceOfWealth(cleanText(sourceOfWealth));
+        investor.setPep(pep);
+        investor.setRelativeOfPep(relativeOfPep);
+        investor.setDisplayNominees(displayNominees);
+    }
+
+    /**
+     * IRIS Phase 1: replaces an investor's nominee set (delete-then-insert), inside the
+     * caller's transaction. A null/empty list clears the nominees. Validates at most 3
+     * nominees and — when any are present — that the share percentages sum to exactly 100
+     * (throws {@link IllegalArgumentException} otherwise). Null-guards on the optionally
+     * injected repository so a service built without it (legacy/test constructors that do
+     * not exercise nominees) is a no-op rather than an NPE.
+     */
+    void replaceNominees(UUID investorId, List<NomineeDto> nominees) {
+        if (investorNomineeRepository == null) {
+            return;
+        }
+        if (nominees == null || nominees.isEmpty()) {
+            investorNomineeRepository.deleteByInvestorId(investorId);
+            return;
+        }
+        if (nominees.size() > 3) {
+            throw new IllegalArgumentException("At most 3 nominees are allowed.");
+        }
+        java.math.BigDecimal shareTotal = java.math.BigDecimal.ZERO;
+        for (NomineeDto nominee : nominees) {
+            if (nominee.sharePercent() != null) {
+                shareTotal = shareTotal.add(nominee.sharePercent());
+            }
+        }
+        if (shareTotal.compareTo(new java.math.BigDecimal("100")) != 0) {
+            throw new IllegalArgumentException("Nominee share percentages must sum to 100.");
+        }
+        investorNomineeRepository.deleteByInvestorId(investorId);
+        int index = 0;
+        for (NomineeDto dto : nominees) {
+            InvestorNominee nominee = new InvestorNominee();
+            nominee.setInvestorId(investorId);
+            nominee.setNomineeIndex(dto.nomineeIndex() != null ? dto.nomineeIndex() : index);
+            nominee.setFullName(cleanText(dto.fullName()));
+            nominee.setDateOfBirth(dto.dateOfBirth());
+            nominee.setRelationship(cleanText(dto.relationship()));
+            nominee.setSharePercent(dto.sharePercent());
+            nominee.setMobileNumber(cleanText(dto.mobileNumber()));
+            nominee.setEmail(cleanText(dto.email()));
+            nominee.setIdType(cleanText(dto.idType()));
+            nominee.setIdNumber(cleanText(dto.idNumber()));
+            nominee.setAddressLine1(cleanText(dto.addressLine1()));
+            nominee.setAddressLine2(cleanText(dto.addressLine2()));
+            nominee.setAddressLine3(cleanText(dto.addressLine3()));
+            nominee.setCity(cleanText(dto.city()));
+            nominee.setState(cleanText(dto.state()));
+            nominee.setPostalCode(cleanText(dto.postalCode()));
+            nominee.setCountry(cleanText(dto.country()));
+            nominee.setSameAsApplicant(dto.sameAsApplicant() != null ? dto.sameAsApplicant() : Boolean.FALSE);
+            investorNomineeRepository.save(nominee);
+            index++;
         }
     }
 
@@ -2028,10 +2191,27 @@ public class InvestorService implements BankVerificationStarter {
             );
         }
         if (request.onboardingNotes() != null) investor.setOnboardingNotes(request.onboardingNotes());
+        if (request.holdingMode() != null) investor.setHoldingMode(cleanText(request.holdingMode()));
+        if (request.category() != null) investor.setCategory(cleanText(request.category()));
+        if (request.gender() != null) investor.setGender(cleanText(request.gender()));
+        if (request.countryOfBirth() != null) investor.setCountryOfBirth(cleanText(request.countryOfBirth()));
+        if (request.countryOfCitizenship() != null) investor.setCountryOfCitizenship(cleanText(request.countryOfCitizenship()));
+        if (request.taxResidentOtherCountry() != null) investor.setTaxResidentOtherCountry(request.taxResidentOtherCountry());
+        if (request.annualIncome() != null) investor.setAnnualIncome(cleanText(request.annualIncome()));
+        if (request.occupation() != null) investor.setOccupation(cleanText(request.occupation()));
+        if (request.sourceOfWealth() != null) investor.setSourceOfWealth(cleanText(request.sourceOfWealth()));
+        if (request.pep() != null) investor.setPep(request.pep());
+        if (request.relativeOfPep() != null) investor.setRelativeOfPep(request.relativeOfPep());
+        if (request.displayNominees() != null) investor.setDisplayNominees(request.displayNominees());
         if (identityChanged) {
             InvestorKycStateReset.resetForIdentityChange(investor);
         }
         Investor saved = investorRepository.save(investor);
+        // IRIS Phase 1: a non-null nominees list (even empty) replaces the nominee set;
+        // null leaves the existing nominees untouched (partial-update semantics).
+        if (request.nominees() != null) {
+            replaceNominees(saved.getId(), request.nominees());
+        }
         try {
             if (saved.getCybrillaInvestorId() == null || saved.getCybrillaInvestorId().isBlank()) {
                 String externalInvestorId = cybrillaClient.createInvestorProfile(saved);
@@ -2183,7 +2363,20 @@ public class InvestorService implements BankVerificationStarter {
                 request.relationshipType(),
                 request.guardianInvestorId(),
                 request.guardianPan(),
-                cleanText(request.onboardingNotes())
+                cleanText(request.onboardingNotes()),
+                cleanText(request.holdingMode()),
+                cleanText(request.category()),
+                cleanText(request.gender()),
+                cleanText(request.countryOfBirth()),
+                cleanText(request.countryOfCitizenship()),
+                request.taxResidentOtherCountry(),
+                cleanText(request.annualIncome()),
+                cleanText(request.occupation()),
+                cleanText(request.sourceOfWealth()),
+                request.pep(),
+                request.relativeOfPep(),
+                request.displayNominees(),
+                request.nominees()
         );
         Investor saved = updateInvestor(existing.getId(), update, actorId);
         if (saved.getInvestorStatus() == InvestorStatus.DRAFT) {

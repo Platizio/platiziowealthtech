@@ -50,7 +50,8 @@ class InvestorServiceAuditTest {
                 null,
                 null,
                 null,
-                "Sensitive onboarding note"
+                "Sensitive onboarding note",
+                null, null, null, null, null, null, null, null, null, null, null, null, null
         ));
 
         assertThat(auditDetails.get()).isEqualTo("{\"pan_provided\":true}");
@@ -93,7 +94,8 @@ class InvestorServiceAuditTest {
                 null,
                 null,
                 null,
-                "External verification pending"
+                "External verification pending",
+                null, null, null, null, null, null, null, null, null, null, null, null, null
         ));
 
         assertThat(saved).isSameAs(lastSaved.get());
@@ -102,6 +104,69 @@ class InvestorServiceAuditTest {
         assertThat(saved.getExternalSyncPending()).isTrue();
         assertThat(saved.getExternalSyncMessage()).contains("Unable to post investor data");
         assertThat(saved.getHouseholdId()).isNotNull();
+    }
+
+    @Test
+    void createInvestorPersistsIrisScalarsOntoTheInvestor() {
+        UUID distributorId = UUID.randomUUID();
+        AtomicReference<Investor> lastSaved = new AtomicReference<>();
+        InvestorService investorService = new InvestorService(
+                investorRepository(lastSaved),
+                null,
+                new FixedDistributorService(distributorId),
+                new NoopAuditService(),
+                cybrillaClient()
+        );
+
+        investorService.createInvestor(new InvestorCreateRequest(
+                distributorId,
+                "Rich Investor",
+                "9876543210",
+                "rich@example.com",
+                "ABCDE1234F",
+                LocalDate.of(1990, 1, 1),
+                null,
+                null,
+                "Address line 1",
+                null,
+                "Mumbai",
+                "Maharashtra",
+                "400001",
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                // IRIS rich scalars.
+                "single",
+                "resident_individual",
+                "female",
+                "India",
+                "India",
+                Boolean.FALSE,
+                "upto_1lakh",
+                "service",
+                "salary",
+                Boolean.TRUE,
+                Boolean.FALSE,
+                Boolean.TRUE,
+                null
+        ));
+
+        Investor saved = lastSaved.get();
+        assertThat(saved.getHoldingMode()).isEqualTo("single");
+        assertThat(saved.getCategory()).isEqualTo("resident_individual");
+        assertThat(saved.getGender()).isEqualTo("female");
+        assertThat(saved.getCountryOfBirth()).isEqualTo("India");
+        assertThat(saved.getCountryOfCitizenship()).isEqualTo("India");
+        assertThat(saved.getTaxResidentOtherCountry()).isFalse();
+        assertThat(saved.getAnnualIncome()).isEqualTo("upto_1lakh");
+        assertThat(saved.getOccupation()).isEqualTo("service");
+        assertThat(saved.getSourceOfWealth()).isEqualTo("salary");
+        assertThat(saved.getPep()).isTrue();
+        assertThat(saved.getRelativeOfPep()).isFalse();
+        assertThat(saved.getDisplayNominees()).isTrue();
     }
 
     private InvestorRepository investorRepository() {

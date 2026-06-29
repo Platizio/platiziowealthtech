@@ -156,10 +156,14 @@ public class InvestorKycFormService {
 
     @Transactional
     public InvestorKycFormResponse updateForm(UUID investorId, String kycFormId, KycFormUpdateRequest request, UUID actorId) {
-        investorService.getInvestor(investorId, actorId);
+        Investor investor = investorService.getInvestor(investorId, actorId);
         InvestorKycForm form = loadForm(investorId, kycFormId);
 
-        Map<String, Object> payload = buildUpdatePayload(request);
+        // IRIS Phase 1: source KYC-form fields from the investor's own rich columns
+        // (no re-collecting). A caller-supplied value still wins; the investor column
+        // only fills a gap.
+        KycFormUpdateRequest effectiveRequest = mergeInvestorKycFields(request, investor);
+        Map<String, Object> payload = buildUpdatePayload(effectiveRequest);
         if (payload.isEmpty()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "No KYC form fields supplied to update.");
         }
@@ -321,6 +325,79 @@ public class InvestorKycFormService {
                 .orElseThrow(() -> new ResponseStatusException(
                         HttpStatus.NOT_FOUND,
                         "No KYC form '" + kycFormId + "' found for this investor."));
+    }
+
+    /**
+     * IRIS Phase 1: overlays the investor's own rich columns onto a {@link KycFormUpdateRequest}
+     * so the Cybrilla kyc_form is fed from the stored profile instead of re-collected. Mapping:
+     * residential_status←category, gender←gender, occupation_type←occupation,
+     * country_of_birth←countryOfBirth, income_slab←annualIncome, pep_details←pep,
+     * citizenship_countries←countryOfCitizenship, tax_residency_other_than_india←taxResidentOtherCountry.
+     * A caller-supplied value always wins; the investor column only fills a gap.
+     */
+    private KycFormUpdateRequest mergeInvestorKycFields(KycFormUpdateRequest request, Investor investor) {
+        if (investor == null) {
+            return request;
+        }
+        String emailAddress = request == null ? null : request.emailAddress();
+        String phoneIsd = request == null ? null : request.phoneIsd();
+        String phoneNumber = request == null ? null : request.phoneNumber();
+        String maritalStatus = request == null ? null : request.maritalStatus();
+        String fatherName = request == null ? null : request.fatherName();
+        String spouseName = request == null ? null : request.spouseName();
+        String aadhaarNumber = request == null ? null : request.aadhaarNumber();
+        String placeOfBirth = request == null ? null : request.placeOfBirth();
+        String nationalityCountry = request == null ? null : request.nationalityCountry();
+        Double geoLatitude = request == null ? null : request.geoLatitude();
+        Double geoLongitude = request == null ? null : request.geoLongitude();
+
+        String residentialStatus = firstText(request == null ? null : request.residentialStatus(), investor.getCategory());
+        String gender = firstText(request == null ? null : request.gender(), investor.getGender());
+        String occupationType = firstText(request == null ? null : request.occupationType(), investor.getOccupation());
+        String countryOfBirth = firstText(request == null ? null : request.countryOfBirth(), investor.getCountryOfBirth());
+        String incomeSlab = firstText(request == null ? null : request.incomeSlab(), investor.getAnnualIncome());
+        String pepDetails = request == null ? null : request.pepDetails();
+        if (!StringUtils.hasText(pepDetails) && investor.getPep() != null) {
+            pepDetails = investor.getPep() ? "true" : "false";
+        }
+        List<String> citizenshipCountries = request == null ? null : request.citizenshipCountries();
+        if ((citizenshipCountries == null || citizenshipCountries.isEmpty())
+                && StringUtils.hasText(investor.getCountryOfCitizenship())) {
+            citizenshipCountries = List.of(investor.getCountryOfCitizenship());
+        }
+        Boolean taxResidency = request == null ? null : request.taxResidencyOtherThanIndia();
+        if (taxResidency == null) {
+            taxResidency = investor.getTaxResidentOtherCountry();
+        }
+
+        return new KycFormUpdateRequest(
+                emailAddress,
+                phoneIsd,
+                phoneNumber,
+                residentialStatus,
+                gender,
+                maritalStatus,
+                fatherName,
+                spouseName,
+                occupationType,
+                aadhaarNumber,
+                countryOfBirth,
+                placeOfBirth,
+                incomeSlab,
+                pepDetails,
+                citizenshipCountries,
+                nationalityCountry,
+                taxResidency,
+                geoLatitude,
+                geoLongitude
+        );
+    }
+
+    private String firstText(String preferred, String fallback) {
+        if (StringUtils.hasText(preferred)) {
+            return preferred;
+        }
+        return StringUtils.hasText(fallback) ? fallback : null;
     }
 
     private Map<String, Object> buildUpdatePayload(KycFormUpdateRequest request) {

@@ -95,7 +95,8 @@ class InvestorSoftDeleteTest {
                 null, null, null,
                 null, null, null, null, null,
                 null, null, null, null, null,
-                null
+                null,
+                null, null, null, null, null, null, null, null, null, null, null, null, null
         );
 
         assertThatThrownBy(() -> investorService.createInvestor(request, null))

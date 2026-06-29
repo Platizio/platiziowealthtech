@@ -46,7 +46,7 @@ class InvestorControllerDistributorProfileTest {
     @BeforeEach
     void setUp() {
         controller = new InvestorController(
-                investorService, null, null, null, null, null, null);
+                investorService, null, null, null, null, null, null, null);
     }
 
     private DistributorProfileSubmitRequest request() {
