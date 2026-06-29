@@ -10,6 +10,7 @@ import CybrillaKycReasonDialog, { type CybrillaKycReasonDialogContent } from '..
 import KycFlowPanel from '../components/KycFlowPanel';
 import KycProviderLink from '../components/KycProviderLink';
 import PincodeCityFields from '../components/PincodeCityFields';
+import NomineeFields, { emptyNominee, type NomineeValue } from '../components/NomineeFields';
 import SandboxDemoGuide from '../components/SandboxDemoGuide';
 import ContactVerification from '../components/ContactVerification';
 import { fetchIfscDetails } from '../utils/referenceLookup';
@@ -256,6 +257,8 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
     relationshipType: resumeInvestor?.relationshipType || '', // DF-09: no auto-populated default; distributor must choose
     householdName: resumeInvestor?.householdName || '',
     guardianPan: resumeInvestor?.guardianPan || '',
+    holdingMode: resumeInvestor?.holdingMode || '', // IRIS P1: Single / Anyone or Survivor
+    category: resumeInvestor?.category || '',       // IRIS P1: Resident / NRI
   });
 
   // ── Step 2 — Consent (Aadhaar OTP happens on Cybrilla Digilocker in step 3) ─
@@ -306,8 +309,15 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
     state: resumeInvestor?.state || '',
     postalCode: resumeInvestor?.postalCode || '',
   });
-  const [showNominee, setShowNominee] = useState(false);
-  const [nominee, setNominee] = useState({ name: '', relation: '' });
+  // IRIS P1 — repeatable nominees (up to 3) + display toggle.
+  const [nominees, setNominees] = useState<NomineeValue[]>(
+    Array.isArray(resumeInvestor?.nominees) && resumeInvestor.nominees.length > 0
+      ? resumeInvestor.nominees.map((n: any) => ({ ...emptyNominee(), ...n }))
+      : [],
+  );
+  const [displayNominees, setDisplayNominees] = useState<boolean>(
+    resumeInvestor?.displayNominees ?? false,
+  );
 
   // ── Step 5 — Bank ────────────────────────────────────────────────────────────
   const [s5, setS5] = useState({ accNumber: '', ifsc: '', accType: 'Savings', primary: true });
@@ -326,7 +336,13 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
     taxResidency: noteValue(resumeInvestor?.onboardingNotes, 'tax_residency') || '', // DF-09: no default
     taxCountry: '',
     incomeSlab: '',
-    politicalExp: noteValue(resumeInvestor?.onboardingNotes, 'pep') || '', // DF-09: no default
+    // IRIS P1: PEP split into two independent Y/N flags (real fields now).
+    pep: resumeInvestor?.pep ?? false,
+    relativeOfPep: resumeInvestor?.relativeOfPep ?? false,
+    // IRIS P1: new FATCA/KYC scalars.
+    countryOfBirth: resumeInvestor?.countryOfBirth || '',
+    countryOfCitizenship: resumeInvestor?.countryOfCitizenship || '',
+    sourceOfWealth: resumeInvestor?.sourceOfWealth || '',
     declared: false,
     termsAccepted: false, // Task 4 / DF-10: T&C acceptance, separate from FATCA declaration
   });
@@ -552,11 +568,13 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
       relationshipType: investor.relationshipType || '', // DF-09: reflect saved value, no fabricated default
       householdName: investor.householdName || '',
       guardianPan: investor.guardianPan || '',
+      holdingMode: investor.holdingMode || '',
+      category: investor.category || '',
     });
     setS4({
-      gender: noteValue(investor.onboardingNotes, 'gender'),
-      occupation: noteValue(investor.onboardingNotes, 'occupation'),
-      income: noteValue(investor.onboardingNotes, 'income'),
+      gender: investor.gender || noteValue(investor.onboardingNotes, 'gender'),
+      occupation: investor.occupation || noteValue(investor.onboardingNotes, 'occupation'),
+      income: investor.annualIncome || noteValue(investor.onboardingNotes, 'income'),
       contactOwner: noteValue(investor.onboardingNotes, 'contact_owner') || '', // DF-09
       addressLine1: investor.addressLine1 || '',
       addressLine2: investor.addressLine2 || '',
@@ -564,12 +582,22 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
       state: investor.state || '',
       postalCode: investor.postalCode || '',
     });
-    const incomeFromNotes = noteValue(investor.onboardingNotes, 'income');
+    setNominees(
+      Array.isArray(investor.nominees) && investor.nominees.length > 0
+        ? investor.nominees.map((n: any) => ({ ...emptyNominee(), ...n }))
+        : [],
+    );
+    setDisplayNominees(investor.displayNominees ?? false);
+    const incomeFromNotes = investor.annualIncome || noteValue(investor.onboardingNotes, 'income');
     setS6({
       taxResidency: noteValue(investor.onboardingNotes, 'tax_residency') || '', // DF-09
       taxCountry: '',
       incomeSlab: incomeFromNotes || noteValue(investor.onboardingNotes, 'income_slab') || '',
-      politicalExp: noteValue(investor.onboardingNotes, 'pep') || '', // DF-09
+      pep: investor.pep ?? false,
+      relativeOfPep: investor.relativeOfPep ?? false,
+      countryOfBirth: investor.countryOfBirth || '',
+      countryOfCitizenship: investor.countryOfCitizenship || '',
+      sourceOfWealth: investor.sourceOfWealth || '',
       declared: false,
       termsAccepted: false, // re-confirmed below from GET /terms on resume
     });
@@ -620,6 +648,21 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
     }));
   }, [resumeStep]);
 
+  // ── IRIS P1: nominee list helpers ───────────────────────────────────────────
+  const applicantAddress = {
+    addressLine1: s4.addressLine1,
+    addressLine2: s4.addressLine2,
+    city: s4.city,
+    state: s4.state,
+    postalCode: s4.postalCode,
+    country: 'India',
+  };
+  const addNominee = () => setNominees(prev => (prev.length >= 3 ? prev : [...prev, emptyNominee()]));
+  const removeNominee = (index: number) => setNominees(prev => prev.filter((_, i) => i !== index));
+  const updateNominee = (index: number, next: NomineeValue) =>
+    setNominees(prev => prev.map((n, i) => (i === index ? next : n)));
+  const nomineeShareTotal = nominees.reduce((sum, n) => sum + (Number(n.sharePercent) || 0), 0);
+
   const buildInvestorPayload = () => ({
     distributorId,
     fullName,
@@ -635,15 +678,42 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
     city: s4.city.trim(),
     state: s4.state.trim(),
     postalCode: s4.postalCode.trim(),
+    // ── IRIS P1: real persisted scalars (no longer smuggled into notes) ────────
+    holdingMode: s1.holdingMode || null,
+    category: s1.category || null,
+    gender: s4.gender || null,
+    occupation: s4.occupation || null,
+    annualIncome: s4.income || null,
+    countryOfBirth: s6.countryOfBirth || null,
+    countryOfCitizenship: s6.countryOfCitizenship || null,
+    taxResidentOtherCountry: Boolean(s6.taxResidency && s6.taxResidency !== 'India'),
+    sourceOfWealth: s6.sourceOfWealth || null,
+    pep: Boolean(s6.pep),
+    relativeOfPep: Boolean(s6.relativeOfPep),
+    displayNominees: Boolean(displayNominees),
+    nominees: nominees.map(n => ({
+      fullName: n.fullName.trim(),
+      dateOfBirth: n.dateOfBirth || null,
+      relationship: n.relationship || null,
+      sharePercent: n.sharePercent ? Number(n.sharePercent) : null,
+      mobileNumber: n.mobileNumber ? normalizeMobile(n.mobileNumber) : null,
+      email: n.email.trim() || null,
+      idType: n.idType || null,
+      idNumber: n.idNumber.trim() || null,
+      addressLine1: n.addressLine1.trim() || null,
+      addressLine2: n.addressLine2.trim() || null,
+      addressLine3: n.addressLine3.trim() || null,
+      city: n.city.trim() || null,
+      state: n.state.trim() || null,
+      postalCode: n.postalCode.trim() || null,
+      country: n.country.trim() || null,
+      sameAsApplicant: Boolean(n.sameAsApplicant),
+    })),
     onboardingNotes: [
       `frontend_reference=${refNum}`,
-      `gender=${s4.gender}`,
-      `occupation=${s4.occupation}`,
-      `income=${s4.income}`,
       `contact_owner=${s4.contactOwner}`,
       `tax_residency=${s6.taxResidency}`,
       `income_slab=${s6.incomeSlab}`,
-      `pep=${s6.politicalExp}`,
     ].join('; '),
   });
 
@@ -844,7 +914,7 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
           && IFSC_REGEX.test(s5.ifsc)
           && Boolean(bankName)
           && !ifscLookupLoading;
-      case 6: return !!(s6.taxResidency && s6.politicalExp && s6.incomeSlab && s6.declared && s6.termsAccepted);
+      case 6: return !!(s6.taxResidency && s6.incomeSlab && s6.countryOfBirth && s6.countryOfCitizenship && s6.sourceOfWealth && s6.declared && s6.termsAccepted);
       case 7: return allRequiredDocumentsSaved;
       default: return true;
     }
@@ -2661,6 +2731,28 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
                     className={inp}
                   />
                 </Field>
+                <Field label="Mode of Holding">
+                  <select
+                    value={s1.holdingMode}
+                    onChange={e => setS1({ ...s1, holdingMode: e.target.value })}
+                    className={sel}
+                  >
+                    <option value="" disabled>Select mode</option>
+                    <option value="SINGLE">Single</option>
+                    <option value="ANYONE_OR_SURVIVOR">Anyone or Survivor</option>
+                  </select>
+                </Field>
+                <Field label="Category">
+                  <select
+                    value={s1.category}
+                    onChange={e => setS1({ ...s1, category: e.target.value })}
+                    className={sel}
+                  >
+                    <option value="" disabled>Select category</option>
+                    <option value="RESIDENT">Resident</option>
+                    <option value="NRI">NRI</option>
+                  </select>
+                </Field>
                 {s1.relationshipType === 'MINOR' && (
                   <Field label="Guardian PAN" required error={serverErrors.guardianPan}>
                     <input
@@ -3160,42 +3252,64 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
                 </Field>
               </div>
 
-              {/* Nominee — expandable */}
-              <div className="mt-5 border border-slate-200 rounded-xl overflow-hidden">
-                <button
-                  type="button"
-                  onClick={() => setShowNominee(n => !n)}
-                  className="w-full flex items-center justify-between px-4 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-50 transition-colors"
-                >
-                  <span className="flex items-center gap-2">
+              {/* IRIS P1 — Nominees (repeatable, up to 3) */}
+              <div className="mt-6">
+                <div className="mb-3 flex items-center justify-between">
+                  <span className="flex items-center gap-2 text-sm font-semibold text-slate-700">
                     <User className="w-4 h-4 text-slate-400" />
                     Nominee Details
-                    <span className="text-xs font-normal text-slate-400">(optional)</span>
+                    <span className="text-xs font-normal text-slate-400">(optional, up to 3)</span>
                   </span>
-                  <span className={`text-slate-400 text-xs transition-transform duration-200 ${showNominee ? 'rotate-180' : ''}`}>▼</span>
-                </button>
-                <AnimatePresence>
-                  {showNominee && (
-                    <motion.div
-                      initial={{ height: 0, opacity: 0 }}
-                      animate={{ height: 'auto', opacity: 1 }}
-                      exit={{ height: 0, opacity: 0 }}
-                      className="overflow-hidden"
+                  {nominees.length < 3 && (
+                    <button
+                      type="button"
+                      onClick={addNominee}
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-50"
                     >
-                      <div className="px-4 pb-5 pt-3 grid grid-cols-2 gap-4 border-t border-slate-100 bg-slate-50">
-                        <Field label="Nominee Full Name">
-                          <input value={nominee.name} onChange={e => setNominee({ ...nominee, name: e.target.value })} placeholder="Full legal name" className={inp} />
-                        </Field>
-                        <Field label="Relationship">
-                          <select value={nominee.relation} onChange={e => setNominee({ ...nominee, relation: e.target.value })} className={sel}>
-                            <option value="">Select</option>
-                            {['Spouse', 'Son', 'Daughter', 'Father', 'Mother', 'Brother', 'Sister'].map(r => <option key={r}>{r}</option>)}
-                          </select>
-                        </Field>
-                      </div>
-                    </motion.div>
+                      + Add nominee
+                    </button>
                   )}
-                </AnimatePresence>
+                </div>
+
+                {nominees.length === 0 ? (
+                  <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-center text-xs text-slate-400">
+                    No nominees added. Click "Add nominee" to register up to 3 nominees.
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    {nominees.map((nominee, index) => (
+                      <NomineeFields
+                        key={index}
+                        index={index}
+                        value={nominee}
+                        onChange={next => updateNominee(index, next)}
+                        onRemove={() => removeNominee(index)}
+                        applicantAddress={applicantAddress}
+                      />
+                    ))}
+                  </div>
+                )}
+
+                {nominees.length > 0 && (
+                  <p
+                    className={`mt-3 text-xs font-medium ${
+                      nomineeShareTotal === 100 ? 'text-green-600' : 'text-amber-600'
+                    }`}
+                  >
+                    Total nominee share: {nomineeShareTotal}% {nomineeShareTotal === 100 ? '✓' : '(should total 100%)'}
+                  </p>
+                )}
+
+                {/* Display nominees on statements toggle */}
+                <label className="mt-4 flex cursor-pointer items-center gap-3">
+                  <input
+                    type="checkbox"
+                    checked={displayNominees}
+                    onChange={e => setDisplayNominees(e.target.checked)}
+                    className="h-4 w-4 rounded border-slate-300 text-[#0B1B3E] focus:ring-blue-200"
+                  />
+                  <span className="text-sm text-slate-700">Display nominee details on statements and reports</span>
+                </label>
               </div>
             </div>
           )}
@@ -3397,16 +3511,48 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
                     <input value={s6.taxCountry} onChange={e => setS6({ ...s6, taxCountry: e.target.value })} placeholder="Tax identification number" className={inp} />
                   </Field>
                 )}
+                <Field label="Country of Birth" required>
+                  <select value={s6.countryOfBirth} onChange={e => setS6({ ...s6, countryOfBirth: e.target.value })} className={sel}>
+                    <option value="" disabled>Select country</option>
+                    {['India', 'USA', 'UK', 'Canada', 'Australia', 'UAE', 'Singapore', 'Other'].map(c => <option key={c}>{c}</option>)}
+                  </select>
+                </Field>
+                <Field label="Country of Citizenship" required>
+                  <select value={s6.countryOfCitizenship} onChange={e => setS6({ ...s6, countryOfCitizenship: e.target.value })} className={sel}>
+                    <option value="" disabled>Select country</option>
+                    {['India', 'USA', 'UK', 'Canada', 'Australia', 'UAE', 'Singapore', 'Other'].map(c => <option key={c}>{c}</option>)}
+                  </select>
+                </Field>
                 <Field label="Annual Income Slab" required>
                   <select value={s6.incomeSlab} onChange={e => setS6({ ...s6, incomeSlab: e.target.value })} className={sel}>
                     <option value="" disabled>Select slab</option>
                     {['Below ₹1 L', '₹1–5 L', '₹5–10 L', '₹10–25 L', '₹25–50 L', 'Above ₹50 L', 'Above ₹1 Cr'].map(r => <option key={r}>{r}</option>)}
                   </select>
                 </Field>
+                <Field label="Source of Wealth" required>
+                  <select value={s6.sourceOfWealth} onChange={e => setS6({ ...s6, sourceOfWealth: e.target.value })} className={sel}>
+                    <option value="" disabled>Select source</option>
+                    {['Salary', 'Business Income', 'Inheritance', 'Investments', 'Gift', 'Sale of Property', 'Other'].map(s => <option key={s}>{s}</option>)}
+                  </select>
+                </Field>
                 <Field label="Politically Exposed Person (PEP)" required>
-                  <select value={s6.politicalExp} onChange={e => setS6({ ...s6, politicalExp: e.target.value })} className={sel}>
-                    <option value="" disabled>Select</option>
-                    {['No', 'Yes', 'Related to PEP'].map(v => <option key={v}>{v}</option>)}
+                  <select
+                    value={s6.pep ? 'Yes' : 'No'}
+                    onChange={e => setS6({ ...s6, pep: e.target.value === 'Yes' })}
+                    className={sel}
+                  >
+                    <option value="No">No</option>
+                    <option value="Yes">Yes</option>
+                  </select>
+                </Field>
+                <Field label="Relative of a PEP" required>
+                  <select
+                    value={s6.relativeOfPep ? 'Yes' : 'No'}
+                    onChange={e => setS6({ ...s6, relativeOfPep: e.target.value === 'Yes' })}
+                    className={sel}
+                  >
+                    <option value="No">No</option>
+                    <option value="Yes">Yes</option>
                   </select>
                 </Field>
               </div>
