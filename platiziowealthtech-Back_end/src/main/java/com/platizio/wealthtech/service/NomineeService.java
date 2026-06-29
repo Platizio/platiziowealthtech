@@ -74,6 +74,18 @@ public class NomineeService {
         nominee.setGuardianName(request.guardianName());
 
         List<Nominee> existing = nomineeRepository.findByInvestorId(investorId);
+
+        // Assign the next free position on the shared canonical investor_nominees table
+        // (NOT NULL nominee_index, UNIQUE per investor) so self-service rows never collide
+        // with IRIS-onboarding rows.
+        int nextIndex = existing.stream()
+                .map(Nominee::getNomineeIndex)
+                .filter(java.util.Objects::nonNull)
+                .mapToInt(Integer::intValue)
+                .max()
+                .orElse(-1) + 1;
+        nominee.setNomineeIndex(nextIndex);
+
         int total = request.allocationPercentage() == null ? 0 : request.allocationPercentage();
         for (Nominee n : existing) {
             total += n.getAllocationPercentage() == null ? 0 : n.getAllocationPercentage();

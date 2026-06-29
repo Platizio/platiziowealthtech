@@ -18,6 +18,16 @@ public class Nominee extends BaseEntity {
     @Column(nullable = false)
     private UUID investorId;
 
+    /**
+     * Position of this nominee within the investor's list. Shared, NOT-NULL column on
+     * the canonical {@code investor_nominees} table with a UNIQUE (investor_id,
+     * nominee_index) index; {@link com.platizio.wealthtech.service.NomineeService}
+     * assigns the next free index on add so self-service rows never collide with
+     * IRIS-onboarding rows.
+     */
+    @Column(nullable = false)
+    private Integer nomineeIndex;
+
     @Column(nullable = false)
     private String fullName;
 
@@ -35,6 +45,9 @@ public class Nominee extends BaseEntity {
 
     public UUID getInvestorId() { return investorId; }
     public void setInvestorId(UUID investorId) { this.investorId = investorId; }
+
+    public Integer getNomineeIndex() { return nomineeIndex; }
+    public void setNomineeIndex(Integer nomineeIndex) { this.nomineeIndex = nomineeIndex; }
 
     public String getFullName() { return fullName; }
     public void setFullName(String fullName) { this.fullName = fullName; }
