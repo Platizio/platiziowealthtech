@@ -1,10 +1,13 @@
 package com.platizio.wealthtech.domain;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
 import com.platizio.wealthtech.common.BaseEntity;
 import jakarta.persistence.*;
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
 import java.util.UUID;
 import org.hibernate.annotations.SQLRestriction;
 
@@ -38,6 +41,20 @@ public class TransactionOrder extends BaseEntity {
     private String paymentMode;
     private String mandateMode;
     private String externalOrderId;
+
+    // Contract-note / allotment details. Populated only when the order is actually
+    // allotted (SUCCESSFUL/COMPLETED) — left null for PENDING/PROCESSING/FAILED so the
+    // UI shows nothing misleading. Compliance requires every completed MF transaction
+    // (contract note) to surface these.
+    @Column(name = "allotment_nav")
+    private BigDecimal allotmentNav;
+    @Column(name = "allotment_date")
+    private OffsetDateTime allotmentDate;
+    @Column(name = "stamp_duty")
+    private BigDecimal stampDuty;
+    @Column(name = "folio_number")
+    private String folioNumber;
+
     private Integer externalMandateId;
     private String mandateStatus;
     private Integer externalPaymentId;
@@ -66,6 +83,32 @@ public class TransactionOrder extends BaseEntity {
     public void setAmount(BigDecimal amount) { this.amount = amount; }
     public BigDecimal getUnits() { return units; }
     public void setUnits(BigDecimal units) { this.units = units; }
+    public BigDecimal getAllotmentNav() { return allotmentNav; }
+    public void setAllotmentNav(BigDecimal allotmentNav) { this.allotmentNav = allotmentNav; }
+    public OffsetDateTime getAllotmentDate() { return allotmentDate; }
+    public void setAllotmentDate(OffsetDateTime allotmentDate) { this.allotmentDate = allotmentDate; }
+    public BigDecimal getStampDuty() { return stampDuty; }
+    public void setStampDuty(BigDecimal stampDuty) { this.stampDuty = stampDuty; }
+    public String getFolioNumber() { return folioNumber; }
+    public void setFolioNumber(String folioNumber) { this.folioNumber = folioNumber; }
+
+    /**
+     * Derived contract-note field (not persisted): amount net of stamp duty. When a
+     * stamp duty has been charged (purchases) it is {@code amount - stampDuty};
+     * otherwise it is the raw {@code amount}. Null when amount is unknown.
+     */
+    @Transient
+    @JsonProperty("netInvested")
+    public BigDecimal getNetInvested() {
+        if (amount == null) {
+            return null;
+        }
+        if (stampDuty == null) {
+            return amount;
+        }
+        return amount.subtract(stampDuty).setScale(2, RoundingMode.HALF_UP);
+    }
+
     public String getPaymentMode() { return paymentMode; }
     public void setPaymentMode(String paymentMode) { this.paymentMode = paymentMode; }
     public String getMandateMode() { return mandateMode; }

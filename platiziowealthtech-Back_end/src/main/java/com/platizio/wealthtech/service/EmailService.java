@@ -28,22 +28,30 @@ public class EmailService {
     private final String mailHost;
     private final String fromAddress;
     private final String fromName;
+    private final boolean sendingEnabled;
 
     public EmailService(
             JavaMailSender mailSender,
             @Value("${spring.mail.host:}") String mailHost,
             @Value("${app.otp.from-address:no-reply@platizio.local}") String fromAddress,
-            @Value("${app.otp.from-name:Platizio}") String fromName
+            @Value("${app.otp.from-name:Platizio}") String fromName,
+            @Value("${app.email.enabled:true}") boolean sendingEnabled
     ) {
         this.mailSender = mailSender;
         this.mailHost = mailHost == null ? "" : mailHost.trim();
         this.fromAddress = fromAddress;
         this.fromName = fromName;
+        this.sendingEnabled = sendingEnabled;
     }
 
-    /** True when an SMTP host is configured and real email can be sent. */
+    /**
+     * True when email sending is enabled ({@code app.email.enabled}) AND an SMTP host
+     * is configured. In development {@code app.email.enabled} is false, so NO real
+     * emails are sent — callers fall back to the dev OTP code / the always-returned
+     * link URL. Set {@code APP_EMAIL_ENABLED=true} only for live testing.
+     */
     public boolean isEnabled() {
-        return !mailHost.isBlank();
+        return sendingEnabled && !mailHost.isBlank();
     }
 
     /**
@@ -53,7 +61,7 @@ public class EmailService {
      */
     public boolean sendHtml(String to, String subject, String htmlBody) {
         if (!isEnabled()) {
-            logger.info("Email disabled (no spring.mail.host). Skipping send to {} subject='{}'", to, subject);
+            logger.info("Email disabled (app.email.enabled=false or no spring.mail.host). Skipping send to {} subject='{}'", to, subject);
             return false;
         }
         try {

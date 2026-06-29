@@ -270,6 +270,22 @@ public class InvestorPortalController {
         return investorKycService.evaluateReadinessAsInvestor(requireInvestorId(account));
     }
 
+    // Sandbox/dev only — controlled by app.kyc.sandbox-simulation-enabled (false in prod).
+    @org.springframework.beans.factory.annotation.Value("${app.kyc.sandbox-simulation-enabled:false}")
+    private boolean kycSandboxSimulationEnabled;
+
+    @Operation(summary = "Simulate my KYC completion (sandbox only)",
+            description = "Sandbox/dev only: drives my KYC request to 'successful' via the FP simulate API so "
+                    + "DigiLocker (Aadhaar) + eSign complete without a real DigiLocker session. 403 in production.")
+    @PostMapping("/kyc/simulate")
+    public InvestorExternalKycResponse simulateKyc(Authentication auth) {
+        if (!kycSandboxSimulationEnabled) {
+            throw new AccessDeniedException("KYC simulation is not available in this environment.");
+        }
+        InvestorAccount account = investorAuthService.requireAccount(accountId(auth));
+        return investorKycService.simulateKycRequestAsInvestor(requireInvestorId(account), "successful");
+    }
+
     @Operation(summary = "Refresh my external KYC status")
     @PostMapping("/kyc/refresh")
     public InvestorExternalKycResponse refreshKyc(Authentication auth) {

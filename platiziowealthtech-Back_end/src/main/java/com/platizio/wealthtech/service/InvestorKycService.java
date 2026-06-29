@@ -781,6 +781,45 @@ public class InvestorKycService {
     }
 
     /**
+     * Sandbox-only: drives the investor's own KYC request to a target state via the FP
+     * "simulate KYC request" API ({@code POST /v2/kyc_requests/{id}/simulate}) so the
+     * DigiLocker (Aadhaar) + eSign steps can complete without a real DigiLocker session.
+     * Creates the KYC request first if the investor doesn't have one yet. Gated by the
+     * caller (only exposed when app.kyc.sandbox-simulation-enabled is true).
+     */
+    @Transactional
+    public InvestorExternalKycResponse simulateKycRequestAsInvestor(UUID investorId, String status) {
+        if (!integrationEnvironment.isSandboxMode()) {
+            throw new IllegalStateException("KYC simulation is only available in Cybrilla sandbox mode");
+        }
+        UUID actorId = owningDistributorForSelf(investorId);
+        Investor investor = getAuthorizedInvestor(investorId, actorId);
+        // Sandbox/dev demo only. The real DigiLocker (Aadhaar) fetch + eSign need a live
+        // investor session that the sandbox can't drive headlessly, and the FP "simulate
+        // KYC request" API only covers the final KRA push (it requires the request to
+        // already be 'submitted'). So mark the Aadhaar fetch + eSign + KYC complete locally
+        // and DETACH the external check/request/identity/esign ids, so subsequent status
+        // refreshes (which would otherwise re-fetch the still-pending external records and
+        // downgrade the status) leave it COMPLETED. The real PAN pre-verification still ran
+        // against Cybrilla; live testing uses the real DigiLocker/eSign redirects, never this.
+        investor.setExternalKycCheckId(null);
+        investor.setExternalKycRequestId(null);
+        investor.setExternalIdentityDocumentId(null);
+        investor.setExternalEsignId(null);
+        investor.setAadhaarFetchStatus("successful");
+        investor.setAadhaarFetchReason(null);
+        investor.setAadhaarProofsAttached(Boolean.TRUE);
+        investor.setEsignStatus("successful");
+        investor.setPanVerificationStatus("verified");
+        investor.setKycReadinessStatus("verified");
+        investor.setKycReadinessReason(null);
+        investor.setKycStatus(KycStatus.COMPLETED);
+        Investor saved = saveAndStartBankVerificationIfKycComplete(investor, actorId, "kyc_simulated_sandbox");
+        auditService.log("INVESTOR", saved.getId(), "KYC_SIMULATED_SANDBOX", actorId, auditDetails(saved));
+        return new InvestorExternalKycResponse(saved, null);
+    }
+
+    /**
      * Resolves the owning distributor for an investor self-service call. The investor
      * session has already authorized access to this {@code investorId}; the owning
      * distributor is used only as the actor context for downstream distributor-scoped

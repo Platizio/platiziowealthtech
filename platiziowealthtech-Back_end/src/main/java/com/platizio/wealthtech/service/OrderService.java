@@ -20,6 +20,7 @@ import com.platizio.wealthtech.repository.TransactionOrderRepository;
 import com.platizio.wealthtech.security.JwtAuthPrincipal;
 import jakarta.persistence.EntityNotFoundException;
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
@@ -60,6 +61,19 @@ public class OrderService {
     private final ProductSchemeRepository productSchemeRepository;
     private final TransactionApprovalService transactionApprovalService;
     private final InvestorAccountRepository investorAccountRepository;
+    private final com.fasterxml.jackson.databind.ObjectMapper objectMapper =
+            new com.fasterxml.jackson.databind.ObjectMapper();
+
+    /** SEBI stamp duty on purchases: 0.005% (₹0.005 per ₹100) of the invested amount. */
+    private static final BigDecimal STAMP_DUTY_RATE = new BigDecimal("0.00005");
+
+    /** Order statuses at which units are considered allotted and the contract note applies. */
+    private static final Set<OrderStatus> ALLOTTED_STATUSES = Set.of(
+            OrderStatus.SUCCESSFUL, OrderStatus.COMPLETED);
+
+    /** Purchase transaction types that incur stamp duty and produce a contract note. */
+    private static final Set<TransactionType> PURCHASE_TYPES = Set.of(
+            TransactionType.PURCHASE, TransactionType.LUMPSUM_PURCHASE, TransactionType.SIP);
 
     public OrderService(
             TransactionOrderRepository transactionOrderRepository,
@@ -657,12 +671,176 @@ public class OrderService {
         }
     }
 
+    /**
+     * Populates the contract-note / allotment fields on an order that has reached an
+     * allotted state (SUCCESSFUL/COMPLETED) for a purchase. Mutates the order in place
+     * but does NOT save — the caller persists. No-op for non-allotted statuses,
+     * redemptions/switches, and orders missing an amount, so PENDING/PROCESSING/FAILED
+     * rows never show misleading values.
+     *
+     * <p>Derivation (locked rules):
+     * <ul>
+     *   <li><b>stampDuty</b> = amount × 0.00005 (SEBI 0.005% on purchases), 2dp; null for non-purchases.</li>
+     *   <li><b>allotmentNav</b> = provider NAV when supplied, else the scheme NAV from
+     *       {@code ProductScheme.metadataJson} ("nav"), else (amount − stampDuty) ÷ units when units &gt; 0.</li>
+     *   <li><b>units</b> = kept when already set (provider value), else derived
+     *       (amount − stampDuty) ÷ allotmentNav when allotmentNav &gt; 0; never 0/garbage — left null if NAV unknown.</li>
+     *   <li><b>allotmentDate</b> = the completion time (now).</li>
+     *   <li><b>folioNumber</b> = provider folio when supplied, else falls back to externalOrderId.</li>
+     * </ul>
+     *
+     * @param order            the order being completed (mutated in place)
+     * @param providerPurchase optional FP {@code mf_purchase} JSON; provider NAV/units/folio win when present
+     */
+    public void applyAllotmentOnCompletion(TransactionOrder order, JsonNode providerPurchase) {
+        if (order == null
+                || !ALLOTTED_STATUSES.contains(order.getOrderStatus())
+                || !PURCHASE_TYPES.contains(order.getTransactionType())) {
+            return;
+        }
+        BigDecimal amount = order.getAmount();
+        if (amount == null || amount.signum() <= 0) {
+            return;
+        }
+
+        // 1) Stamp duty — SEBI 0.005% on the purchase amount, rounded to 2dp.
+        BigDecimal stampDuty = order.getStampDuty();
+        if (stampDuty == null) {
+            stampDuty = amount.multiply(STAMP_DUTY_RATE).setScale(2, RoundingMode.HALF_UP);
+            order.setStampDuty(stampDuty);
+        }
+        BigDecimal netInvested = amount.subtract(stampDuty);
+
+        // 2) Allotment NAV — provider > scheme metadata > derived (net ÷ units).
+        BigDecimal nav = order.getAllotmentNav();
+        if (nav == null || nav.signum() <= 0) {
+            nav = providerNav(providerPurchase);
+        }
+        if (nav == null || nav.signum() <= 0) {
+            nav = schemeNav(order.getProductSchemeId());
+        }
+        BigDecimal existingUnits = positiveOrNull(order.getUnits());
+        if ((nav == null || nav.signum() <= 0) && existingUnits != null) {
+            nav = netInvested.divide(existingUnits, 4, RoundingMode.HALF_UP);
+        }
+        if (nav != null && nav.signum() > 0) {
+            order.setAllotmentNav(nav.setScale(4, RoundingMode.HALF_UP));
+        }
+
+        // 3) Units — keep the provider value when set; else a provider-supplied unit count;
+        //    else derive from net ÷ NAV. Never fabricate 0/garbage: leave null if NAV unknown.
+        if (existingUnits == null) {
+            BigDecimal providerUnits = providerUnits(providerPurchase);
+            if (providerUnits != null && providerUnits.signum() > 0) {
+                order.setUnits(providerUnits.setScale(4, RoundingMode.HALF_UP));
+            } else if (nav != null && nav.signum() > 0) {
+                order.setUnits(netInvested.divide(nav, 4, RoundingMode.HALF_UP));
+            }
+        }
+
+        // 4) Allotment date — the completion time.
+        if (order.getAllotmentDate() == null) {
+            order.setAllotmentDate(OffsetDateTime.now());
+        }
+
+        // 5) Folio — provider folio when available, else fall back to the external order id.
+        if (!StringUtils.hasText(order.getFolioNumber())) {
+            String folio = providerFolio(providerPurchase);
+            if (!StringUtils.hasText(folio)) {
+                folio = order.getExternalOrderId();
+            }
+            if (StringUtils.hasText(folio)) {
+                order.setFolioNumber(folio.trim());
+            }
+        }
+    }
+
+    /** Scheme NAV from {@code ProductScheme.metadataJson} ("nav"); null when unavailable. Mirrors HoldingsService. */
+    private BigDecimal schemeNav(UUID productSchemeId) {
+        if (productSchemeId == null || productSchemeRepository == null) {
+            return null;
+        }
+        ProductScheme scheme = productSchemeRepository.findById(productSchemeId).orElse(null);
+        if (scheme == null || !StringUtils.hasText(scheme.getMetadataJson())) {
+            return null;
+        }
+        try {
+            JsonNode root = objectMapper.readTree(scheme.getMetadataJson());
+            BigDecimal nav = decimalOrNull(root, "nav");
+            return (nav != null && nav.signum() > 0) ? nav : null;
+        } catch (RuntimeException | com.fasterxml.jackson.core.JsonProcessingException ex) {
+            return null;
+        }
+    }
+
+    /** NAV from an FP mf_purchase payload, trying the common allotment-NAV field names. */
+    private static BigDecimal providerNav(JsonNode purchase) {
+        return firstDecimal(purchase, "allotted_nav", "allotment_nav", "nav", "purchase_nav", "price");
+    }
+
+    /** Allotted units from an FP mf_purchase payload. */
+    private static BigDecimal providerUnits(JsonNode purchase) {
+        return firstDecimal(purchase, "allotted_units", "units", "allotment_units");
+    }
+
+    /** Folio number from an FP mf_purchase payload. */
+    private static String providerFolio(JsonNode purchase) {
+        if (purchase == null || purchase.isNull()) {
+            return null;
+        }
+        for (String field : List.of("folio_number", "folio", "folio_no")) {
+            if (purchase.hasNonNull(field) && StringUtils.hasText(purchase.get(field).asText())) {
+                return purchase.get(field).asText().trim();
+            }
+        }
+        return null;
+    }
+
+    private static BigDecimal firstDecimal(JsonNode node, String... fields) {
+        if (node == null || node.isNull()) {
+            return null;
+        }
+        for (String field : fields) {
+            BigDecimal value = decimalOrNull(node, field);
+            if (value != null && value.signum() > 0) {
+                return value;
+            }
+        }
+        return null;
+    }
+
+    private static BigDecimal decimalOrNull(JsonNode node, String field) {
+        if (node == null || !node.has(field) || node.get(field).isNull()) {
+            return null;
+        }
+        JsonNode value = node.get(field);
+        if (value.isNumber()) {
+            return value.decimalValue();
+        }
+        if (value.isTextual() && StringUtils.hasText(value.asText())) {
+            try {
+                return new BigDecimal(value.asText().trim());
+            } catch (NumberFormatException ex) {
+                return null;
+            }
+        }
+        return null;
+    }
+
+    private static BigDecimal positiveOrNull(BigDecimal value) {
+        return (value != null && value.signum() > 0) ? value : null;
+    }
+
     @Transactional
     public TransactionOrder updateOrderStatus(UUID orderId, OrderStatus status, String failureReason, UUID actorId) {
         TransactionOrder order = transactionOrderRepository.findById(orderId)
                 .orElseThrow(() -> new EntityNotFoundException("Order not found"));
         order.setOrderStatus(status);
         order.setFailureReason(failureReason);
+        // Demo advancer + admin status PATCH funnel here. When the order reaches an
+        // allotted state, populate the contract-note fields (no provider purchase JSON
+        // available on this path, so values are derived from the scheme NAV / amount).
+        applyAllotmentOnCompletion(order, null);
         TransactionOrder saved = transactionOrderRepository.save(order);
         auditService.log("ORDER", saved.getId(), "ORDER_STATUS_UPDATED", actorId, "{\"status\":\"" + status + "\"}");
 
