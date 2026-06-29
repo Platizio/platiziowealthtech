@@ -336,6 +336,9 @@ export default function InvestorDashboardLuxe({
                                   {h.amcName || '—'} · {fmtUnits(h.units)} units · NAV {fmtNav(h.latestNav)}
                                   {fmtDate(h.navAsOf) ? ` · ${fmtDate(h.navAsOf)}` : ''}
                                 </p>
+                                {h.folio && (
+                                  <p className="mt-0.5 truncate font-mono text-[11px] text-white/30">Folio {h.folio}</p>
+                                )}
                               </div>
                               <div className="flex flex-shrink-0 items-center gap-5 text-right">
                                 <div>

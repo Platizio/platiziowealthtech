@@ -192,6 +192,8 @@ export default function InvestorKyc() {
   const [readinessBusy, setReadinessBusy] = useState(false);
   const [readinessError, setReadinessError] = useState('');
 
+  const [simulating, setSimulating] = useState(false);
+
   const loadStatus = useCallback(async () => {
     setLoading(true);
     setError('');
@@ -279,6 +281,24 @@ export default function InvestorKyc() {
       setActionError(e instanceof Error ? e.message : 'PAN verification failed.');
     } finally {
       setVerifying(false);
+    }
+  };
+
+  // Sandbox/dev only: simulate the DigiLocker + eSign completion (FP simulate API) so KYC
+  // reaches 'successful' without a real DigiLocker session.
+  const simulateKyc = async () => {
+    setSimulating(true);
+    setActionError('');
+    try {
+      await postJson('/investor/kyc/simulate');
+      // Reload status only — it reflects the simulated COMPLETED state (the success
+      // screen). Don't re-run the real readiness check, which would still report the
+      // sandbox PAN as KYC-unavailable and contradict the simulated completion.
+      await loadStatus();
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : 'Could not simulate KYC.');
+    } finally {
+      setSimulating(false);
     }
   };
 
@@ -595,6 +615,27 @@ export default function InvestorKyc() {
               )}
             </div>
           </div>
+        </div>
+      )}
+
+      {/* SANDBOX ONLY — simulate DigiLocker + eSign so KYC completes without a real Aadhaar session. */}
+      {import.meta.env.DEV && (
+        <div className="rounded-2xl border border-amber-200 bg-amber-50/60 p-6 shadow-sm">
+          <div className="mb-2 flex items-center gap-2">
+            <ShieldAlert className="h-4 w-4 text-amber-600" />
+            <h2 className="text-sm font-semibold text-amber-800">Sandbox testing</h2>
+          </div>
+          <p className="mb-4 text-sm text-amber-700">
+            DigiLocker needs a real Aadhaar session that isn't available in the sandbox. Use this to
+            simulate the DigiLocker + eSign completion so your KYC reaches <strong>successful</strong>.
+          </p>
+          <button
+            onClick={() => void simulateKyc()}
+            disabled={simulating}
+            className="flex w-full items-center justify-center gap-2 rounded-xl bg-amber-600 py-3 text-sm font-semibold text-white transition-all hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {simulating ? (<><Loader2 className="h-4 w-4 animate-spin" /> Simulating…</>) : 'Simulate DigiLocker & eSign (sandbox)'}
+          </button>
         </div>
       )}
 

@@ -39,6 +39,13 @@ const formatSchemeNav = (rawNav: unknown): string => {
     : '—';
 };
 
+// Allotment helpers: units up to 3 decimals, NAV as ₹ with 2–4 decimals.
+const formatUnits = (value: number): string =>
+  value.toLocaleString('en-IN', { maximumFractionDigits: 3 });
+
+const formatAllotmentNav = (value: number): string =>
+  `₹${value.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 4 })}`;
+
 const formatSchemeReturn = (rawReturn: unknown): string => {
   const num = typeof rawReturn === 'number' ? rawReturn : Number(String(rawReturn ?? '').replace(/[^0-9.-]/g, ''));
   if (!Number.isFinite(num)) return '+0.0%';
@@ -527,6 +534,25 @@ export default function InvestorTransaction({ investor, onComplete, onBack }: Pr
             <Row label="Fund"           value={product?.name || ''}               />
             <Row label="Type"           value={txType === 'sip' ? `SIP · ${frequencyLabel(frequency)}` : 'Lumpsum'} />
             <Row label="Amount"         value={`₹${amountNum.toLocaleString('en-IN')}`} />
+            {/* Contract-note / allotment fields — only after allotment, when present. */}
+            {createdOrder?.units != null && (
+              <Row label="Units allotted" value={formatUnits(createdOrder.units)} mono />
+            )}
+            {createdOrder?.allotmentNav != null && (
+              <Row label="NAV (allotment price)" value={formatAllotmentNav(createdOrder.allotmentNav)} mono />
+            )}
+            {createdOrder?.allotmentDate && (
+              <Row label="Allotment date" value={formatDate(createdOrder.allotmentDate)} />
+            )}
+            {createdOrder?.folioNumber && (
+              <Row label="Folio number" value={createdOrder.folioNumber} mono />
+            )}
+            {createdOrder?.stampDuty != null && (
+              <Row label="Stamp duty" value={`₹${createdOrder.stampDuty.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`} />
+            )}
+            {createdOrder?.netInvested != null && (
+              <Row label="Net invested" value={`₹${createdOrder.netInvested.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`} />
+            )}
             {txType === 'sip' && <Row label="Start Date" value={formatDate(startDate)} />}
             {txType === 'sip' && instalments && <Row label="Instalments" value={String(instalments)} />}
             <Row label="Bank"           value={bankLabel(bank)}  />

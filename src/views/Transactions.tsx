@@ -6,7 +6,7 @@ import { apiFetch } from '../config/api';
 import InvestorActionLink from '../components/InvestorActionLink';
 import Pagination from '../components/Pagination';
 import { getPageContent, getPageMeta } from '../utils/pagination';
-import { formatDateTime } from '../utils/formatDate';
+import { formatDate, formatDateTime } from '../utils/formatDate';
 import { buildInvestorActionUrl, formatOrderStatusLabel, normalizeOrderStatus } from '../utils/investorAction';
 import { isPersistedSchemeId } from '../utils/productSchemeKey';
 import { isSipCancellable } from '../utils/sipCancel';
@@ -36,6 +36,14 @@ const statusConfig: Record<StatusKey, { color: string; icon: React.ReactNode; la
 };
 
 const ORDER_STATUS_STEPS = ['Pending', 'Processing', 'Completed'];
+
+// Allotment / contract-note formatters (units 3 dp, NAV ₹ 2–4 dp, money ₹ 2 dp).
+const formatUnits = (value: number): string =>
+  value.toLocaleString('en-IN', { maximumFractionDigits: 3 });
+const formatAllotmentNav = (value: number): string =>
+  `₹${value.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 4 })}`;
+const formatRupees = (value: number): string =>
+  `₹${value.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 const getOrderStatusStepIndex = (status?: string) => {
   const normalized = String(status || '').trim().toUpperCase().replace(/[\s-]+/g, '_');
@@ -283,6 +291,13 @@ export default function Transactions({ userData }: { userData?: any }) {
             mandate: o.paymentMode || o.mandateMode || '—',
             investorActionUrl: o.investorActionUrl,
             failureReason: o.failureReason,
+            // Contract-note / allotment fields (populated only after allotment).
+            units: typeof o.units === 'number' ? o.units : undefined,
+            allotmentNav: typeof o.allotmentNav === 'number' ? o.allotmentNav : undefined,
+            allotmentDate: o.allotmentDate,
+            folioNumber: o.folioNumber,
+            stampDuty: typeof o.stampDuty === 'number' ? o.stampDuty : undefined,
+            netInvested: typeof o.netInvested === 'number' ? o.netInvested : undefined,
           };
         });
 
@@ -881,6 +896,13 @@ function TransactionDetail({
                 { label: 'Mandate / Payment Mode', value: tx.mandate },
                 { label: 'Initiated', value: tx.date },
                 { label: 'Investor PAN', value: tx.pan },
+                // Contract-note / allotment fields — only shown once allotted.
+                ...(tx.units != null ? [{ label: 'Units allotted', value: formatUnits(tx.units) }] : []),
+                ...(tx.allotmentNav != null ? [{ label: 'NAV (allotment price)', value: formatAllotmentNav(tx.allotmentNav) }] : []),
+                ...(tx.allotmentDate ? [{ label: 'Allotment Date', value: formatDate(tx.allotmentDate) }] : []),
+                ...(tx.folioNumber ? [{ label: 'Folio Number', value: tx.folioNumber }] : []),
+                ...(tx.stampDuty != null ? [{ label: 'Stamp Duty', value: formatRupees(tx.stampDuty) }] : []),
+                ...(tx.netInvested != null ? [{ label: 'Net Invested', value: formatRupees(tx.netInvested) }] : []),
               ].map(({ label, value }) => (
                 <div key={label}>
                   <p className="text-[10px] uppercase font-bold text-slate-400 tracking-wider mb-1">{label}</p>
