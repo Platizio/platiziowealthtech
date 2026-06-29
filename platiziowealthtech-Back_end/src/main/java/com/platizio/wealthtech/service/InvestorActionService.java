@@ -600,6 +600,10 @@ public class InvestorActionService {
                 }
             }
             if (order.getOrderStatus() == OrderStatus.SUCCESSFUL) {
+                // Ensure contract-note allotment fields are populated. Idempotent: a real
+                // finalize already set them from the provider JSON; the sandbox-forced
+                // success paths above have none, so this derives them from scheme NAV / amount.
+                orderService.applyAllotmentOnCompletion(order, null);
                 auditService.log(
                         "ORDER",
                         order.getId(),
@@ -1220,6 +1224,8 @@ public class InvestorActionService {
             if ("successful".equalsIgnoreCase(latestState)) {
                 order.setOrderStatus(OrderStatus.SUCCESSFUL);
                 order.setInvestorActionUrl(null);
+                // Contract-note allotment: provider purchase JSON carries NAV/units/folio.
+                orderService.applyAllotmentOnCompletion(order, purchase);
                 return;
             }
             if ("failed".equalsIgnoreCase(latestState) || "cancelled".equalsIgnoreCase(latestState)) {
@@ -1237,6 +1243,8 @@ public class InvestorActionService {
                 || "confirmed".equalsIgnoreCase(latestState))) {
             order.setOrderStatus(OrderStatus.SUCCESSFUL);
             order.setInvestorActionUrl(null);
+            // Sandbox-simulated success: no allotment JSON, so derive from scheme NAV / amount.
+            orderService.applyAllotmentOnCompletion(order, null);
         }
     }
 

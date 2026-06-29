@@ -119,6 +119,12 @@ public class Investor extends BaseEntity {
     private Boolean isDeleted = Boolean.FALSE;
     private LocalDateTime deletedAt;
 
+    // REQUIREMENT #4: the investor explicitly chose not to nominate anyone.
+    // Distinct from "no nominees yet" — set true only after an informed opt-out
+    // (recorded with a consent record). Never defaulted on the customer's behalf.
+    @Column(nullable = false)
+    private Boolean nominationOptedOut = Boolean.FALSE;
+
     // Contact verification / self-declaration (Tier 2). Each channel is verified
     // via an OTP round-trip (Supabase Auth) or distributor self-declaration.
     // method = OTP | SELF_DECLARED; belongsTo = self | spouse | dependent_child |
@@ -269,6 +275,8 @@ public class Investor extends BaseEntity {
     public void setIsDeleted(Boolean isDeleted) { this.isDeleted = isDeleted; }
     public LocalDateTime getDeletedAt() { return deletedAt; }
     public void setDeletedAt(LocalDateTime deletedAt) { this.deletedAt = deletedAt; }
+    public Boolean getNominationOptedOut() { return nominationOptedOut; }
+    public void setNominationOptedOut(Boolean nominationOptedOut) { this.nominationOptedOut = nominationOptedOut; }
     public Boolean getEmailVerified() { return emailVerified; }
     public void setEmailVerified(Boolean emailVerified) { this.emailVerified = emailVerified; }
     public OffsetDateTime getEmailVerifiedAt() { return emailVerifiedAt; }

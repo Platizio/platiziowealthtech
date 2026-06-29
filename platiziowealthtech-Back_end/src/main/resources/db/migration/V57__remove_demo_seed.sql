@@ -36,8 +36,16 @@ DELETE FROM investor_leads       WHERE id = 'ca123eb4-0000-4123-85af-bbbbccccddd
 -- the demo signup audit event
 DELETE FROM audit_events         WHERE id = 'aaaaabbb-cccc-dddd-eeee-ffff00001111'::uuid;
 
--- the a@a.com Test Distributor (no V3 rows reference it; Bob belongs to Alice)
-DELETE FROM distributors         WHERE id = '4317cfd2-a41f-4320-a5dc-26835c7210ac'::uuid;
+-- the a@a.com Test Distributor. Keep it if local/test data has since attached
+-- investors to it; deleting a referenced distributor would break migration on
+-- an existing environment.
+DELETE FROM distributors
+ WHERE id = '4317cfd2-a41f-4320-a5dc-26835c7210ac'::uuid
+   AND NOT EXISTS (
+       SELECT 1
+         FROM investors
+        WHERE distributor_id = '4317cfd2-a41f-4320-a5dc-26835c7210ac'::uuid
+   );
 
 -- The two extra demo schemes V3 inserts with gen_random_uuid() (so they have no
 -- fixed UUID) — target them by their deterministic external_scheme_code. They are

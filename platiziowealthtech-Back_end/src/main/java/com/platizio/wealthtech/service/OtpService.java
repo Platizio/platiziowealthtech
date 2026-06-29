@@ -63,6 +63,14 @@ public class OtpService {
      */
     private final boolean exposeDevCode;
 
+    /**
+     * Dev-only master passcode. When non-blank (local profile only), this fixed code is
+     * accepted for any login/signup verification, so the team can sign in without SMTP or
+     * a live challenge. Blank by default and MUST stay blank in every deployed/production
+     * environment (see DF-13). Never honored for {@code TRANSACTION_APPROVAL}.
+     */
+    private final String devMasterCode;
+
     public OtpService(
             EmailOtpRepository otpRepository,
             EmailService emailService,
@@ -70,7 +78,8 @@ public class OtpService {
             @Value("${app.otp.expiration-minutes:5}") long expirationMinutes,
             @Value("${app.otp.max-attempts:5}") int maxAttempts,
             @Value("${app.otp.resend-cooldown-seconds:30}") long resendCooldownSeconds,
-            @Value("${app.otp.expose-dev-code:false}") boolean exposeDevCode
+            @Value("${app.otp.expose-dev-code:false}") boolean exposeDevCode,
+            @Value("${app.otp.dev-master-code:}") String devMasterCode
     ) {
         this.otpRepository = otpRepository;
         this.emailService = emailService;
@@ -79,6 +88,7 @@ public class OtpService {
         this.maxAttempts = Math.max(1, maxAttempts);
         this.resendCooldownSeconds = resendCooldownSeconds;
         this.exposeDevCode = exposeDevCode;
+        this.devMasterCode = devMasterCode;
     }
 
     @Transactional
@@ -164,6 +174,17 @@ public class OtpService {
         String email = normalizeEmail(rawEmail);
         String code = rawCode == null ? "" : rawCode.trim();
 
+        // Dev-only master passcode (local profile): accept a configured fixed code for any
+        // login/signup so the team can sign in without SMTP or a live challenge. Blank/
+        // disabled by default; MUST stay blank in production. Never honored for
+        // TRANSACTION_APPROVAL, so the transaction 2FA gate keeps its integrity.
+        if (devMasterCode != null && !devMasterCode.isBlank()
+                && purpose != OtpPurpose.TRANSACTION_APPROVAL
+                && constantTimeEquals(devMasterCode, code)) {
+            logger.warn("otp_verify status='dev_master_code_used' email='{}' purpose='{}'", email, purpose);
+            return;
+        }
+
         EmailOtp otp = (referenceId == null
                 ? otpRepository.findFirstByEmailAndPurposeAndConsumedAtIsNullOrderByCreatedAtDesc(email, purpose)
                 : otpRepository.findFirstByEmailAndPurposeAndReferenceIdAndConsumedAtIsNullOrderByCreatedAtDesc(
@@ -206,6 +227,8 @@ public class OtpService {
         String action;
         if (purpose == OtpPurpose.TRANSACTION_APPROVAL) {
             action = "approve your transaction";
+        } else if (purpose == OtpPurpose.PROFILE_CHANGE_APPROVAL) {
+            action = "approve a change to your profile";
         } else if (signup) {
             action = "complete your sign up";
         } else {

@@ -13,6 +13,8 @@ public enum OtpPurpose {
     INVESTOR_SIGNUP,
     /** Investor approval of a transaction (purchase / SIP / redemption) — 2FA. */
     TRANSACTION_APPROVAL,
-    /** Investor approval of a distributor-filled profile change — 2FA. */
-    PROFILE_APPROVAL
+    /** Investor approval of a distributor-filled profile change — 2FA (IRIS). */
+    PROFILE_APPROVAL,
+    /** Investor approval of a distributor-proposed profile change (investor.md R9/R10). */
+    PROFILE_CHANGE_APPROVAL
 }

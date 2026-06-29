@@ -16,9 +16,22 @@ public record InvestorAuthResponse(
         String status,
         boolean emailVerified,
         boolean mobileVerified,
-        boolean investorLinked
+        boolean investorLinked,
+        // Linked investor's KYC status from the local DB (null until linked). DB-sourced so
+        // it shows even when the live Cybrilla call is unavailable.
+        String kycStatus,
+        // The investor's distributor name (from the local DB); null until a distributor is linked.
+        String distributorName
 ) {
     public static InvestorAuthResponse from(InvestorAccount account) {
+        return from(account, null, null);
+    }
+
+    public static InvestorAuthResponse from(InvestorAccount account, String kycStatus) {
+        return from(account, kycStatus, null);
+    }
+
+    public static InvestorAuthResponse from(InvestorAccount account, String kycStatus, String distributorName) {
         return new InvestorAuthResponse(
                 account.getId(),
                 account.getEmail(),
@@ -26,6 +39,8 @@ public record InvestorAuthResponse(
                 account.getStatus() == null ? null : account.getStatus().name(),
                 Boolean.TRUE.equals(account.getEmailVerified()),
                 Boolean.TRUE.equals(account.getMobileVerified()),
-                account.getInvestorId() != null);
+                account.getInvestorId() != null,
+                kycStatus,
+                distributorName);
     }
 }

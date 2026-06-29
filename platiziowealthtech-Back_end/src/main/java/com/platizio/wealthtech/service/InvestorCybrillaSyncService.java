@@ -118,6 +118,12 @@ public class InvestorCybrillaSyncService {
                     distributorId,
                     ex.getMessage()
             );
+        } catch (IllegalStateException ex) {
+            logger.warn(
+                    "investor_profile_sync status='skipped_config' distributor_id='{}' reason='{}'",
+                    distributorId,
+                    ex.getMessage()
+            );
         }
     }
 

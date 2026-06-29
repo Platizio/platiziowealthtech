@@ -15,6 +15,7 @@ import com.platizio.wealthtech.dto.EsignVerificationResponse;
 import com.platizio.wealthtech.dto.ExternalKycSyncResponse;
 import com.platizio.wealthtech.dto.IdentityDocumentCreateRequest;
 import com.platizio.wealthtech.dto.InvestorExternalKycResponse;
+import com.platizio.wealthtech.dto.KycReadinessDecision;
 import com.platizio.wealthtech.dto.InvestorKycCheckRequest;
 import com.platizio.wealthtech.dto.InvestorKycRequestCreateRequest;
 import com.platizio.wealthtech.dto.InvestorKycRequestUpdateRequest;
@@ -684,6 +685,154 @@ public class InvestorKycService {
         Investor saved = saveAndStartBankVerificationIfKycComplete(investor, actorId, "external_kyc_manual_sync");
         auditService.log("INVESTOR", saved.getId(), "EXTERNAL_KYC_MANUAL_SYNCED", actorId, auditDetails(saved));
         return new InvestorExternalKycResponse(saved, response);
+    }
+
+    // ── investor-self variants (A1) ───────────────────────────────────────────
+    // The authenticated investor's own KYC self-service, mirroring the Phase-2
+    // contact-verify *AsInvestor pattern. The caller resolves {@code investorId}
+    // from the logged-in account's linked profile, so the session already proves
+    // ownership and the distributor-ownership check is intentionally skipped.
+    // Downstream FP/bank operations are legitimately distributor-scoped, so they
+    // run in the context of the investor's owning distributor (see
+    // {@link #owningDistributorForSelf(UUID)}).
+
+    @Transactional
+    public KycFlowStatusResponse getKycFlowStatusAsInvestor(UUID investorId) {
+        return getKycFlowStatus(investorId, owningDistributorForSelf(investorId));
+    }
+
+    /**
+     * Investor-self readiness evaluation (KYC is investor-only). Runs the POA pre-verification
+     * readiness check and returns the next action derived from {@code readiness.code} per Cybrilla's
+     * expanded codes — PROCEED / SUBMIT_NEW_KYC / MODIFY_KYC / WAIT / BLOCKED / RETRY / MANUAL_REVIEW.
+     * Persists the pre-verification result + the resolved KYC status.
+     */
+    @Transactional
+    public KycReadinessDecision evaluateReadiness(UUID investorId, UUID actorId) {
+        Investor investor = getAuthorizedInvestor(investorId, actorId);
+        JsonNode response = awaitPreVerificationCompletion(cybrillaClient.createReadinessCheck(investor));
+        applyPreVerificationResultFields(investor, response);
+        investor.setKycStatus(resolvePreVerificationStatus(response));
+        investorRepository.save(investor);
+        String status = nestedText(response, "readiness", "status");
+        String code = nestedText(response, "readiness", "code");
+        String preVerificationId = response.path("id").asText(null);
+        KycReadinessDecision decision = KycReadinessDecision.from(status, code, preVerificationId);
+        auditService.log("INVESTOR", investorId, "KYC_READINESS_EVALUATED", actorId,
+                "{\"status\":\"" + status + "\",\"code\":\"" + code + "\",\"action\":\"" + decision.action().name() + "\"}");
+        return decision;
+    }
+
+    @Transactional
+    public KycReadinessDecision evaluateReadinessAsInvestor(UUID investorId) {
+        return evaluateReadiness(investorId, owningDistributorForSelf(investorId));
+    }
+
+    @Transactional
+    public KycFlowAdvanceResponse advanceKycFlowAsInvestor(UUID investorId) {
+        return advanceKycFlow(investorId, owningDistributorForSelf(investorId));
+    }
+
+    @Transactional
+    public InvestorExternalKycResponse runKycComplianceCheckAsInvestor(UUID investorId, boolean fetchData) {
+        return runKycComplianceCheck(investorId, fetchData, owningDistributorForSelf(investorId));
+    }
+
+    @Transactional
+    public InvestorExternalKycResponse syncInvestorExternalKycStatusAsInvestor(UUID investorId) {
+        return syncInvestorExternalKycStatus(investorId, owningDistributorForSelf(investorId));
+    }
+
+    @Transactional
+    public InvestorExternalKycResponse createKycRequestAsInvestor(
+            UUID investorId, InvestorKycRequestCreateRequest request) {
+        return createKycRequest(investorId, request, owningDistributorForSelf(investorId));
+    }
+
+    @Transactional
+    public AadhaarVerificationResponse createIdentityDocumentAsInvestor(
+            UUID investorId, IdentityDocumentCreateRequest request) {
+        return createIdentityDocument(investorId, request, owningDistributorForSelf(investorId));
+    }
+
+    @Transactional
+    public AadhaarVerificationResponse refreshIdentityDocumentForInvestorAsInvestor(UUID investorId) {
+        return refreshIdentityDocumentForInvestor(investorId, owningDistributorForSelf(investorId));
+    }
+
+    @Transactional
+    public EsignVerificationResponse createEsignAsInvestor(UUID investorId, EsignStartRequest request) {
+        return createEsign(investorId, request, owningDistributorForSelf(investorId));
+    }
+
+    @Transactional
+    public EsignVerificationResponse refreshEsignAsInvestor(UUID investorId) {
+        return refreshEsign(investorId, owningDistributorForSelf(investorId));
+    }
+
+    @Transactional
+    public JsonNode listIdentityDocumentsAsInvestor(UUID investorId, String kycRequestId, String fetchStatus) {
+        return listIdentityDocuments(investorId, kycRequestId, fetchStatus, owningDistributorForSelf(investorId));
+    }
+
+    @Transactional
+    public JsonNode fetchIdentityDocumentAsInvestor(UUID investorId, String identityDocumentId) {
+        return fetchIdentityDocument(investorId, identityDocumentId, owningDistributorForSelf(investorId));
+    }
+
+    /**
+     * Sandbox-only: drives the investor's own KYC request to a target state via the FP
+     * "simulate KYC request" API ({@code POST /v2/kyc_requests/{id}/simulate}) so the
+     * DigiLocker (Aadhaar) + eSign steps can complete without a real DigiLocker session.
+     * Creates the KYC request first if the investor doesn't have one yet. Gated by the
+     * caller (only exposed when app.kyc.sandbox-simulation-enabled is true).
+     */
+    @Transactional
+    public InvestorExternalKycResponse simulateKycRequestAsInvestor(UUID investorId, String status) {
+        if (!integrationEnvironment.isSandboxMode()) {
+            throw new IllegalStateException("KYC simulation is only available in Cybrilla sandbox mode");
+        }
+        UUID actorId = owningDistributorForSelf(investorId);
+        Investor investor = getAuthorizedInvestor(investorId, actorId);
+        // Sandbox/dev demo only. The real DigiLocker (Aadhaar) fetch + eSign need a live
+        // investor session that the sandbox can't drive headlessly, and the FP "simulate
+        // KYC request" API only covers the final KRA push (it requires the request to
+        // already be 'submitted'). So mark the Aadhaar fetch + eSign + KYC complete locally
+        // and DETACH the external check/request/identity/esign ids, so subsequent status
+        // refreshes (which would otherwise re-fetch the still-pending external records and
+        // downgrade the status) leave it COMPLETED. The real PAN pre-verification still ran
+        // against Cybrilla; live testing uses the real DigiLocker/eSign redirects, never this.
+        investor.setExternalKycCheckId(null);
+        investor.setExternalKycRequestId(null);
+        investor.setExternalIdentityDocumentId(null);
+        investor.setExternalEsignId(null);
+        investor.setAadhaarFetchStatus("successful");
+        investor.setAadhaarFetchReason(null);
+        investor.setAadhaarProofsAttached(Boolean.TRUE);
+        investor.setEsignStatus("successful");
+        investor.setPanVerificationStatus("verified");
+        investor.setKycReadinessStatus("verified");
+        investor.setKycReadinessReason(null);
+        investor.setKycStatus(KycStatus.COMPLETED);
+        Investor saved = saveAndStartBankVerificationIfKycComplete(investor, actorId, "kyc_simulated_sandbox");
+        auditService.log("INVESTOR", saved.getId(), "KYC_SIMULATED_SANDBOX", actorId, auditDetails(saved));
+        return new InvestorExternalKycResponse(saved, null);
+    }
+
+    /**
+     * Resolves the owning distributor for an investor self-service call. The investor
+     * session has already authorized access to this {@code investorId}; the owning
+     * distributor is used only as the actor context for downstream distributor-scoped
+     * FP/bank operations and audit — no caller-ownership check is performed here (A1).
+     */
+    private UUID owningDistributorForSelf(UUID investorId) {
+        Investor investor = investorRepository.findById(investorId)
+                .orElseThrow(() -> new EntityNotFoundException("Investor profile not found"));
+        UUID distributorId = investor.getDistributorId();
+        if (distributorId == null) {
+            throw new IllegalStateException("Investor is not linked to a distributor");
+        }
+        return distributorId;
     }
 
     @Transactional

@@ -530,8 +530,16 @@ public class InvestorService implements BankVerificationStarter {
             assertCanManageInvestorForDistributor(actorId, request.distributorId(), "Cannot create an investor for another distributor");
         }
 
+        boolean gated = Boolean.TRUE.equals(request.gatedOnInvestorApproval());
         Investor investor = new Investor();
-        investor.setDistributorId(request.distributorId());
+        if (gated) {
+            // investor.md R5: distributor_id stays NULL until the investor approves; park
+            // the requesting distributor and mark the link pending.
+            investor.setPendingDistributorId(request.distributorId());
+            investor.setLinkingStatus(InvestorLinkingStatus.PENDING_INVESTOR_APPROVAL);
+        } else {
+            investor.setDistributorId(request.distributorId());
+        }
         investor.setFullName(cleanText(request.fullName()));
         investor.setMobileNumber(cleanText(request.mobileNumber()));
         investor.setEmail(email);
@@ -582,6 +590,12 @@ public class InvestorService implements BankVerificationStarter {
         replaceNominees(saved.getId(), request.nominees());
 
         auditService.log("INVESTOR", saved.getId(), "CREATED", request.distributorId(), "{\"pan_provided\":true}");
+
+        // Gated (investor.md R5): a pending, not-yet-linked investor must not create
+        // external FP profiles until the investor approves the link. Skip provider sync.
+        if (gated) {
+            return investorRepository.save(saved);
+        }
 
         try {
             String externalInvestorId = cybrillaClient.createInvestorProfile(saved);
@@ -768,7 +782,7 @@ public class InvestorService implements BankVerificationStarter {
         bankAccount.setVerificationStatus(BankVerificationStatus.VERIFICATION_PENDING);
 
         InvestorBankAccount savedBank = investorBankAccountRepository.save(bankAccount);
-        investor.setBankVerificationStatus(BankVerificationStatus.VERIFICATION_PENDING);
+        applyInvestorBankVerificationAggregate(investor, savedBank, BankVerificationStatus.VERIFICATION_PENDING);
         investorRepository.save(investor);
 
         savedBank = syncBankVerificationStatus(investor, savedBank, actorId, "bank_account_created");
@@ -1074,7 +1088,7 @@ public class InvestorService implements BankVerificationStarter {
             }
             if (bankAccount.getCybrillaBankVerificationId() == null || bankAccount.getCybrillaBankVerificationId().isBlank()) {
                 bankAccount.setVerificationStatus(BankVerificationStatus.VERIFICATION_PENDING);
-                investor.setBankVerificationStatus(BankVerificationStatus.VERIFICATION_PENDING);
+                applyInvestorBankVerificationAggregate(investor, bankAccount, BankVerificationStatus.VERIFICATION_PENDING);
                 investorRepository.save(investor);
                 return investorBankAccountRepository.save(bankAccount);
             }
@@ -1113,7 +1127,7 @@ public class InvestorService implements BankVerificationStarter {
             }
             if (!hasText(bankAccount.getCybrillaBankVerificationId())) {
                 bankAccount.setVerificationStatus(BankVerificationStatus.VERIFICATION_PENDING);
-                investor.setBankVerificationStatus(BankVerificationStatus.VERIFICATION_PENDING);
+                applyInvestorBankVerificationAggregate(investor, bankAccount, BankVerificationStatus.VERIFICATION_PENDING);
                 investorRepository.save(investor);
                 return investorBankAccountRepository.save(bankAccount);
             }
@@ -1289,7 +1303,7 @@ public class InvestorService implements BankVerificationStarter {
                             ? null
                             : verification.path("bank_accounts").get(0).path("status").asText(null));
             bankAccount.setVerificationStatus(BankVerificationStatus.VERIFICATION_PENDING);
-            investor.setBankVerificationStatus(BankVerificationStatus.VERIFICATION_PENDING);
+            applyInvestorBankVerificationAggregate(investor, bankAccount, BankVerificationStatus.VERIFICATION_PENDING);
             investorRepository.save(investor);
             return investorBankAccountRepository.save(bankAccount);
         }
@@ -1380,7 +1394,7 @@ public class InvestorService implements BankVerificationStarter {
         bankAccount.setVerificationStatus(BankVerificationStatus.VERIFICATION_PENDING);
         bankAccount.setExternalSyncPending(true);
         bankAccount.setExternalSyncMessage(externalMessage);
-        investor.setBankVerificationStatus(BankVerificationStatus.VERIFICATION_PENDING);
+        applyInvestorBankVerificationAggregate(investor, bankAccount, BankVerificationStatus.VERIFICATION_PENDING);
         investorRepository.save(investor);
         InvestorBankAccount savedBank = investorBankAccountRepository.save(bankAccount);
         auditService.log(
@@ -1391,6 +1405,52 @@ public class InvestorService implements BankVerificationStarter {
                 "{\"investorId\":\"" + investor.getId() + "\",\"externalBankSyncPending\":true}"
         );
         return savedBank;
+    }
+
+    /**
+     * Investor self-service bank add. The session already authorizes this investorId; the
+     * owning distributor is resolved as the actor (no caller-ownership check). The bank is
+     * created and then dummy-verified (admin override) so the investor becomes order-ready
+     * without depending on live async bank verification (matches the dummy phone/PAN verify).
+     */
+    @Transactional
+    public InvestorBankAccount addBankAccountAsInvestor(UUID investorId, InvestorBankRequest request) {
+        Investor investor = getInvestor(investorId);
+        UUID distributorId = investor.getDistributorId();
+        if (distributorId == null) {
+            throw new IllegalStateException("Your account is not linked to a distributor yet, so a bank cannot be added.");
+        }
+        InvestorBankAccount bank = null;
+        try {
+            bank = addBankAccount(investorId, request, distributorId);
+        } catch (CybrillaApiException ex) {
+            // Covers CybrillaUnavailableException (subclass): bank row is already saved locally;
+            // proceed to the local dummy-verify so the investor still becomes order-ready.
+            logger.warn("investor_bank_add status='live_bav_unavailable' investor_id='{}' reason='{}' — proceeding with local verify",
+                    investorId, ex.getMessage());
+        }
+        verifyBank(investorId, distributorId);
+        if (bank == null) {
+            bank = investorBankAccountRepository.findByInvestorId(investorId).stream()
+                    .reduce((first, second) -> second).orElse(null);
+        }
+        if (bank != null && bank.getVerificationStatus() != BankVerificationStatus.VERIFIED) {
+            bank.setVerificationStatus(BankVerificationStatus.VERIFIED);
+            bank = investorBankAccountRepository.save(bank);
+        }
+        return bank;
+    }
+
+    @Transactional(readOnly = true)
+    public java.util.List<InvestorBankAccount> listBankAccountsAsInvestor(UUID investorId) {
+        return investorBankAccountRepository.findByInvestorId(investorId);
+    }
+
+    /** True if the investor has at least one VERIFIED bank account (order-readiness check). */
+    @Transactional(readOnly = true)
+    public boolean hasVerifiedBank(UUID investorId) {
+        return investorBankAccountRepository.findByInvestorId(investorId).stream()
+                .anyMatch(b -> b.getVerificationStatus() == BankVerificationStatus.VERIFIED);
     }
 
     @Transactional
@@ -1958,40 +2018,48 @@ public class InvestorService implements BankVerificationStarter {
             );
         }
 
-        InvestorBankAccount verifiedBank = investorBankAccountRepository.findByInvestorId(investorId).stream()
-                .filter(account -> account.getVerificationStatus() == BankVerificationStatus.VERIFIED
-                        || isSandboxBankVerificationPassAccount(account))
-                .findFirst()
-                .orElse(null);
-        if (verifiedBank == null) {
+        List<InvestorBankAccount> bankCandidates = orderPlacementBankCandidates(investorId);
+        if (bankCandidates.isEmpty()) {
             throw new IllegalStateException("A verified bank account is required before placing orders.");
         }
+        InvestorBankAccount verifiedBank = null;
+        String lastBankVerificationDetail = null;
         try {
-            if (isSandboxBankVerificationPassAccount(verifiedBank)) {
-                verifiedBank = ensureSandboxBankVerificationSettledForOrder(
-                        investor,
-                        verifiedBank,
-                        investor.getDistributorId());
-                investor = getInvestor(investorId);
-                if (verifiedBank.getVerificationStatus() != BankVerificationStatus.VERIFIED) {
-                    String detail = StringUtils.hasText(verifiedBank.getExternalSyncMessage())
-                            ? verifiedBank.getExternalSyncMessage()
-                            : "POA bank pre-verification did not reach verified for sandbox account ending in 1193.";
-                    throw new IllegalStateException(
-                            "Bank account must be verified with Fintech Primitives before placing orders: " + detail);
+            for (InvestorBankAccount candidateBank : bankCandidates) {
+                InvestorBankAccount settledBank;
+                if (isSandboxBankVerificationPassAccount(candidateBank)) {
+                    settledBank = ensureSandboxBankVerificationSettledForOrder(
+                            investor,
+                            candidateBank,
+                            investor.getDistributorId());
+                    investor = getInvestor(investorId);
+                    if (settledBank.getVerificationStatus() != BankVerificationStatus.VERIFIED) {
+                        lastBankVerificationDetail = bankVerificationDetail(
+                                settledBank,
+                                "POA bank pre-verification did not reach verified for sandbox account ending in 1193.");
+                        continue;
+                    }
+                } else {
+                    settledBank = syncBankVerificationStatus(investor, candidateBank, investor.getDistributorId(), "order_placement");
+                    investor = getInvestor(investorId);
+                    if (settledBank.getVerificationStatus() != BankVerificationStatus.VERIFIED) {
+                        lastBankVerificationDetail = bankVerificationDetail(
+                                settledBank,
+                                "Fintech Primitives bank verification is still in progress.");
+                        continue;
+                    }
                 }
-            } else {
-                verifiedBank = syncBankVerificationStatus(investor, verifiedBank, investor.getDistributorId(), "order_placement");
-                investor = getInvestor(investorId);
-                if (verifiedBank.getVerificationStatus() != BankVerificationStatus.VERIFIED) {
-                    String detail = StringUtils.hasText(verifiedBank.getExternalSyncMessage())
-                            ? verifiedBank.getExternalSyncMessage()
-                            : "Fintech Primitives bank verification is still in progress.";
-                    throw new IllegalStateException(
-                            "Bank account must be verified with Fintech Primitives before placing orders: " + detail);
-                }
+                verifiedBank = settledBank;
+                break;
             }
-            investor = getInvestor(investorId);
+            if (verifiedBank == null) {
+                String detail = StringUtils.hasText(lastBankVerificationDetail)
+                        ? lastBankVerificationDetail
+                        : "Fintech Primitives bank verification is still in progress.";
+                throw new IllegalStateException(
+                        "Bank account must be verified with Fintech Primitives before placing orders: " + detail);
+            }
+                investor = getInvestor(investorId);
             // BUG-012: when invp_+mfia_ are already linked at entry, the order-ready
             // PATCH is redundant and re-triggers the FP occupation-immutability problem.
             // Skip only the PATCH calls; the bank-verification sync above still runs.
@@ -2011,6 +2079,32 @@ public class InvestorService implements BankVerificationStarter {
             throw ex;
         }
         return investor;
+    }
+
+    private List<InvestorBankAccount> orderPlacementBankCandidates(UUID investorId) {
+        return investorBankAccountRepository.findByInvestorId(investorId).stream()
+                .filter(account -> account.getVerificationStatus() == BankVerificationStatus.VERIFIED
+                        || isSandboxBankVerificationPassAccount(account))
+                .sorted((left, right) -> Integer.compare(
+                        orderPlacementBankPriority(left),
+                        orderPlacementBankPriority(right)))
+                .toList();
+    }
+
+    private int orderPlacementBankPriority(InvestorBankAccount bankAccount) {
+        if (isSandboxBankVerificationPassAccount(bankAccount)) {
+            return 0;
+        }
+        if ("verified".equalsIgnoreCase(bankAccount.getCybrillaBankVerificationStatus())) {
+            return 1;
+        }
+        return 2;
+    }
+
+    private String bankVerificationDetail(InvestorBankAccount bankAccount, String fallback) {
+        return StringUtils.hasText(bankAccount.getExternalSyncMessage())
+                ? bankAccount.getExternalSyncMessage()
+                : fallback;
     }
 
     /**
@@ -2594,21 +2688,18 @@ public class InvestorService implements BankVerificationStarter {
 
         if ("completed".equalsIgnoreCase(status) && isVerifiedConfidence(confidence)) {
             bankAccount.setVerificationStatus(BankVerificationStatus.VERIFIED);
-            investor.setBankVerificationStatus(BankVerificationStatus.VERIFIED);
-            if (investor.getKycStatus() == KycStatus.COMPLETED) {
-                investor.setInvestorStatus(InvestorStatus.READY_FOR_TRANSACTIONS);
-            }
+            markInvestorBankVerified(investor);
             return;
         }
 
         if ("failed".equalsIgnoreCase(status) || ("completed".equalsIgnoreCase(status) && !isVerifiedConfidence(confidence))) {
             bankAccount.setVerificationStatus(BankVerificationStatus.VERIFICATION_FAILED);
-            investor.setBankVerificationStatus(BankVerificationStatus.VERIFICATION_FAILED);
+            applyInvestorBankVerificationAggregate(investor, bankAccount, BankVerificationStatus.VERIFICATION_FAILED);
             return;
         }
 
         bankAccount.setVerificationStatus(BankVerificationStatus.VERIFICATION_PENDING);
-        investor.setBankVerificationStatus(BankVerificationStatus.VERIFICATION_PENDING);
+        applyInvestorBankVerificationAggregate(investor, bankAccount, BankVerificationStatus.VERIFICATION_PENDING);
     }
 
     private void applyPoaBankPreVerificationResponse(Investor investor, InvestorBankAccount bankAccount, JsonNode verification) {
@@ -2623,41 +2714,66 @@ public class InvestorService implements BankVerificationStarter {
 
         if ("verified".equalsIgnoreCase(bankStatus)) {
             bankAccount.setVerificationStatus(BankVerificationStatus.VERIFIED);
-            investor.setBankVerificationStatus(BankVerificationStatus.VERIFIED);
-            if (investor.getKycStatus() == KycStatus.COMPLETED) {
-                investor.setInvestorStatus(InvestorStatus.READY_FOR_TRANSACTIONS);
-            }
+            markInvestorBankVerified(investor);
             return;
         }
 
         if ("failed".equalsIgnoreCase(bankStatus) && isBankManualFollowUpCode(bankCode)) {
             bankAccount.setVerificationStatus(BankVerificationStatus.VERIFICATION_PENDING);
-            investor.setBankVerificationStatus(BankVerificationStatus.VERIFICATION_PENDING);
+            applyInvestorBankVerificationAggregate(investor, bankAccount, BankVerificationStatus.VERIFICATION_PENDING);
             bankAccount.setExternalSyncMessage("POA bank pre-verification requires manual follow-up: " + bankCode);
             return;
         }
 
         if ("failed".equalsIgnoreCase(bankStatus) && isBankRetryableCode(bankCode)) {
             bankAccount.setVerificationStatus(BankVerificationStatus.VERIFICATION_PENDING);
-            investor.setBankVerificationStatus(BankVerificationStatus.VERIFICATION_PENDING);
+            applyInvestorBankVerificationAggregate(investor, bankAccount, BankVerificationStatus.VERIFICATION_PENDING);
             bankAccount.setExternalSyncMessage("POA bank pre-verification can be retried: " + bankCode);
             return;
         }
 
         if ("failed".equalsIgnoreCase(bankStatus)) {
             bankAccount.setVerificationStatus(BankVerificationStatus.VERIFICATION_FAILED);
-            investor.setBankVerificationStatus(BankVerificationStatus.VERIFICATION_FAILED);
+            applyInvestorBankVerificationAggregate(investor, bankAccount, BankVerificationStatus.VERIFICATION_FAILED);
             return;
         }
 
         if (!"completed".equalsIgnoreCase(preVerificationStatus) || bankStatus == null) {
             bankAccount.setVerificationStatus(BankVerificationStatus.VERIFICATION_PENDING);
-            investor.setBankVerificationStatus(BankVerificationStatus.VERIFICATION_PENDING);
+            applyInvestorBankVerificationAggregate(investor, bankAccount, BankVerificationStatus.VERIFICATION_PENDING);
             return;
         }
 
         bankAccount.setVerificationStatus(BankVerificationStatus.VERIFICATION_FAILED);
-        investor.setBankVerificationStatus(BankVerificationStatus.VERIFICATION_FAILED);
+        applyInvestorBankVerificationAggregate(investor, bankAccount, BankVerificationStatus.VERIFICATION_FAILED);
+    }
+
+    private void markInvestorBankVerified(Investor investor) {
+        investor.setBankVerificationStatus(BankVerificationStatus.VERIFIED);
+        if (investor.getKycStatus() == KycStatus.COMPLETED) {
+            investor.setInvestorStatus(InvestorStatus.READY_FOR_TRANSACTIONS);
+        }
+    }
+
+    private void applyInvestorBankVerificationAggregate(
+            Investor investor,
+            InvestorBankAccount currentAccount,
+            BankVerificationStatus fallbackStatus
+    ) {
+        if (hasVerifiedBankAccount(investor.getId(), currentAccount)) {
+            markInvestorBankVerified(investor);
+            return;
+        }
+        investor.setBankVerificationStatus(fallbackStatus);
+    }
+
+    private boolean hasVerifiedBankAccount(UUID investorId, InvestorBankAccount currentAccount) {
+        if (currentAccount != null && currentAccount.getVerificationStatus() == BankVerificationStatus.VERIFIED) {
+            return true;
+        }
+        return investorBankAccountRepository.findByInvestorId(investorId).stream()
+                .filter(account -> currentAccount == null || !Objects.equals(account.getId(), currentAccount.getId()))
+                .anyMatch(account -> account.getVerificationStatus() == BankVerificationStatus.VERIFIED);
     }
 
     private boolean isBankManualFollowUpCode(String bankCode) {

@@ -152,12 +152,13 @@ class HoldingsServiceTest {
 
         InvestorDashboardResponse res = service.getDashboard(investorId);
 
+        // NAV unavailable → fall back to average-cost basis so the investor still sees a value
+        // (labelled STALE / "at cost"), per the dashboard-valuation product change.
         DashboardHolding h = res.holdings().get(0);
-        assertThat(h.currentValue()).isNull();
-        assertThat(h.absoluteReturn()).isNull();
-        assertThat(h.xirr()).isNull();                       // no terminal value → undefined
-        assertThat(h.dataQuality()).isEqualTo(DataQuality.UNAVAILABLE);
-        assertThat(res.totals().totalCurrentValue()).isNull();
+        assertThat(h.currentValue()).isEqualByComparingTo("1000");   // 100 units × ₹10 avg cost
+        assertThat(h.absoluteReturn()).isEqualByComparingTo("0");    // valued at cost → no gain
+        assertThat(h.dataQuality()).isEqualTo(DataQuality.STALE);
+        assertThat(res.totals().totalCurrentValue()).isEqualByComparingTo("1000");
     }
 
     @Test

@@ -152,16 +152,21 @@ public class HoldingsService {
             NavSnapshot nav = resolveNav(scheme);
             BigDecimal invested = acc.investedCostForHeldUnits().setScale(MONEY_SCALE, RoundingMode.HALF_UP);
 
+            // Effective NAV: prefer the live/cached market NAV from the scheme; when none is
+            // available, fall back to the investor's average cost NAV from the DB so the holding
+            // is valued AT COST (no fabricated gain) instead of left blank. The fallback is
+            // flagged STALE so the UI can label it "indicative (at cost)" vs a fresh quote.
+            BigDecimal effectiveNav = nav.value != null ? nav.value : acc.averageCostNav();
             BigDecimal currentValue;
             DataQuality quality;
-            if (nav.value == null) {
-                currentValue = null; // locked decision #4 — never fabricate value
+            if (effectiveNav == null) {
+                currentValue = null;
                 quality = DataQuality.UNAVAILABLE;
-            } else if (nav.asOf == null) {
-                currentValue = nav.value.multiply(netUnits).setScale(MONEY_SCALE, RoundingMode.HALF_UP);
+            } else if (nav.value == null || nav.asOf == null) {
+                currentValue = effectiveNav.multiply(netUnits).setScale(MONEY_SCALE, RoundingMode.HALF_UP);
                 quality = DataQuality.STALE;
             } else {
-                currentValue = nav.value.multiply(netUnits).setScale(MONEY_SCALE, RoundingMode.HALF_UP);
+                currentValue = effectiveNav.multiply(netUnits).setScale(MONEY_SCALE, RoundingMode.HALF_UP);
                 quality = DataQuality.OK;
             }
 
@@ -203,7 +208,7 @@ public class HoldingsService {
                     folio,
                     acc.sipName(),
                     netUnits.setScale(UNIT_SCALE, RoundingMode.HALF_UP),
-                    nav.value == null ? null : nav.value.setScale(NAV_SCALE, RoundingMode.HALF_UP),
+                    effectiveNav == null ? null : effectiveNav.setScale(NAV_SCALE, RoundingMode.HALF_UP),
                     nav.asOf,
                     acc.averageCostNav(),
                     invested,
@@ -269,10 +274,10 @@ public class HoldingsService {
                 || order.getUnits().signum() <= 0) {
             return false;
         }
-        boolean isSip = order.getTransactionType() == TransactionType.SIP;
-        if (isSip && order.getOrderStatus() != OrderStatus.ACTIVE) {
-            return false;
-        }
+        // A SIP that produced units is a real holding whether its order is still ACTIVE or
+        // already SUCCESSFUL — the units>0 check above already excludes mandates that haven't
+        // transacted. (Previously SUCCESSFUL SIP units were dropped, under-counting total
+        // invested and hiding the holding.)
         return HELD_STATUSES.contains(order.getOrderStatus());
     }
 

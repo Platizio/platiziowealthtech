@@ -14,9 +14,12 @@ import com.platizio.wealthtech.domain.ProductScheme;
 import com.platizio.wealthtech.domain.TransactionOrder;
 import com.platizio.wealthtech.domain.TransactionType;
 import com.platizio.wealthtech.dto.HoldingResponse;
+import com.platizio.wealthtech.domain.RedemptionRecord;
+import com.platizio.wealthtech.domain.RedemptionStatus;
 import com.platizio.wealthtech.repository.InvestorBankAccountRepository;
 import com.platizio.wealthtech.repository.InvestorRepository;
 import com.platizio.wealthtech.repository.ProductSchemeRepository;
+import com.platizio.wealthtech.repository.RedemptionRecordRepository;
 import com.platizio.wealthtech.repository.TransactionOrderRepository;
 import java.math.BigDecimal;
 import java.util.List;
@@ -34,10 +37,11 @@ class PortfolioServiceHoldingsTest {
     private final TransactionOrderRepository orderRepository = mock(TransactionOrderRepository.class);
     private final ProductSchemeRepository schemeRepository = mock(ProductSchemeRepository.class);
     private final InvestorBankAccountRepository bankRepository = mock(InvestorBankAccountRepository.class);
+    private final RedemptionRecordRepository redemptionRepository = mock(RedemptionRecordRepository.class);
 
     private final PortfolioService service = new PortfolioService(
             orderRepository, mock(InvestorRepository.class), schemeRepository, bankRepository,
-            new ObjectMapper());
+            redemptionRepository, new ObjectMapper());
 
     private final UUID investorId = UUID.randomUUID();
 
@@ -83,10 +87,11 @@ class PortfolioServiceHoldingsTest {
         stub(order, scheme(schemeId, "{\"nav\":25.5,\"nav_date\":\"2026-06-20T00:00:00Z\"}"));
         stubBank();
 
-        HoldingResponse holding = single();
-
-        assertThat(holding.dataQuality()).isEqualTo(HoldingResponse.DataQuality.UNAVAILABLE);
-        assertThat(holding.currentValue()).isNull();
+        // Withdrawal lists only redeemable holdings: an order with no units is not a holding and is
+        // excluded (the "only funds the investor invested in" rule), so it never appears with
+        // amount-as-value.
+        List<HoldingResponse> holdings = service.getInvestorHoldings(investorId);
+        assertThat(holdings).isEmpty();
     }
 
     @Test
@@ -122,6 +127,51 @@ class PortfolioServiceHoldingsTest {
     @Test
     void emptyForNullInvestor() {
         assertThat(service.getInvestorHoldings(null)).isEmpty();
+    }
+
+    @Test
+    void availableUnitsAreNetOfBlockedAndSettledRedemptions() {
+        UUID schemeId = UUID.randomUUID();
+        TransactionOrder order = order(schemeId, new BigDecimal("100"), OrderStatus.SUCCESSFUL);
+        stub(order, scheme(schemeId, "{\"nav\":10,\"nav_date\":\"2026-06-20T00:00:00Z\"}"));
+        stubBank();
+        // 20 units in flight (blocked), 30 already settled out, 5 failed (released).
+        when(redemptionRepository.findByInvestorId(investorId)).thenReturn(List.of(
+                redemption(order.getId(), new BigDecimal("20"), RedemptionStatus.PROCESSING),
+                redemption(order.getId(), new BigDecimal("30"), RedemptionStatus.BANK_CREDIT_COMPLETED),
+                redemption(order.getId(), new BigDecimal("5"), RedemptionStatus.FAILED)));
+
+        HoldingResponse holding = single();
+
+        assertThat(holding.blockedUnits()).isEqualByComparingTo("20");
+        assertThat(holding.availableUnits()).isEqualByComparingTo("50"); // 100 − 20 − 30
+        assertThat(holding.currentValue()).isEqualByComparingTo("500");  // 50 net units × NAV 10
+        assertThat(holding.redeemable()).isTrue();
+    }
+
+    @Test
+    void notRedeemableWhenFullyRedeemed() {
+        UUID schemeId = UUID.randomUUID();
+        TransactionOrder order = order(schemeId, new BigDecimal("40"), OrderStatus.SUCCESSFUL);
+        stub(order, scheme(schemeId, "{\"nav\":10,\"nav_date\":\"2026-06-20T00:00:00Z\"}"));
+        stubBank();
+        when(redemptionRepository.findByInvestorId(investorId)).thenReturn(List.of(
+                redemption(order.getId(), new BigDecimal("40"), RedemptionStatus.SUCCESSFUL)));
+
+        HoldingResponse holding = single();
+
+        assertThat(holding.availableUnits()).isEqualByComparingTo("0");
+        assertThat(holding.redeemable()).isFalse();
+    }
+
+    private RedemptionRecord redemption(UUID orderId, BigDecimal units, RedemptionStatus status) {
+        RedemptionRecord record = new RedemptionRecord();
+        setId(record, UUID.randomUUID());
+        record.setOrderId(orderId);
+        record.setInvestorId(investorId);
+        record.setUnits(units);
+        record.setRedemptionStatus(status);
+        return record;
     }
 
     // ── helpers ──────────────────────────────────────────────────────────────

@@ -2,6 +2,7 @@ package com.platizio.wealthtech.integration;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.platizio.wealthtech.domain.Investor;
 import com.platizio.wealthtech.domain.InvestorBankAccount;
@@ -12,6 +13,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -24,6 +26,7 @@ public class MockCybrillaClient implements CybrillaClient {
 
     private static final Logger logger = LoggerFactory.getLogger(MockCybrillaClient.class);
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+    private final Map<String, JsonNode> preVerificationResponses = new ConcurrentHashMap<>();
 
     public MockCybrillaClient() {
         logger.warn("cybrilla_client mode='mock' external_calls='disabled' reason='CYBRILLA_REAL_CLIENT_ENABLED=false'");
@@ -132,6 +135,10 @@ public class MockCybrillaClient implements CybrillaClient {
 
     @Override
     public JsonNode fetchBankAccountVerification(String bankAccountVerificationId) {
+        JsonNode stored = preVerificationResponses.get(bankAccountVerificationId);
+        if (stored != null) {
+            return stored.deepCopy();
+        }
         ObjectNode response = OBJECT_MAPPER.createObjectNode();
         response.put("object", "pre_verification");
         response.put("id", bankAccountVerificationId);
@@ -157,14 +164,17 @@ public class MockCybrillaClient implements CybrillaClient {
     @Override
     public JsonNode createPreVerification(Map<String, Object> payload) {
         ObjectNode response = OBJECT_MAPPER.createObjectNode();
+        String id = "pv_" + UUID.randomUUID().toString().replace("-", "");
         response.put("object", "pre_verification");
-        response.put("id", "pv_" + UUID.randomUUID().toString().replace("-", ""));
+        response.put("id", id);
         response.put("status", "completed");
         response.put("investor_identifier", textValue(payload, "investor_identifier"));
         response.putObject("readiness").put("status", "verified").putNull("code").putNull("reason");
         response.putObject("pan").put("status", "verified").putNull("code").putNull("reason").put("value", nestedTextValue(payload, "pan"));
         response.putObject("name").put("status", "verified").putNull("code").putNull("reason").put("value", nestedTextValue(payload, "name"));
         response.putObject("date_of_birth").put("status", "verified").putNull("code").putNull("reason").put("value", nestedTextValue(payload, "date_of_birth"));
+        appendMockBankAccountResults(payload, response);
+        preVerificationResponses.put(id, response.deepCopy());
         return response;
     }
 
@@ -293,6 +303,39 @@ public class MockCybrillaClient implements CybrillaClient {
             return nested == null ? "" : String.valueOf(nested);
         }
         return value == null ? "" : String.valueOf(value);
+    }
+
+    private void appendMockBankAccountResults(Map<String, Object> payload, ObjectNode response) {
+        Object bankAccounts = payload.get("bank_accounts");
+        if (!(bankAccounts instanceof List<?> accounts)) {
+            return;
+        }
+        ArrayNode results = response.putArray("bank_accounts");
+        for (Object account : accounts) {
+            String accountNumber = nestedBankAccountValue(account, "account_number");
+            ObjectNode result = results.addObject();
+            if (accountNumber.endsWith("1515")) {
+                result.put("status", "failed");
+                result.put("code", "bank_verification_failed");
+                result.put("reason", "Mock bank verification failed");
+            } else {
+                result.put("status", "verified");
+                result.putNull("code");
+                result.putNull("reason");
+            }
+        }
+    }
+
+    private String nestedBankAccountValue(Object account, String key) {
+        if (!(account instanceof Map<?, ?> accountMap)) {
+            return "";
+        }
+        Object value = accountMap.get("value");
+        if (!(value instanceof Map<?, ?> valueMap)) {
+            return "";
+        }
+        Object nested = valueMap.get(key);
+        return nested == null ? "" : String.valueOf(nested).trim();
     }
 
     @Override

@@ -3,6 +3,7 @@ package com.platizio.wealthtech.controller;
 import com.platizio.wealthtech.domain.InvestorAccount;
 import com.platizio.wealthtech.domain.OnboardingSubmission;
 import com.platizio.wealthtech.domain.RedemptionRecord;
+import com.platizio.wealthtech.domain.Nominee;
 import com.platizio.wealthtech.domain.TransactionApprovalChallenge;
 import com.platizio.wealthtech.domain.TransactionType;
 import com.platizio.wealthtech.dto.ApprovalDetailResponse;
@@ -17,15 +18,37 @@ import com.platizio.wealthtech.dto.OnboardingAttestRequest;
 import com.platizio.wealthtech.dto.OtpRequestResponse;
 import com.platizio.wealthtech.dto.OtpVerifyCodeRequest;
 import com.platizio.wealthtech.dto.WithdrawalRequest;
+import com.platizio.wealthtech.dto.AadhaarVerificationResponse;
+import com.platizio.wealthtech.dto.EsignStartRequest;
+import com.platizio.wealthtech.dto.EsignVerificationResponse;
+import com.platizio.wealthtech.dto.IdentityDocumentCreateRequest;
+import com.platizio.wealthtech.dto.InvestorExternalKycResponse;
+import com.platizio.wealthtech.dto.InvestorKycRequestCreateRequest;
+import com.platizio.wealthtech.dto.KycFlowAdvanceResponse;
+import com.platizio.wealthtech.dto.KycFlowStatusResponse;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.platizio.wealthtech.domain.InvestorBankAccount;
+import com.platizio.wealthtech.domain.ProductScheme;
+import com.platizio.wealthtech.domain.TransactionOrder;
+import com.platizio.wealthtech.dto.InvestorBankRequest;
+import com.platizio.wealthtech.dto.InvestorOrderRequest;
+import com.platizio.wealthtech.dto.KycReadinessDecision;
+import com.platizio.wealthtech.dto.NomineeRequest;
+import com.platizio.wealthtech.dto.NomineeResponse;
+import org.springframework.data.domain.Page;
 import com.platizio.wealthtech.security.InvestorAuthPrincipal;
 import com.platizio.wealthtech.service.ConsentRecordService;
 import com.platizio.wealthtech.service.HoldingsService;
 import com.platizio.wealthtech.service.InvestorActionService;
 import com.platizio.wealthtech.service.InvestorAuthService;
 import com.platizio.wealthtech.service.InvestorContactVerificationService;
+import com.platizio.wealthtech.service.InvestorKycService;
 import com.platizio.wealthtech.service.OnboardingSubmissionService;
+import com.platizio.wealthtech.service.InvestorService;
+import com.platizio.wealthtech.service.NomineeService;
 import com.platizio.wealthtech.service.OrderService;
 import com.platizio.wealthtech.service.PortfolioService;
+import com.platizio.wealthtech.service.ProductService;
 import com.platizio.wealthtech.service.TransactionApprovalService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -43,6 +66,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -68,6 +92,10 @@ public class InvestorPortalController {
     private final OrderService orderService;
     private final PortfolioService portfolioService;
     private final HoldingsService holdingsService;
+    private final InvestorKycService investorKycService;
+    private final ProductService productService;
+    private final InvestorService investorService;
+    private final NomineeService nomineeService;
 
     public InvestorPortalController(
             InvestorAuthService investorAuthService,
@@ -78,7 +106,14 @@ public class InvestorPortalController {
             InvestorActionService investorActionService,
             OrderService orderService,
             PortfolioService portfolioService,
-            HoldingsService holdingsService) {
+            HoldingsService holdingsService,
+            InvestorKycService investorKycService,
+            ProductService productService,
+            InvestorService investorService,
+            NomineeService nomineeService) {
+        this.investorKycService = investorKycService;
+        this.productService = productService;
+        this.investorService = investorService;
         this.investorAuthService = investorAuthService;
         this.onboardingSubmissionService = onboardingSubmissionService;
         this.contactVerificationService = contactVerificationService;
@@ -88,13 +123,15 @@ public class InvestorPortalController {
         this.orderService = orderService;
         this.portfolioService = portfolioService;
         this.holdingsService = holdingsService;
+        this.nomineeService = nomineeService;
     }
 
     @Operation(summary = "Current investor session", description = "Returns the authenticated investor's account view.")
     @GetMapping("/me")
     public InvestorAuthResponse me(Authentication auth) {
         InvestorAccount account = investorAuthService.requireAccount(accountId(auth));
-        return InvestorAuthResponse.from(account);
+        return InvestorAuthResponse.from(account, investorAuthService.investorKycStatusFor(account),
+                investorAuthService.investorDistributorNameFor(account));
     }
 
     // ── Onboarding review + attestation ──────────────────────────────────────
@@ -185,6 +222,201 @@ public class InvestorPortalController {
     public ContactVerificationStatus contactStatus(Authentication auth) {
         InvestorAccount account = investorAuthService.requireAccount(accountId(auth));
         return contactVerificationService.getStatusAsInvestor(requireInvestorId(account));
+    }
+
+    // ── KYC self-service (A1 plumbing · A2 PAN verify · A3 DigiLocker) ────────
+    // All endpoints resolve the investor from the session and delegate to the
+    // InvestorKycService *AsInvestor variants (no distributor-ownership check).
+
+    @Operation(summary = "My KYC flow status (A3)",
+            description = "Current KYC readiness + next action for the authenticated investor.")
+    @GetMapping("/kyc/status")
+    public KycFlowStatusResponse kycStatus(Authentication auth) {
+        InvestorAccount account = investorAuthService.requireAccount(accountId(auth));
+        return investorKycService.getKycFlowStatusAsInvestor(requireInvestorId(account));
+    }
+
+    @Operation(summary = "Advance my KYC flow",
+            description = "Runs the next KYC step (pre-verify → KYC request → Aadhaar → eSign).")
+    @PostMapping("/kyc/advance")
+    public KycFlowAdvanceResponse advanceKyc(Authentication auth) {
+        InvestorAccount account = investorAuthService.requireAccount(accountId(auth));
+        return investorKycService.advanceKycFlowAsInvestor(requireInvestorId(account));
+    }
+
+    @Operation(summary = "Verify my PAN (A2)",
+            description = "Runs the Cybrilla KYC compliance check against my PAN and persists the result.")
+    @PostMapping("/kyc/pan-verify")
+    public InvestorExternalKycResponse verifyPan(Authentication auth) {
+        InvestorAccount account = investorAuthService.requireAccount(accountId(auth));
+        return investorKycService.runKycComplianceCheckAsInvestor(requireInvestorId(account), true);
+    }
+
+    @Operation(summary = "Evaluate my KYC readiness (POA pre-verification)",
+            description = "Runs the readiness check and returns the next action derived from readiness.code "
+                    + "(proceed / submit new KYC / modify KYC / wait / blocked / retry). Investor-only.")
+    @PostMapping("/kyc/readiness")
+    public KycReadinessDecision evaluateKycReadiness(Authentication auth) {
+        InvestorAccount account = investorAuthService.requireAccount(accountId(auth));
+        return investorKycService.evaluateReadinessAsInvestor(requireInvestorId(account));
+    }
+
+    // Sandbox/dev only — controlled by app.kyc.sandbox-simulation-enabled (false in prod).
+    @org.springframework.beans.factory.annotation.Value("${app.kyc.sandbox-simulation-enabled:false}")
+    private boolean kycSandboxSimulationEnabled;
+
+    @Operation(summary = "Simulate my KYC completion (sandbox only)",
+            description = "Sandbox/dev only: drives my KYC request to 'successful' via the FP simulate API so "
+                    + "DigiLocker (Aadhaar) + eSign complete without a real DigiLocker session. 403 in production.")
+    @PostMapping("/kyc/simulate")
+    public InvestorExternalKycResponse simulateKyc(Authentication auth) {
+        if (!kycSandboxSimulationEnabled) {
+            throw new AccessDeniedException("KYC simulation is not available in this environment.");
+        }
+        InvestorAccount account = investorAuthService.requireAccount(accountId(auth));
+        return investorKycService.simulateKycRequestAsInvestor(requireInvestorId(account), "successful");
+    }
+
+    @Operation(summary = "Refresh my external KYC status")
+    @PostMapping("/kyc/refresh")
+    public InvestorExternalKycResponse refreshKyc(Authentication auth) {
+        InvestorAccount account = investorAuthService.requireAccount(accountId(auth));
+        return investorKycService.syncInvestorExternalKycStatusAsInvestor(requireInvestorId(account));
+    }
+
+    @Operation(summary = "Create a KYC request (A3)")
+    @PostMapping("/kyc/requests")
+    public InvestorExternalKycResponse createKycRequest(
+            @RequestBody(required = false) InvestorKycRequestCreateRequest request, Authentication auth) {
+        InvestorAccount account = investorAuthService.requireAccount(accountId(auth));
+        return investorKycService.createKycRequestAsInvestor(requireInvestorId(account), request);
+    }
+
+    @Operation(summary = "Start DigiLocker identity verification (A3)",
+            description = "Creates an identity document and returns the DigiLocker redirect details.")
+    @PostMapping("/kyc/identity-documents")
+    public AadhaarVerificationResponse startDigiLocker(
+            @RequestBody(required = false) IdentityDocumentCreateRequest request, Authentication auth) {
+        InvestorAccount account = investorAuthService.requireAccount(accountId(auth));
+        return investorKycService.createIdentityDocumentAsInvestor(requireInvestorId(account), request);
+    }
+
+    @Operation(summary = "Fetch my DigiLocker documents after callback (A3)")
+    @PostMapping("/kyc/identity-documents/refresh")
+    public AadhaarVerificationResponse refreshDigiLocker(Authentication auth) {
+        InvestorAccount account = investorAuthService.requireAccount(accountId(auth));
+        return investorKycService.refreshIdentityDocumentForInvestorAsInvestor(requireInvestorId(account));
+    }
+
+    @Operation(summary = "Start eSign (A3)",
+            description = "Creates an eSign request for my KYC and returns the eSign redirect details.")
+    @PostMapping("/kyc/esign/start")
+    public EsignVerificationResponse startEsign(
+            @RequestBody(required = false) EsignStartRequest request, Authentication auth) {
+        InvestorAccount account = investorAuthService.requireAccount(accountId(auth));
+        return investorKycService.createEsignAsInvestor(requireInvestorId(account), request);
+    }
+
+    @Operation(summary = "Refresh my eSign status after callback (A3)")
+    @PostMapping("/kyc/esign/refresh")
+    public EsignVerificationResponse refreshEsign(Authentication auth) {
+        InvestorAccount account = investorAuthService.requireAccount(accountId(auth));
+        return investorKycService.refreshEsignAsInvestor(requireInvestorId(account));
+    }
+
+    @Operation(summary = "List my DigiLocker identity documents (A3)")
+    @GetMapping("/kyc/identity-documents")
+    public JsonNode listDigiLockerDocuments(
+            @RequestParam(required = false) String kycRequestId,
+            @RequestParam(required = false) String fetchStatus,
+            Authentication auth) {
+        InvestorAccount account = investorAuthService.requireAccount(accountId(auth));
+        return investorKycService.listIdentityDocumentsAsInvestor(
+                requireInvestorId(account), kycRequestId, fetchStatus);
+    }
+
+    // ── Profile authoring + profile-change approvals ─────────────────────────
+    // Investor↔distributor linking, M3 profile authoring and M4 profile-change
+    // approvals are served by the team's canonical InvestorLinkController +
+    // InvestorLinkRequestService + ProfileChangeApprovalService (challenge-id
+    // centric, /api/v1/investor/link/** and /profile-changes/**), so the portal
+    // no longer duplicates them here.
+
+    // ── Bank account (investor-self) ──────────────────────────────────────────
+
+    @Operation(summary = "Add my bank account",
+            description = "Adds and verifies a bank account so the investor becomes order-ready.")
+    @PostMapping("/bank-accounts")
+    public InvestorBankAccount addBankAccount(@Valid @RequestBody InvestorBankRequest request, Authentication auth) {
+        InvestorAccount account = investorAuthService.requireAccount(accountId(auth));
+        return investorService.addBankAccountAsInvestor(requireInvestorId(account), request);
+    }
+
+    @Operation(summary = "My bank accounts")
+    @GetMapping("/bank-accounts")
+    public List<InvestorBankAccount> myBankAccounts(Authentication auth) {
+        InvestorAccount account = investorAuthService.requireAccount(accountId(auth));
+        return investorService.listBankAccountsAsInvestor(requireInvestorId(account));
+    }
+
+    // ── Nominations (investor-self · REQUIREMENT #4) ──────────────────────────
+
+    @Operation(summary = "My nominees + opt-out status",
+            description = "Lists the investor's nominees and whether they have explicitly opted out of nominating.")
+    @GetMapping("/nominations")
+    public Map<String, Object> listNominations(Authentication auth) {
+        InvestorAccount account = investorAuthService.requireAccount(accountId(auth));
+        UUID investorId = requireInvestorId(account);
+        List<NomineeResponse> nominees = nomineeService.listNomineesAsInvestor(investorId).stream()
+                .map(NomineeResponse::from)
+                .toList();
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("nominees", nominees);
+        out.put("optedOut", nomineeService.isOptedOutAsInvestor(investorId));
+        return out;
+    }
+
+    @Operation(summary = "Add a nominee",
+            description = "Adds a nominee to my profile. Allocation percentages across nominees cannot exceed 100%.")
+    @PostMapping("/nominations")
+    public NomineeResponse addNomination(@Valid @RequestBody NomineeRequest request, Authentication auth) {
+        InvestorAccount account = investorAuthService.requireAccount(accountId(auth));
+        Nominee saved = nomineeService.addNomineeAsInvestor(requireInvestorId(account), request);
+        return NomineeResponse.from(saved);
+    }
+
+    @Operation(summary = "Opt out of nomination",
+            description = "Records an explicit decision not to nominate anyone, with an immutable consent record.")
+    @PostMapping("/nominations/opt-out")
+    public Map<String, Object> optOutOfNomination(Authentication auth, HttpServletRequest httpRequest) {
+        InvestorAccount account = investorAuthService.requireAccount(accountId(auth));
+        nomineeService.optOutAsInvestor(
+                requireInvestorId(account), account.getId(),
+                clientIp(httpRequest), httpRequest.getHeader("User-Agent"));
+        return Map.of("optedOut", Boolean.TRUE);
+    }
+
+    // ── Buy funds (investor-self order placement) ─────────────────────────────
+
+    @Operation(summary = "Browse buyable mutual-fund schemes",
+            description = "Live POA catalogue (cybrillapoa) the investor can invest in.")
+    @GetMapping("/schemes")
+    public Page<ProductScheme> browseSchemes(
+            @RequestParam(required = false) String query,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size,
+            Authentication auth) {
+        investorAuthService.requireAccount(accountId(auth));
+        return productService.syncAvailableFundsFromCybrilla(query, Boolean.TRUE, page, size);
+    }
+
+    @Operation(summary = "Place a fund order (buy)",
+            description = "Investor-self order placement; gated on KYC COMPLETED + verified bank. "
+                    + "Returns the order with its investor-action (payment) URL.")
+    @PostMapping("/orders")
+    public TransactionOrder placeOrder(@Valid @RequestBody InvestorOrderRequest request, Authentication auth) {
+        InvestorAccount account = investorAuthService.requireAccount(accountId(auth));
+        return orderService.createOrderAsInvestor(requireInvestorId(account), request);
     }
 
     // ── Approval Center (transaction 2FA) ────────────────────────────────────

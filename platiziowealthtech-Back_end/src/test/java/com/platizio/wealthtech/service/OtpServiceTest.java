@@ -39,7 +39,7 @@ class OtpServiceTest {
     @BeforeEach
     void setUp() {
         // exposeDevCode = true so the devCode-dependent tests can read the issued code.
-        otpService = new OtpService(otpRepository, emailService, 6, 5, 5, 30, true);
+        otpService = new OtpService(otpRepository, emailService, 6, 5, 5, 30, true, "");
         lenient().when(otpRepository.save(any(EmailOtp.class)))
                 .thenAnswer(invocation -> invocation.getArgument(0));
     }
@@ -68,7 +68,7 @@ class OtpServiceTest {
     void requestOtpNeverReturnsDevCodeWhenExposeDevCodeDisabled() {
         // DF-13: with the flag off (production / demo default), the live code must
         // never leak in the API response even when email delivery is disabled.
-        OtpService prodOtpService = new OtpService(otpRepository, emailService, 6, 5, 5, 30, false);
+        OtpService prodOtpService = new OtpService(otpRepository, emailService, 6, 5, 5, 30, false, "");
         when(otpRepository.findByEmailAndPurposeAndConsumedAtIsNull("user@example.com", OtpPurpose.LOGIN))
                 .thenReturn(List.of());
         when(emailService.sendHtml(anyString(), anyString(), anyString())).thenReturn(false);

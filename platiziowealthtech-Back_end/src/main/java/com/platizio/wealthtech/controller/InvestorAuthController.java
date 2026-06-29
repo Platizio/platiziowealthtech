@@ -4,6 +4,7 @@ import com.platizio.wealthtech.domain.OtpPurpose;
 import com.platizio.wealthtech.dto.InvestorAuthResponse;
 import com.platizio.wealthtech.dto.InvestorOtpRequest;
 import com.platizio.wealthtech.dto.InvestorOtpVerifyRequest;
+import com.platizio.wealthtech.dto.InvestorPasswordLoginRequest;
 import com.platizio.wealthtech.dto.InvestorSignupRequest;
 import com.platizio.wealthtech.dto.OtpRequestResponse;
 import com.platizio.wealthtech.service.AuthCookieService;
@@ -62,6 +63,16 @@ public class InvestorAuthController {
     public InvestorAuthResponse verifyLoginOtp(
             @Valid @RequestBody InvestorOtpVerifyRequest request, HttpServletResponse response) {
         InvestorAuthService.InvestorAuthResult result = investorAuthService.otpLogin(request.email(), request.code());
+        authCookieService.writeInvestorAccessToken(response, result.token());
+        return InvestorAuthResponse.from(result.account());
+    }
+
+    @Operation(summary = "Investor login with email + PAN",
+            description = "Signs in with the registered email and PAN (PAN is the password); sets the HttpOnly investor cookie.")
+    @PostMapping("/login")
+    public InvestorAuthResponse login(
+            @Valid @RequestBody InvestorPasswordLoginRequest request, HttpServletResponse response) {
+        InvestorAuthService.InvestorAuthResult result = investorAuthService.passwordLogin(request.email(), request.pan());
         authCookieService.writeInvestorAccessToken(response, result.token());
         return InvestorAuthResponse.from(result.account());
     }

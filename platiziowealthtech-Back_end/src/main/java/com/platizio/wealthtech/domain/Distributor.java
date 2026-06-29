@@ -24,12 +24,13 @@ public class Distributor extends BaseEntity {
     @Column(nullable = false, unique = true)
     private String email;
 
-    @Column(nullable = false, unique = true)
+    // Optional at signup — completed later inside the dashboard. Unique still allows multiple NULLs.
+    @Column(unique = true)
     private String arnNumber;
 
     private LocalDate arnExpiryDate;
 
-    @Column(nullable = false)
+    @Column
     private String nismCertificateNumber;
 
     private LocalDate nismExpiryDate;

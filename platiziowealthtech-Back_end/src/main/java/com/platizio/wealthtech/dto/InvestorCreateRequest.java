@@ -52,5 +52,31 @@ public record InvestorCreateRequest(
         Boolean pep,
         Boolean relativeOfPep,
         Boolean displayNominees,
-        List<NomineeDto> nominees
-) {}
+        List<NomineeDto> nominees,
+        // investor.md R1/R5: when true, create a pending investor (distributor_id NULL,
+        // pending_distributor_id set, linking_status PENDING_INVESTOR_APPROVAL) for the
+        // "Send to Investor" flow. Defaults to false to preserve the legacy create path.
+        Boolean gatedOnInvestorApproval
+) {
+    /**
+     * IRIS-order constructor (the canonical 32-field form used by onboarding call sites
+     * and existing tests): defaults the linking flag to {@code null} (legacy, non-gated
+     * distributor-owned create path).
+     */
+    public InvestorCreateRequest(
+            UUID distributorId, String fullName, String mobileNumber, String email, String pan,
+            LocalDate dateOfBirth, LocalDate anniversaryDate, LocalDate goalMaturityDate,
+            String addressLine1, String addressLine2, String city, String state, String postalCode,
+            UUID householdId, String householdName, InvestorRelationshipType relationshipType,
+            UUID guardianInvestorId, String guardianPan, String onboardingNotes,
+            String holdingMode, String category, String gender, String countryOfBirth,
+            String countryOfCitizenship, Boolean taxResidentOtherCountry, String annualIncome,
+            String occupation, String sourceOfWealth, Boolean pep, Boolean relativeOfPep,
+            Boolean displayNominees, List<NomineeDto> nominees) {
+        this(distributorId, fullName, mobileNumber, email, pan, dateOfBirth, anniversaryDate, goalMaturityDate,
+                addressLine1, addressLine2, city, state, postalCode, householdId, householdName, relationshipType,
+                guardianInvestorId, guardianPan, onboardingNotes, holdingMode, category, gender, countryOfBirth,
+                countryOfCitizenship, taxResidentOtherCountry, annualIncome, occupation, sourceOfWealth, pep,
+                relativeOfPep, displayNominees, nominees, null);
+    }
+}
