@@ -42,39 +42,60 @@ const messageForError = (err: unknown): string => {
   return raw || 'Something went wrong loading this approval link. Please try again.';
 };
 
-/** Pretty-prints the frozen distributor-entered payload as a read-only key/value list. */
+/** Turns a camelCase / snake_case key into a Title Case label. */
+const labelize = (key: string) =>
+  key
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/^./, (c) => c.toUpperCase());
+
+/** Renders a scalar value for display (booleans → Yes/No, blanks → em dash). */
+const renderScalar = (value: unknown): string => {
+  if (value === null || value === undefined || value === '') return '—';
+  if (typeof value === 'boolean') return value ? 'Yes' : 'No';
+  return String(value);
+};
+
+/** Read-only key/value rows for the scalar fields of an object. */
+function ScalarRows({ obj }: { obj: Record<string, unknown> }) {
+  const rows = Object.entries(obj).filter(([, v]) => typeof v !== 'object' || v === null);
+  if (rows.length === 0) return null;
+  return (
+    <div className="overflow-hidden rounded-xl border border-slate-200">
+      {rows.map(([k, v], i) => (
+        <div
+          key={k}
+          className={`flex items-start justify-between gap-4 px-4 py-3 ${i > 0 ? 'border-t border-slate-100' : ''} ${i % 2 === 1 ? 'bg-slate-50/60' : 'bg-white'}`}
+        >
+          <span className="text-xs font-bold uppercase tracking-wider text-slate-500">{labelize(k)}</span>
+          <span className="text-right text-sm font-medium text-slate-800 break-words">{renderScalar(v)}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * Pretty-prints the frozen distributor-entered payload as a read-only review. Scalars render
+ * as key/value rows; ARRAY values (e.g. `nominees`) render each element as a labeled sub-card
+ * so the investor sees the full rich diff (nominees, tax, bank) before approving — instead of
+ * the value being dropped.
+ */
 function ProfileDetails({ json }: { json?: string | null }) {
-  const rows = useMemo<Array<{ label: string; value: string }>>(() => {
-    if (!json) return [];
-    let parsed: unknown;
+  const parsed = useMemo<Record<string, unknown> | null>(() => {
+    if (!json) return null;
     try {
-      parsed = JSON.parse(json);
+      const obj = JSON.parse(json);
+      if (obj && typeof obj === 'object' && !Array.isArray(obj)) return obj as Record<string, unknown>;
     } catch {
-      return [];
+      /* fall through to raw */
     }
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return [];
-
-    const labelize = (key: string) =>
-      key
-        .replace(/([A-Z])/g, ' $1')
-        .replace(/[_-]+/g, ' ')
-        .replace(/\s+/g, ' ')
-        .trim()
-        .replace(/^./, (c) => c.toUpperCase());
-
-    const render = (value: unknown): string => {
-      if (value === null || value === undefined || value === '') return '—';
-      if (typeof value === 'boolean') return value ? 'Yes' : 'No';
-      if (typeof value === 'object') return JSON.stringify(value);
-      return String(value);
-    };
-
-    return Object.entries(parsed as Record<string, unknown>)
-      .filter(([, v]) => typeof v !== 'object' || v === null)
-      .map(([k, v]) => ({ label: labelize(k), value: render(v) }));
+    return null;
   }, [json]);
 
-  if (rows.length === 0) {
+  if (!parsed) {
     return (
       <pre className="max-h-80 overflow-auto rounded-xl border border-slate-200 bg-slate-50 p-4 text-xs leading-relaxed text-slate-700 whitespace-pre-wrap break-words font-mono">
         {json || 'No details were provided.'}
@@ -82,15 +103,32 @@ function ProfileDetails({ json }: { json?: string | null }) {
     );
   }
 
+  const arrayEntries = Object.entries(parsed).filter(([, v]) => Array.isArray(v)) as Array<[string, unknown[]]>;
+
   return (
-    <div className="overflow-hidden rounded-xl border border-slate-200">
-      {rows.map((row, i) => (
-        <div
-          key={row.label}
-          className={`flex items-start justify-between gap-4 px-4 py-3 ${i > 0 ? 'border-t border-slate-100' : ''} ${i % 2 === 1 ? 'bg-slate-50/60' : 'bg-white'}`}
-        >
-          <span className="text-xs font-bold uppercase tracking-wider text-slate-500">{row.label}</span>
-          <span className="text-right text-sm font-medium text-slate-800 break-words">{row.value}</span>
+    <div className="space-y-4">
+      <ScalarRows obj={parsed} />
+      {arrayEntries.map(([key, items]) => (
+        <div key={key}>
+          <p className="mb-2 text-xs font-bold uppercase tracking-wider text-slate-500">{labelize(key)}</p>
+          {items.length === 0 ? (
+            <p className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-3 text-xs text-slate-400">
+              None provided.
+            </p>
+          ) : (
+            <div className="space-y-3">
+              {items.map((item, i) => (
+                <div key={i} className="rounded-xl border border-slate-200 bg-slate-50/60 p-3">
+                  <p className="mb-2 text-[11px] font-semibold text-slate-600">{labelize(key)} {i + 1}</p>
+                  {item && typeof item === 'object' && !Array.isArray(item) ? (
+                    <ScalarRows obj={item as Record<string, unknown>} />
+                  ) : (
+                    <p className="px-1 text-sm font-medium text-slate-800">{renderScalar(item)}</p>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       ))}
     </div>
@@ -148,8 +186,17 @@ export default function InvestorLinkApproval() {
     [],
   );
 
-  const goSignIn = (path: '/investor/login' | '/investor/signup') => {
-    navigate(`${path}?returnTo=${encodeURIComponent(returnTo)}`);
+  const goSignIn = (
+    path: '/investor/login' | '/investor/signup',
+    options?: { autoApprove?: boolean },
+  ) => {
+    // For the signup → approve re-sequence (P3) we append autoApprove=1 to the return-to
+    // itself, so after the new session is set InvestorSignup reads the token from the
+    // return-to URL and approves this exact link before navigating to onboarding.
+    const dest = options?.autoApprove
+      ? `${returnTo}${returnTo.includes('?') ? '&' : '?'}autoApprove=1`
+      : returnTo;
+    navigate(`${path}?returnTo=${encodeURIComponent(dest)}`);
   };
 
   const loadReview = useCallback(async () => {
@@ -261,17 +308,21 @@ export default function InvestorLinkApproval() {
 
           <button
             type="button"
-            onClick={() => goSignIn('/investor/login')}
-            className="mt-6 flex w-full items-center justify-center gap-2 rounded-xl bg-[#0B1B3E] px-6 py-3.5 text-sm font-semibold text-white shadow-lg transition-all duration-150 hover:-translate-y-0.5 hover:bg-[#1A3066]"
+            onClick={() => goSignIn('/investor/signup', { autoApprove: true })}
+            disabled={!token}
+            className="mt-6 flex w-full items-center justify-center gap-2 rounded-xl bg-[#0B1B3E] px-6 py-3.5 text-sm font-semibold text-white shadow-lg transition-all duration-150 hover:-translate-y-0.5 hover:bg-[#1A3066] disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:translate-y-0"
           >
-            <Mail className="h-4 w-4" /> Sign in with email OTP
+            <UserPlus className="h-4 w-4" /> Approve onboarding
           </button>
+          <p className="mt-2 text-center text-[11px] text-slate-400">
+            Create your investor account, then we'll approve this link automatically.
+          </p>
           <button
             type="button"
-            onClick={() => goSignIn('/investor/signup')}
-            className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl border border-slate-200 px-6 py-3 text-sm font-semibold text-slate-700 transition-colors hover:bg-slate-50"
+            onClick={() => goSignIn('/investor/login')}
+            className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl border border-slate-200 px-6 py-3 text-sm font-semibold text-slate-700 transition-colors hover:bg-slate-50"
           >
-            <UserPlus className="h-4 w-4" /> New investor? Create an account
+            <Mail className="h-4 w-4" /> Already registered? Sign in with email OTP
           </button>
         </motion.div>
       </ApprovalShell>

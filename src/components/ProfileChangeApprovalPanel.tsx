@@ -19,25 +19,57 @@ const Spinner = () => (
 
 const normalizeStatus = (value?: string) => String(value || '').trim().toUpperCase();
 
-/** Pretty-prints the frozen pending-profile JSON as a read-only key/value list. */
+/** Turns a camelCase / snake_case key into a Title Case label. */
+const labelize = (key: string) =>
+  key
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/^./, (c) => c.toUpperCase());
+
+/** Renders a scalar value for display (booleans → Yes/No, blanks → em dash). */
+const renderScalar = (value: unknown): string => {
+  if (value === null || value === undefined || value === '') return '—';
+  if (typeof value === 'boolean') return value ? 'Yes' : 'No';
+  return String(value);
+};
+
+/** Read-only key/value list for the scalar fields of an object. */
+function ScalarList({ obj, dense }: { obj: Record<string, unknown>; dense?: boolean }) {
+  const rows = Object.entries(obj).filter(([, v]) => typeof v !== 'object' || v === null);
+  if (rows.length === 0) return null;
+  return (
+    <dl className="divide-y divide-slate-100 overflow-hidden rounded-xl border border-slate-200 bg-slate-50">
+      {rows.map(([k, v]) => (
+        <div key={k} className={`flex items-start justify-between gap-4 px-4 ${dense ? 'py-2' : 'py-2.5'}`}>
+          <dt className="text-xs font-medium text-slate-500">{labelize(k)}</dt>
+          <dd className="break-words text-right text-xs font-semibold text-slate-700">{renderScalar(v)}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
+/**
+ * Pretty-prints the frozen pending-profile JSON as a read-only diff. Scalars render as a
+ * key/value list; ARRAY values (e.g. `nominees`) render each element as a labeled sub-card
+ * so the investor sees the full rich diff (nominees, tax, bank) before approving — instead
+ * of the value being dropped or shown as raw JSON.
+ */
 function PendingProfileView({ value }: { value?: string }) {
-  const entries = useMemo<Array<[string, string]>>(() => {
-    if (!value) return [];
+  const parsed = useMemo<Record<string, unknown> | null>(() => {
+    if (!value) return null;
     try {
-      const parsed = JSON.parse(value) as Record<string, unknown>;
-      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-        return Object.entries(parsed).map(([k, v]) => [
-          k.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/^./, (c) => c.toUpperCase()),
-          v == null || v === '' ? '—' : typeof v === 'object' ? JSON.stringify(v) : String(v),
-        ]);
-      }
+      const obj = JSON.parse(value);
+      if (obj && typeof obj === 'object' && !Array.isArray(obj)) return obj as Record<string, unknown>;
     } catch {
       /* fall through to raw */
     }
-    return [];
+    return null;
   }, [value]);
 
-  if (entries.length === 0) {
+  if (!parsed) {
     return (
       <pre className="max-h-80 overflow-auto rounded-xl border border-slate-200 bg-slate-50 p-4 text-xs leading-relaxed text-slate-700 whitespace-pre-wrap break-words font-mono">
         {value || '—'}
@@ -45,15 +77,35 @@ function PendingProfileView({ value }: { value?: string }) {
     );
   }
 
+  const arrayEntries = Object.entries(parsed).filter(([, v]) => Array.isArray(v)) as Array<[string, unknown[]]>;
+
   return (
-    <dl className="divide-y divide-slate-100 overflow-hidden rounded-xl border border-slate-200 bg-slate-50">
-      {entries.map(([label, val]) => (
-        <div key={label} className="flex items-start justify-between gap-4 px-4 py-2.5">
-          <dt className="text-xs font-medium text-slate-500">{label}</dt>
-          <dd className="break-words text-right text-xs font-semibold text-slate-700">{val}</dd>
+    <div className="space-y-4">
+      <ScalarList obj={parsed} />
+      {arrayEntries.map(([key, items]) => (
+        <div key={key}>
+          <p className="mb-2 text-xs font-bold uppercase tracking-wider text-slate-500">{labelize(key)}</p>
+          {items.length === 0 ? (
+            <p className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-3 text-xs text-slate-400">
+              None provided.
+            </p>
+          ) : (
+            <div className="space-y-3">
+              {items.map((item, i) => (
+                <div key={i} className="rounded-xl border border-slate-200 bg-white p-3">
+                  <p className="mb-2 text-[11px] font-semibold text-slate-600">{labelize(key)} {i + 1}</p>
+                  {item && typeof item === 'object' && !Array.isArray(item) ? (
+                    <ScalarList obj={item as Record<string, unknown>} dense />
+                  ) : (
+                    <p className="px-1 text-xs font-semibold text-slate-700">{renderScalar(item)}</p>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       ))}
-    </dl>
+    </div>
   );
 }
 

@@ -5,7 +5,7 @@ import {
   MessageSquare, ArrowLeft, ArrowRight, Check, UserPlus,
 } from 'lucide-react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { apiFetch } from '../config/api';
+import { apiFetch, approveInvestorLink } from '../config/api';
 import { useAppDispatch } from '../store/hooks';
 import { setInvestorUser } from '../store/slices/investorAuthSlice';
 import { normalizeInvestorUser } from '../types/investorAuth';
@@ -48,6 +48,24 @@ export default function InvestorSignup() {
     const raw = searchParams.get('returnTo');
     if (raw && raw.startsWith('/investor/')) return raw;
     return '/investor/dashboard';
+  })();
+
+  /**
+   * P3.2 — approve-before-signup re-sequence. When the investor came from a distributor
+   * link review and chose "Approve onboarding", the link page sent us here with
+   * returnTo=/investor/link?token=…&autoApprove=1. After the new session is set we read the
+   * token (and autoApprove flag) from that SAME-ORIGIN-guarded return-to and approve the
+   * link before navigating to onboarding. Parsing only the guarded `safeReturnTo` keeps the
+   * existing return-to safety: a non-/investor/ return-to never reaches here.
+   */
+  const autoApprove = (() => {
+    if (!safeReturnTo.startsWith('/investor/link')) return null;
+    const query = safeReturnTo.includes('?') ? safeReturnTo.slice(safeReturnTo.indexOf('?') + 1) : '';
+    const params = new URLSearchParams(query);
+    if (params.get('autoApprove') !== '1') return null;
+    const linkToken = (params.get('token') || '').trim();
+    if (!linkToken) return null;
+    return { linkToken };
   })();
 
   const [step, setStep] = useState(1);
@@ -196,6 +214,20 @@ export default function InvestorSignup() {
       const user = normalizeInvestorUser(data);
       if (user) dispatch(setInvestorUser(user));
       setStep(4);
+
+      if (autoApprove) {
+        // Session is now set: approve the distributor link, then continue to onboarding.
+        // On approve failure (403 PAN mismatch / expired) fall back to the link page, which
+        // re-loads the review and renders the existing error copy for the investor.
+        try {
+          await approveInvestorLink(autoApprove.linkToken);
+          setTimeout(() => navigate('/investor/onboarding', { replace: true }), 900);
+        } catch {
+          setTimeout(() => navigate(safeReturnTo, { replace: true }), 900);
+        }
+        return;
+      }
+
       setTimeout(() => navigate(safeReturnTo, { replace: true }), 900);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not complete signup. Please try again.');
