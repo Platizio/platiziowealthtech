@@ -22,6 +22,11 @@ export interface TransactionOrder {
   transactionType?: string;
   amount?: number;
   units?: number;
+  allotmentNav?: number;
+  allotmentDate?: string;
+  folioNumber?: string;
+  stampDuty?: number;
+  netInvested?: number;
   orderStatus?: OrderStatus;
   externalOrderId?: string;
   investorActionToken?: string;
@@ -54,4 +59,10 @@ export interface TransactionListItem {
   failureReason?: string;
   productSchemeId?: string;
   schemeKnown?: boolean;
+  units?: number;
+  allotmentNav?: number;
+  allotmentDate?: string;
+  folioNumber?: string;
+  stampDuty?: number;
+  netInvested?: number;
 }

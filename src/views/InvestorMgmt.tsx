@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Search, Filter, Upload, UserPlus, X, CheckCircle2, Clock, XCircle, AlertCircle, ChevronDown, Download, RefreshCw } from 'lucide-react';
+import { Search, Filter, Upload, UserPlus, X, CheckCircle2, Clock, XCircle, AlertCircle, ChevronDown, Download, TrendingUp } from 'lucide-react';
 import { apiFetch, apiUrl } from '../config/api';
 import { useFocusTrap } from '../hooks/useFocusTrap';
 
@@ -60,9 +60,34 @@ export default function InvestorMgmt({ userData }: { userData?: any }) {
   const [showFilters,    setShowFilters]    = useState(false);
   const [addModal,       setAddModal]       = useState<'manual' | 'csv' | null>(null);
   const [fetchedDistributorNames, setFetchedDistributorNames] = useState<Record<string, string>>({});
-  const [rekycLoadingId, setRekycLoadingId] = useState<string | number | null>(null);
-  const [kycActionMessage, setKycActionMessage] = useState('');
-  const [kycActionError, setKycActionError] = useState('');
+  // Per-investor holdings drill-down (distributor view)
+  const [holdingsInv,     setHoldingsInv]     = useState<Investor | null>(null);
+  const [holdings,        setHoldings]        = useState<any[] | null>(null);
+  const [holdingsLoading, setHoldingsLoading] = useState(false);
+  const [holdingsError,   setHoldingsError]   = useState('');
+
+  const openHoldings = async (inv: Investor) => {
+    const distId = inv.distributorId || inv.raw?.distributorId;
+    setHoldingsInv(inv);
+    setHoldings(null);
+    setHoldingsError('');
+    if (!distId) {
+      setHoldingsError('This investor is not linked to a distributor yet, so holdings cannot be loaded.');
+      return;
+    }
+    setHoldingsLoading(true);
+    try {
+      const res = await apiFetch(`/dashboard/distributor/${distId}/investors/${inv.id}/holdings`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      setHoldings(Array.isArray(data) ? data : []);
+    } catch (e: any) {
+      setHoldingsError(e?.message || 'Failed to load holdings.');
+      setHoldings([]);
+    } finally {
+      setHoldingsLoading(false);
+    }
+  };
   const hasLoadedRef = React.useRef(false);
   const userId = userData?.id;
   const userRole = userData?.role;
@@ -218,40 +243,8 @@ export default function InvestorMgmt({ userData }: { userData?: any }) {
     return matchKyc && matchDist;
   });
 
-  const handleReKyc = async (inv: Investor) => {
-    if (!isUuid(String(inv.id))) {
-      setKycActionError('Re-KYC is available only for saved backend investor records. Refresh the page and try again.');
-      setKycActionMessage('');
-      return;
-    }
-
-    setRekycLoadingId(inv.id);
-    setKycActionError('');
-    setKycActionMessage('');
-    try {
-      const response = await apiFetch(`/investors/${inv.id}/kyc/apply`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({}),
-      });
-      const result = await response.json().catch(() => null);
-      if (!response.ok) {
-        throw new Error(result?.message || `KYC workflow failed with HTTP ${response.status}`);
-      }
-
-      let updatedInvestor = result?.investor;
-      if (updatedInvestor) {
-        setInvestors(prev => prev.map(row => row.id === inv.id ? mapInvestor(updatedInvestor) : row));
-      }
-      const status = updatedInvestor?.kycStatus || result?.status || inv.kycStatus || 'updated';
-      setKycActionMessage(`${inv.name} KYC updated through backend: ${String(status).replace(/_/g, ' ')}.`);
-    } catch (err) {
-      console.error('Re-KYC failed:', err);
-      setKycActionError(err instanceof Error ? err.message : 'Re-KYC failed.');
-    } finally {
-      setRekycLoadingId(null);
-    }
-  };
+  // Re-KYC removed: KYC is now an investor-only step. The distributor view no
+  // longer triggers any KYC workflow — it only displays read-only KYC status.
 
   const distributorOptions: string[] = [
     'All',
@@ -404,16 +397,6 @@ export default function InvestorMgmt({ userData }: { userData?: any }) {
           )}
         </AnimatePresence>
 
-        {(kycActionMessage || kycActionError) && (
-          <div className={`mx-4 mt-4 rounded-xl border px-4 py-3 text-sm font-medium ${
-            kycActionError
-              ? 'border-red-100 bg-red-50 text-red-700'
-              : 'border-green-100 bg-green-50 text-green-700'
-          }`}>
-            {kycActionError || kycActionMessage}
-          </div>
-        )}
-
         <div className="overflow-auto">
           {loading ? (
             <div className="p-12 text-center text-slate-500 font-medium">
@@ -466,17 +449,12 @@ export default function InvestorMgmt({ userData }: { userData?: any }) {
                     </td>
                     <td className="px-6 py-4 text-right">
                       <div className="flex items-center gap-2 justify-end opacity-0 group-hover:opacity-100 transition-opacity">
-                        <button className="px-3 py-1.5 text-xs font-semibold text-blue-600 border border-blue-200 rounded-lg hover:bg-blue-50 transition-colors">View</button>
-                        {(inv.kyc === 'Pending' || inv.kyc === 'Failed' || inv.kyc === 'In Progress') && (
-                          <button
-                            onClick={() => handleReKyc(inv)}
-                            disabled={rekycLoadingId === inv.id}
-                            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-amber-600 border border-amber-200 rounded-lg hover:bg-amber-50 transition-colors disabled:opacity-50"
-                          >
-                            {rekycLoadingId === inv.id && <RefreshCw className="h-3.5 w-3.5 animate-spin" />}
-                            {rekycLoadingId === inv.id ? 'Running' : 'Re-KYC'}
-                          </button>
-                        )}
+                        <button
+                          onClick={() => openHoldings(inv)}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-blue-600 border border-blue-200 rounded-lg hover:bg-blue-50 transition-colors"
+                        >
+                          <TrendingUp className="w-3.5 h-3.5" /> Holdings
+                        </button>
                       </div>
                     </td>
                   </tr>
@@ -492,8 +470,98 @@ export default function InvestorMgmt({ userData }: { userData?: any }) {
       <AnimatePresence>
         {addModal === 'manual' && <ManualOnboardModal onClose={() => setAddModal(null)} />}
         {addModal === 'csv'    && <CsvUploadModal     onClose={() => setAddModal(null)} />}
+        {holdingsInv && (
+          <HoldingsModal
+            investor={holdingsInv}
+            holdings={holdings}
+            loading={holdingsLoading}
+            error={holdingsError}
+            onClose={() => setHoldingsInv(null)}
+          />
+        )}
       </AnimatePresence>
     </motion.div>
+  );
+}
+
+function HoldingsModal({ investor, holdings, loading, error, onClose }: {
+  investor: Investor;
+  holdings: any[] | null;
+  loading: boolean;
+  error: string;
+  onClose: () => void;
+}) {
+  const dialogRef = useFocusTrap<HTMLDivElement>(true);
+  const fmtINR = (n: any) =>
+    (n === null || n === undefined || n === '') ? '—' : '₹' + Number(n).toLocaleString('en-IN', { maximumFractionDigits: 2 });
+  const fmtUnits = (n: any) =>
+    (n === null || n === undefined || n === '') ? '—' : Number(n).toLocaleString('en-IN', { maximumFractionDigits: 4 });
+  const list = holdings || [];
+  const totalValue = list.reduce((s, h) => s + (Number(h.currentValue) || 0), 0);
+  const qualityBadge = (q: string) => {
+    const cls: Record<string, string> = { OK: 'bg-green-50 text-green-700', STALE: 'bg-amber-50 text-amber-700', UNAVAILABLE: 'bg-slate-100 text-slate-500' };
+    const label: Record<string, string> = { OK: 'Live valuation', STALE: 'At cost', UNAVAILABLE: 'Valuation pending' };
+    return <span className={`px-2 py-0.5 text-[10px] font-semibold rounded ${cls[q] || 'bg-slate-100 text-slate-500'}`}>{label[q] || q || ''}</span>;
+  };
+  return (
+    <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="holdings-title"
+      className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+        onClick={onClose} className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm" />
+      <motion.div initial={{ opacity: 0, scale: 0.95, y: 20 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.95, y: 20 }}
+        className="bg-white w-full max-w-2xl rounded-3xl shadow-xl relative z-10 overflow-hidden max-h-[90vh] flex flex-col">
+        <div className="p-6 border-b border-slate-100 flex items-start justify-between">
+          <div>
+            <h2 id="holdings-title" className="text-xl font-semibold text-slate-800">{investor.name}&rsquo;s Holdings</h2>
+            <p className="text-xs text-slate-400 font-mono mt-0.5">{investor.pan}</p>
+          </div>
+          <button onClick={onClose} aria-label="Close dialog" className="p-2 text-slate-400 hover:text-slate-600 bg-slate-100 rounded-full transition-colors">
+            <X className="w-5 h-5" aria-hidden="true" />
+          </button>
+        </div>
+        <div className="p-6 overflow-y-auto">
+          {loading ? (
+            <div className="py-12 text-center text-slate-500 font-medium">
+              <div className="animate-spin w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full mx-auto mb-4" />
+              Loading holdings…
+            </div>
+          ) : error ? (
+            <div className="rounded-xl border border-amber-100 bg-amber-50 text-amber-700 px-4 py-3 text-sm font-medium flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 flex-shrink-0" /> {error}
+            </div>
+          ) : list.length === 0 ? (
+            <div className="py-12 text-center text-slate-400 text-sm">No holdings yet — this investor hasn&rsquo;t invested in any funds.</div>
+          ) : (
+            <>
+              <div className="mb-4 rounded-2xl bg-gradient-to-br from-blue-600 to-indigo-700 text-white p-5">
+                <p className="text-xs font-medium text-blue-100">Total current value</p>
+                <p className="text-3xl font-bold mt-1">{fmtINR(totalValue)}</p>
+                <p className="text-xs text-blue-100 mt-1">{list.length} holding{list.length !== 1 ? 's' : ''}</p>
+              </div>
+              <div className="space-y-3">
+                {list.map((h, i) => (
+                  <div key={h.orderId || i} className="rounded-2xl border border-slate-200 p-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="font-semibold text-slate-800 text-sm leading-snug">{h.schemeName || 'Scheme'}</p>
+                        <p className="text-xs text-slate-400 mt-0.5">{h.amcName || '—'}{h.category ? ' · ' + h.category : ''}</p>
+                        {h.folio && <p className="text-[11px] text-slate-400 font-mono mt-1">Folio {h.folio}</p>}
+                      </div>
+                      {qualityBadge(h.dataQuality)}
+                    </div>
+                    <div className="grid grid-cols-3 gap-3 mt-3 text-sm">
+                      <div><p className="text-[10px] uppercase tracking-wider text-slate-400">Units</p><p className="font-mono font-semibold text-slate-700">{fmtUnits(h.availableUnits)}</p></div>
+                      <div><p className="text-[10px] uppercase tracking-wider text-slate-400">Latest NAV</p><p className="font-mono font-semibold text-slate-700">{fmtINR(h.latestNav)}</p></div>
+                      <div><p className="text-[10px] uppercase tracking-wider text-slate-400">Current value</p><p className="font-mono font-semibold text-slate-800">{fmtINR(h.currentValue)}</p></div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+      </motion.div>
+    </div>
   );
 }
 

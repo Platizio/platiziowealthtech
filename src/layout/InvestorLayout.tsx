@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard, ClipboardCheck, Wallet, FileCheck, UserCircle2,
-  LogOut, Menu, ShieldCheck, Sparkles,
+  LogOut, Menu, ShieldCheck, Sparkles, Users,
 } from 'lucide-react';
 import type { InvestorUser } from '../types/investorAuth';
 
@@ -16,6 +16,7 @@ const INVESTOR_NAV = [
   { id: '/investor/dashboard',   icon: <LayoutDashboard className="w-4 h-4" />, label: 'Dashboard' },
   { id: '/investor/approvals',   icon: <ClipboardCheck className="w-4 h-4" />,  label: 'Approvals' },
   { id: '/investor/withdrawals', icon: <Wallet className="w-4 h-4" />,          label: 'Withdraw' },
+  { id: '/investor/nominations', icon: <Users className="w-4 h-4" />,           label: 'Nominees' },
   { id: '/investor/onboarding',  icon: <FileCheck className="w-4 h-4" />,       label: 'KYC Approval' },
 ];
 

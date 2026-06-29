@@ -38,34 +38,6 @@ export const buildKycPostbackUrl = (investorId: string, kycReturn: 'aadhaar' | '
   return url.toString();
 };
 
-/** Base URL Cybrilla should redirect back to after KYC modify Digilocker/eSign (no path). */
-export const kycModifyCallbackBaseUrl = () => window.location.origin;
-
-export const buildKycModifyCallbackUrl = (
-  investorId: string,
-  action: 'proof-callback' | 'esign-callback',
-) => `${window.location.origin}/distributor/investors/${investorId}/kyc-modify/${action}`;
-
-/**
- * Rewrites stale dev callback hosts (e.g. localhost:5173) to the current Vite origin.
- */
-export const rewriteKycModifyCallbackUrl = (url?: string | null, investorId?: string) => {
-  if (!url || !investorId) return url || undefined;
-  try {
-    const parsed = new URL(url, window.location.origin);
-    const marker = '/kyc-modify/';
-    const idx = parsed.pathname.indexOf(marker);
-    if (idx < 0) return url;
-    const action = parsed.pathname.slice(idx + marker.length).split('/')[0];
-    if (action !== 'proof-callback' && action !== 'esign-callback') return url;
-    const rebuilt = new URL(buildKycModifyCallbackUrl(investorId, action));
-    parsed.searchParams.forEach((value, key) => rebuilt.searchParams.set(key, value));
-    return rebuilt.toString();
-  } catch {
-    return url;
-  }
-};
-
 export const normalizeKycFlowStatus = (payload: unknown): KycFlowStatusView | null => {
   if (!payload || typeof payload !== 'object') return null;
   const data = payload as Record<string, unknown>;

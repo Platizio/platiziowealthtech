@@ -7,6 +7,7 @@ import {
   PieChart, RefreshCw, FileBarChart2, MessageSquare, ClipboardList, Calculator, Wrench
 } from 'lucide-react';
 import { useFocusTrap } from '../hooks/useFocusTrap';
+import DistributorNotificationBell from '../components/DistributorNotificationBell';
 import { useGetNotificationsByDistributorQuery } from '../store/api/platizioApi';
 import { useAppSelector } from '../store/hooks';
 import { selectAuthStatus, selectIsAuthLoading } from '../store/slices/authSlice';
@@ -317,6 +318,9 @@ export default function AppLayout({ userData, onSignOut }: { userData: any, onSi
                 )}
               </div>
 
+              {mode === 'distributor' && distributorId && (
+                <DistributorNotificationBell distributorId={distributorId} />
+              )}
               <button
                 onClick={() => mode === 'distributor' && navigate('/distributor/notifications')}
                 aria-label={

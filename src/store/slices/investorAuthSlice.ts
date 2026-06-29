@@ -30,7 +30,7 @@ const isInvestorPath = (pathname?: string) => {
 const isInvestorPublicPath = (pathname?: string) => {
   if (typeof window === 'undefined') return false;
   const path = pathname ?? window.location.pathname;
-  return path === '/investor/login' || path === '/investor/signup';
+  return path === '/investor/login' || path === '/investor/signup' || path === '/investor/link-approve' || path === '/investor/link-form';
 };
 
 /** Captured once at bundle load — survives the brief redirect before restore runs. */

@@ -1,11 +1,11 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion } from 'motion/react';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts';
 import {
   ArrowUpRight, Users, AlertCircle, Clock,
   TrendingUp, TrendingDown, ChevronRight,
-  Briefcase, Activity, Target, Gift,
+  Briefcase, Activity, Target, Gift, UserCog, X,
 } from 'lucide-react';
 import {
   useGetDashboardActionsQuery,
@@ -52,6 +52,18 @@ export default function Dashboard({ onNavigate, userData }: DashboardProps) {
   const distributorId = userData?.id ? String(userData.id) : undefined;
   const queryOptions = { skip: !distributorId } as const;
 
+  /* ── Profile-completeness prompt ──────────────────────────────────────────
+     Distributors who registered with only basic identity have no ARN/NISM yet.
+     The distributor profile (from /auth/me) exposes both `arnNumber` (see
+     AppLayout / Profile) and `profileCompletionPercent` (see Profile). Treat the
+     profile as incomplete when completion < 85% OR the ARN is missing. */
+  const [profilePromptDismissed, setProfilePromptDismissed] = useState(false);
+  const completionPercent: number | undefined =
+    typeof userData?.profileCompletionPercent === 'number' ? userData.profileCompletionPercent : undefined;
+  const hasArn = !!(userData?.arnNumber || userData?.arn_number || userData?.arn);
+  const profileIncomplete = !!userData && (((completionPercent ?? 100) < 85) || !hasArn);
+  const showProfilePrompt = profileIncomplete && !profilePromptDismissed;
+
   const { data: orders = [] } = useGetOrdersByDistributorQuery(distributorId!, queryOptions);
   const { data: investors = [] } = useGetInvestorsByDistributorQuery(distributorId!, queryOptions);
   const { data: schemes = [] } = useGetSchemesQuery(undefined, queryOptions);
@@ -88,6 +100,36 @@ export default function Dashboard({ onNavigate, userData }: DashboardProps) {
       animate={{ opacity: 1, y: 0 }}
       className="p-4 md:p-8 space-y-6"
     >
+      {/* ── Complete-your-profile prompt (incomplete ARN/NISM) ──────────── */}
+      {showProfilePrompt && (
+        <div className="flex items-start gap-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3.5 shadow-sm">
+          <div className="mt-0.5 flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-xl bg-amber-100 text-amber-600">
+            <UserCog className="h-4 w-4" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-semibold text-amber-800">Complete your profile</p>
+            <p className="mt-0.5 text-xs text-amber-700">
+              Complete your ARN &amp; NISM details to start onboarding investors.
+            </p>
+          </div>
+          <div className="flex flex-shrink-0 items-center gap-2">
+            <button
+              onClick={() => navigate('/distributor/profile')}
+              className="rounded-lg bg-amber-500 px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-amber-600"
+            >
+              Complete profile
+            </button>
+            <button
+              onClick={() => setProfilePromptDismissed(true)}
+              aria-label="Dismiss"
+              className="rounded-lg p-1.5 text-amber-500 transition-colors hover:bg-amber-100 hover:text-amber-700"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* ── Page header ─────────────────────────────────────────────────── */}
       <div className="flex flex-wrap justify-between items-end gap-3">
         <div>
@@ -236,8 +278,8 @@ export default function Dashboard({ onNavigate, userData }: DashboardProps) {
         <div className="bg-[#0B1B3E] rounded-2xl shadow-sm p-6 text-white flex flex-col relative overflow-hidden">
           <div className="absolute top-0 right-0 w-64 h-64 bg-blue-500 opacity-10 rounded-full blur-3xl transform translate-x-1/2 -translate-y-1/2" />
           <h2 className="font-semibold mb-6">Today's Transactions</h2>
-          <div className="h-48 w-full relative">
-            <ResponsiveContainer width="100%" height="100%">
+          <div className="w-full min-w-0 relative">
+            <ResponsiveContainer width="100%" height={192} minWidth={0}>
               <PieChart>
                 <Pie
                   data={metrics.donutData} cx="50%" cy="50%"

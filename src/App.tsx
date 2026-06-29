@@ -56,7 +56,6 @@ const SipDashboard        = lazy(() => import('./views/SipDashboard'));
 const ActionCenter        = lazy(() => import('./views/ActionCenter'));
 const InvestorOnboarding  = lazy(() => import('./views/InvestorOnboarding'));
 const InvestorTransaction = lazy(() => import('./views/InvestorTransaction'));
-const InvestorKycModify   = lazy(() => import('./views/InvestorKycModify'));
 const InvestorRedeem      = lazy(() => import('./views/InvestorRedeem'));
 const Redemptions         = lazy(() => import('./views/Redemptions'));
 const Portfolio           = lazy(() => import('./views/Portfolio'));
@@ -74,6 +73,8 @@ const InvestorMgmt        = lazy(() => import('./views/InvestorMgmt'));
 // Investor portal views (Phase 1)
 const InvestorLoginPage      = lazy(() => import('./views/InvestorLoginPage'));
 const InvestorSignup         = lazy(() => import('./views/InvestorSignup'));
+const InvestorLinkApprove    = lazy(() => import('./views/InvestorLinkApprove'));
+const InvestorLinkForm       = lazy(() => import('./views/InvestorLinkForm'));
 const InvestorOnboardingReview = lazy(() => import('./views/InvestorOnboardingReview'));
 const InvestorLinkApproval    = lazy(() => import('./views/InvestorLinkApproval'));
 
@@ -83,6 +84,12 @@ const InvestorWithdrawal     = lazy(() => import('./views/InvestorWithdrawal'));
 
 // Investor portal views (Phase 3 — portfolio dashboard)
 const InvestorDashboard      = lazy(() => import('./views/InvestorDashboard'));
+const InvestorKyc            = lazy(() => import('./views/InvestorKyc'));
+const InvestorProfile        = lazy(() => import('./views/InvestorProfile'));
+const InvestorInvest         = lazy(() => import('./views/InvestorInvest'));
+const InvestorProfileForm    = lazy(() => import('./views/InvestorProfileForm'));
+const InvestorApprovals      = lazy(() => import('./views/InvestorApprovals'));
+const InvestorNominees       = lazy(() => import('./views/InvestorNominees'));
 const InvestorDashboardLuxe  = lazy(() => import('./views/InvestorDashboardLuxe'));
 
 /**
@@ -221,6 +228,10 @@ export default function App() {
           purpose — the page itself prompts an unauthenticated investor through
           the OTP auth (with a return-to back here) before showing the review. */}
       <Route path="/investor/approve" element={<InvestorLinkApproval />} />
+      {/* Net-new public investor routes (mine): no-auth link-approve + editable
+          onboarding/link form. Both target views are present in the merged tree. */}
+      <Route path="/investor/link-approve" element={<InvestorLinkApprove />} />
+      <Route path="/investor/link-form" element={<InvestorLinkForm />} />
       {investorSession ? (
         <>
           {/* Full-screen immersive "Luxe" dashboard — rendered OUTSIDE the sidebar
@@ -233,6 +244,11 @@ export default function App() {
             <Route path="/investor" element={<Navigate to="/investor/dashboard" replace />} />
             <Route path="/investor/dashboard" element={<InvestorDashboard />} />
             <Route path="/investor/onboarding" element={<InvestorOnboardingReview />} />
+            <Route path="/investor/kyc" element={<InvestorKyc />} />
+            <Route path="/investor/invest" element={<InvestorInvest />} />
+            <Route path="/investor/profile-form" element={<InvestorProfileForm />} />
+            <Route path="/investor/profile-approvals" element={<InvestorApprovals />} />
+            <Route path="/investor/nominations" element={<InvestorNominees />} />
             <Route path="/investor/approvals" element={<InvestorApprovalCenter />} />
             <Route path="/investor/withdrawals" element={<InvestorWithdrawal />} />
             <Route path="/investor/profile" element={<InvestorProfile investor={investorSession} />} />
@@ -272,11 +288,6 @@ export default function App() {
           <Route path="/distributor/investor-onboarding" element={<InvestorOnboardingWrapper userData={userData} />} />
           <Route path="/distributor/investor-transaction" element={<InvestorTransactionWrapper />} />
 
-          {/* Cybrilla POA KYC Forms (modify) workflow. The two callback paths are
-              where the investor is redirected back after the Digilocker and eSign
-              journeys (proof_details_callback_url / esign_callback_url). */}
-          <Route path="/distributor/investors/:investorId/kyc-modify" element={<InvestorKycModify />} />
-          <Route path="/distributor/investors/:investorId/kyc-modify/:action" element={<InvestorKycModify />} />
 
           {/* Redeem (sell) an investor's mutual-fund holdings. Lists completed
               purchase orders for the investor and submits a redemption against
@@ -409,10 +420,38 @@ function InvestorShell({
               </button>
               <button
                 type="button"
+                onClick={() => navigate('/investor/kyc')}
+                className="rounded-lg px-3 py-1.5 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-900"
+              >
+                KYC
+              </button>
+              <button
+                type="button"
+                onClick={() => navigate('/investor/invest')}
+                className="rounded-lg px-3 py-1.5 text-sm font-semibold text-blue-700 bg-blue-50 transition-colors hover:bg-blue-100"
+              >
+                Invest
+              </button>
+              <button
+                type="button"
+                onClick={() => navigate('/investor/profile-form')}
+                className="rounded-lg px-3 py-1.5 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-900"
+              >
+                My Profile
+              </button>
+              <button
+                type="button"
                 onClick={() => navigate('/investor/approvals')}
                 className="rounded-lg px-3 py-1.5 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-900"
               >
                 Approvals
+              </button>
+              <button
+                type="button"
+                onClick={() => navigate('/investor/profile-approvals')}
+                className="rounded-lg px-3 py-1.5 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-900"
+              >
+                Change Requests
               </button>
               <button
                 type="button"
@@ -451,31 +490,4 @@ function InvestorShell({
   );
 }
 
-// Minimal investor profile for Phase 1 — read-only account summary.
-function InvestorProfile({ investor }: { investor: InvestorUser }) {
-  const rows: Array<{ label: string; value: string }> = [
-    { label: 'Full name', value: investor.fullName || '—' },
-    { label: 'Email', value: investor.email || '—' },
-    { label: 'Account status', value: String(investor.status || '—') },
-    { label: 'Email verified', value: investor.emailVerified ? 'Yes' : 'No' },
-    { label: 'Mobile verified', value: investor.mobileVerified ? 'Yes' : 'No' },
-    { label: 'Linked to investor record', value: investor.investorLinked ? 'Yes' : 'Not yet' },
-  ];
-  return (
-    <div className="mx-auto max-w-2xl p-8">
-      <h1 className="mb-1 text-2xl font-semibold text-slate-800">Your profile</h1>
-      <p className="mb-6 text-sm text-slate-500">Your investor account details.</p>
-      <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
-        {rows.map((row, i) => (
-          <div
-            key={row.label}
-            className={`flex items-center justify-between px-6 py-4 ${i > 0 ? 'border-t border-slate-100' : ''}`}
-          >
-            <span className="text-xs font-bold uppercase tracking-wider text-slate-500">{row.label}</span>
-            <span className="text-sm font-medium text-slate-800">{row.value}</span>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
+// InvestorProfile moved to ./views/InvestorProfile.tsx (now wired to GET /investor/me + KYC status).

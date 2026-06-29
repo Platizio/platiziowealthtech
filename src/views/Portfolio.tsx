@@ -12,6 +12,10 @@ function fmt(n: number) {
 
 const num = (v: unknown) => Number(v) || 0;
 
+// Allotment formatters: units up to 3 dp, NAV as ₹ with 2–4 dp.
+const fmtUnits = (v: number) => v.toLocaleString('en-IN', { maximumFractionDigits: 3 });
+const fmtNav = (v: number) => `₹${v.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 4 })}`;
+
 const statusClass = (displayStatus: string) => {
   const s = String(displayStatus || '').toLowerCase();
   if (s.includes('failed')) return 'bg-red-50 text-red-700';
@@ -47,6 +51,9 @@ type PortfolioPayload = {
     externalMandateId?: number;
     sipFrequency?: string;
     failureReason?: string;
+    units?: number;
+    allotmentNav?: number;
+    folioNumber?: string;
   }>;
   investors?: Array<{
     investorId: string;
@@ -355,6 +362,16 @@ export default function Portfolio({ userData }: { userData?: any }) {
                       <td className="py-3">
                         <p className="font-medium text-slate-800">{row.schemeName}</p>
                         <p className="text-xs text-slate-500">{row.amcName}</p>
+                        {/* Contract-note / allotment fields — only shown once allotted. */}
+                        {(row.units != null || row.allotmentNav != null || row.folioNumber) && (
+                          <p className="text-xs text-slate-500 mt-1">
+                            {[
+                              row.units != null ? `${fmtUnits(row.units)} units` : null,
+                              row.allotmentNav != null ? `NAV ${fmtNav(row.allotmentNav)}` : null,
+                              row.folioNumber ? `Folio ${row.folioNumber}` : null,
+                            ].filter(Boolean).join(' · ')}
+                          </p>
+                        )}
                         {!row.schemeKnown && row.failureReason && (
                           <p className="text-xs text-red-600 mt-1">{row.failureReason}</p>
                         )}

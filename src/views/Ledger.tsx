@@ -8,6 +8,7 @@ import {
 import { apiFetch } from '../config/api';
 import InvestorActionLink from '../components/InvestorActionLink';
 import { formatOrderStatusLabel } from '../utils/investorAction';
+import { formatDate } from '../utils/formatDate';
 import BackendFundDetailModal from '../components/BackendFundDetailModal';
 import Pagination from '../components/Pagination';
 import { useDebounce } from '../hooks/useDebounce';
@@ -1380,6 +1381,43 @@ function TransactionModal({ fund, userData, onClose }: { fund: any; userData?: a
                   <span className="text-slate-500">Amount</span>
                   <span className="font-mono font-semibold text-slate-800">Rs {amountNumber.toLocaleString('en-IN')}</span>
                 </div>
+                {/* Contract-note / allotment fields — only shown once allotted. */}
+                {createdOrder.units != null && (
+                  <div className="flex justify-between gap-4 py-1">
+                    <span className="text-slate-500">Units allotted</span>
+                    <span className="font-mono font-medium text-slate-800">{Number(createdOrder.units).toLocaleString('en-IN', { maximumFractionDigits: 3 })}</span>
+                  </div>
+                )}
+                {createdOrder.allotmentNav != null && (
+                  <div className="flex justify-between gap-4 py-1">
+                    <span className="text-slate-500">NAV (allotment price)</span>
+                    <span className="font-mono font-medium text-slate-800">{`₹${Number(createdOrder.allotmentNav).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 4 })}`}</span>
+                  </div>
+                )}
+                {createdOrder.allotmentDate && (
+                  <div className="flex justify-between gap-4 py-1">
+                    <span className="text-slate-500">Allotment date</span>
+                    <span className="font-medium text-slate-800 text-right">{formatDate(createdOrder.allotmentDate)}</span>
+                  </div>
+                )}
+                {createdOrder.folioNumber && (
+                  <div className="flex justify-between gap-4 py-1">
+                    <span className="text-slate-500">Folio number</span>
+                    <span className="font-mono font-medium text-slate-800 text-right">{createdOrder.folioNumber}</span>
+                  </div>
+                )}
+                {createdOrder.stampDuty != null && (
+                  <div className="flex justify-between gap-4 py-1">
+                    <span className="text-slate-500">Stamp duty</span>
+                    <span className="font-mono font-medium text-slate-800">{`₹${Number(createdOrder.stampDuty).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}</span>
+                  </div>
+                )}
+                {createdOrder.netInvested != null && (
+                  <div className="flex justify-between gap-4 py-1">
+                    <span className="text-slate-500">Net invested</span>
+                    <span className="font-mono font-medium text-slate-800">{`₹${Number(createdOrder.netInvested).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}</span>
+                  </div>
+                )}
                 <div className="flex justify-between gap-4 py-1">
                   <span className="text-slate-500">Status</span>
                   <span className="font-semibold text-amber-700">{formatOrderStatusLabel(createdOrder.orderStatus)}</span>
