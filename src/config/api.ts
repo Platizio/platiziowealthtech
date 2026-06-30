@@ -356,6 +356,57 @@ export const approveAndSkipInvestorLink = (token: string) =>
     'POST',
   );
 
+const publicInvestorLinkRequest = async <T>(
+  path: string,
+  method: 'GET' | 'POST',
+  body?: unknown,
+): Promise<T> => {
+  const response = await apiFetch(path, {
+    method,
+    headers: { 'Content-Type': 'application/json' },
+    ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+    skipAuthRedirect: true,
+  });
+  const data = (await response.json().catch(() => null)) as (T & { message?: string }) | null;
+  if (!response.ok) {
+    const error = new Error(
+      (data as { message?: string } | null)?.message || `Server error: ${response.status}`,
+    ) as InvestorLinkError;
+    error.status = response.status;
+    throw error;
+  }
+  return data as T;
+};
+
+/** GET /investor/link/review?token=... - public email-link review before signup/login. */
+export const reviewInvestorLinkPublic = (token: string) =>
+  publicInvestorLinkRequest<InvestorLinkReviewResponse & {
+    fullName?: string | null;
+    pan?: string | null;
+    email?: string | null;
+    mobileNumber?: string | null;
+    dateOfBirth?: string | null;
+  }>(
+    `/investor/link/review?token=${encodeURIComponent(token)}`,
+    'GET',
+  );
+
+/** POST /investor/link/approve - public email-link approval before signup/login. */
+export const approveInvestorLinkPublic = (token: string) =>
+  publicInvestorLinkRequest<InvestorLinkActionResponse & { email?: string | null; pan?: string | null }>(
+    '/investor/link/approve',
+    'POST',
+    { token, consentAccepted: true },
+  );
+
+/** POST /investor/link/reject - public email-link rejection before signup/login. */
+export const rejectInvestorLinkPublic = (token: string) =>
+  publicInvestorLinkRequest<InvestorLinkActionResponse>(
+    '/investor/link/reject',
+    'POST',
+    { token },
+  );
+
 // ─── Distributor skip-form fill (R10) ─────────────────────────────────────────
 
 /** Linking lifecycle, mirrors BE `InvestorLinkingStatus`. */

@@ -12,6 +12,16 @@ import { normalizeInvestorUser } from '../types/investorAuth';
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const PAN_RE = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
 
+const safeInvestorReturnTo = (value: string | null) => {
+  if (!value) return '/investor/dashboard';
+  if (!value.startsWith('/investor')) return '/investor/dashboard';
+  if (value.startsWith('/investor/login') || value.startsWith('/investor/signup')) {
+    return '/investor/dashboard';
+  }
+  if (value.startsWith('//') || value.includes('://')) return '/investor/dashboard';
+  return value;
+};
+
 const Spinner = () => (
   <svg className="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24">
     <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
@@ -57,7 +67,7 @@ export default function InvestorLoginPage() {
       }
       const user = normalizeInvestorUser(data);
       if (user) dispatch(setInvestorUser(user));
-      navigate('/investor/dashboard', { replace: true });
+      navigate(safeInvestorReturnTo(searchParams.get('returnTo')), { replace: true });
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Invalid email or PAN. Please check and try again.');
     } finally {

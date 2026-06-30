@@ -10,6 +10,9 @@ import {
   approveInvestorLink,
   rejectInvestorLink,
   approveAndSkipInvestorLink,
+  reviewInvestorLinkPublic,
+  approveInvestorLinkPublic,
+  rejectInvestorLinkPublic,
   type InvestorLinkReviewResponse,
   type InvestorLinkError,
 } from '../config/api';
@@ -58,21 +61,53 @@ const renderScalar = (value: unknown): string => {
   return String(value);
 };
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+
+function DetailValue({ value }: { value: unknown }) {
+  if (Array.isArray(value)) {
+    if (value.length === 0) return <span className="text-sm text-slate-400">None provided.</span>;
+    return (
+      <div className="w-full space-y-2">
+        {value.map((item, i) => (
+          <div key={i} className="border-t border-slate-100 pt-2 first:border-t-0 first:pt-0">
+            {isRecord(item) ? <ScalarRows obj={item} /> : <span className="text-sm font-medium text-slate-800">{renderScalar(item)}</span>}
+          </div>
+        ))}
+      </div>
+    );
+  }
+  if (isRecord(value)) return <ScalarRows obj={value} />;
+  return <span className="text-right text-sm font-medium text-slate-800 break-words">{renderScalar(value)}</span>;
+}
+
 /** Read-only key/value rows for the scalar fields of an object. */
 function ScalarRows({ obj }: { obj: Record<string, unknown> }) {
-  const rows = Object.entries(obj).filter(([, v]) => typeof v !== 'object' || v === null);
+  const rows = Object.entries(obj);
   if (rows.length === 0) return null;
   return (
     <div className="overflow-hidden rounded-xl border border-slate-200">
-      {rows.map(([k, v], i) => (
-        <div
-          key={k}
-          className={`flex items-start justify-between gap-4 px-4 py-3 ${i > 0 ? 'border-t border-slate-100' : ''} ${i % 2 === 1 ? 'bg-slate-50/60' : 'bg-white'}`}
-        >
-          <span className="text-xs font-bold uppercase tracking-wider text-slate-500">{labelize(k)}</span>
-          <span className="text-right text-sm font-medium text-slate-800 break-words">{renderScalar(v)}</span>
-        </div>
-      ))}
+      {rows.map(([k, v], i) => {
+        const complex = typeof v === 'object' && v !== null;
+        return (
+          <div
+            key={k}
+            className={`px-4 py-3 ${i > 0 ? 'border-t border-slate-100' : ''} ${i % 2 === 1 ? 'bg-slate-50/60' : 'bg-white'}`}
+          >
+            {complex ? (
+              <>
+                <span className="mb-2 block text-xs font-bold uppercase tracking-wider text-slate-500">{labelize(k)}</span>
+                <DetailValue value={v} />
+              </>
+            ) : (
+              <div className="flex items-start justify-between gap-4">
+                <span className="text-xs font-bold uppercase tracking-wider text-slate-500">{labelize(k)}</span>
+                <DetailValue value={v} />
+              </div>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -103,34 +138,9 @@ function ProfileDetails({ json }: { json?: string | null }) {
     );
   }
 
-  const arrayEntries = Object.entries(parsed).filter(([, v]) => Array.isArray(v)) as Array<[string, unknown[]]>;
-
   return (
     <div className="space-y-4">
       <ScalarRows obj={parsed} />
-      {arrayEntries.map(([key, items]) => (
-        <div key={key}>
-          <p className="mb-2 text-xs font-bold uppercase tracking-wider text-slate-500">{labelize(key)}</p>
-          {items.length === 0 ? (
-            <p className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-3 text-xs text-slate-400">
-              None provided.
-            </p>
-          ) : (
-            <div className="space-y-3">
-              {items.map((item, i) => (
-                <div key={i} className="rounded-xl border border-slate-200 bg-slate-50/60 p-3">
-                  <p className="mb-2 text-[11px] font-semibold text-slate-600">{labelize(key)} {i + 1}</p>
-                  {item && typeof item === 'object' && !Array.isArray(item) ? (
-                    <ScalarRows obj={item as Record<string, unknown>} />
-                  ) : (
-                    <p className="px-1 text-sm font-medium text-slate-800">{renderScalar(item)}</p>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      ))}
     </div>
   );
 }
@@ -155,7 +165,7 @@ function ApprovalShell({ children }: { children: React.ReactNode }) {
  * OWED-3 / R3 / R7: the page the distributor approval email links to.
  *
  * The opaque token (`?token=…`) is the resource address. If the investor is not
- * signed in we send them through the existing passwordless OTP flow with a
+ * signed in we send them through the existing email + PAN login flow with a
  * return-to back here. Once authenticated we GET /investor/link/{token}, render
  * the distributor name + the frozen Step-1 details + status/expiry in a luxe
  * card, and offer Approve (link by PAN), Approve & complete later (approve-and-skip,
@@ -179,8 +189,9 @@ export default function InvestorLinkApproval() {
   const [acting, setActing] = useState<'approve' | 'skip' | 'reject' | null>(null);
   const [actionError, setActionError] = useState('');
   const [confirmReject, setConfirmReject] = useState(false);
+  const [approvedPrefill, setApprovedPrefill] = useState<{ email?: string | null; pan?: string | null } | null>(null);
 
-  /** Absolute return-to for the OTP flow, so the investor lands back on this exact link. */
+  /** Absolute return-to for login, so the investor lands back on this exact link. */
   const returnTo = useMemo(
     () => `${window.location.pathname}${window.location.search}`,
     [],
@@ -208,18 +219,28 @@ export default function InvestorLinkApproval() {
     setLoading(true);
     setLoadError('');
     try {
-      const data = await reviewInvestorLink(token);
+      const data = authenticated
+        ? await reviewInvestorLink(token)
+        : await reviewInvestorLinkPublic(token);
       setReview(data);
-      if (normalizeStatus(data.status) === 'REJECTED') setPhase('rejected');
+      const status = normalizeStatus(data.status);
+      if (status === 'REJECTED') setPhase('rejected');
+      if (status === 'APPROVED') {
+        setApprovedPrefill({
+          email: (data as InvestorLinkReviewResponse & { email?: string | null }).email,
+          pan: (data as InvestorLinkReviewResponse & { pan?: string | null }).pan,
+        });
+        setPhase('approved');
+      }
     } catch (err) {
       setLoadError(messageForError(err));
     } finally {
       setLoading(false);
     }
-  }, [token]);
+  }, [authenticated, token]);
 
   useEffect(() => {
-    if (!authenticated || authLoading) return;
+    if (authLoading) return;
     void loadReview();
   }, [authenticated, authLoading, loadReview]);
 
@@ -269,6 +290,49 @@ export default function InvestorLinkApproval() {
   };
 
   // ── 1. Waiting on session restore ────────────────────────────────────────
+  const handlePublicApprove = async () => {
+    if (!token) return;
+    setActing('approve');
+    setActionError('');
+    try {
+      const data = await approveInvestorLinkPublic(token);
+      setApprovedPrefill({
+        email: data.email ?? (review as (InvestorLinkReviewResponse & { email?: string | null }) | null)?.email,
+        pan: data.pan ?? (review as (InvestorLinkReviewResponse & { pan?: string | null }) | null)?.pan,
+      });
+      setPhase('approved');
+    } catch (err) {
+      setActionError(messageForError(err));
+    } finally {
+      setActing(null);
+    }
+  };
+
+  const handlePublicReject = async () => {
+    if (!token) return;
+    setActing('reject');
+    setActionError('');
+    try {
+      await rejectInvestorLinkPublic(token);
+      setPhase('rejected');
+    } catch (err) {
+      setActionError(messageForError(err));
+    } finally {
+      setActing(null);
+      setConfirmReject(false);
+    }
+  };
+
+  const signupAfterApprovalPath = () => {
+    const params = new URLSearchParams({ invited: '1', returnTo: '/investor/kyc' });
+    if (approvedPrefill?.email) params.set('email', approvedPrefill.email);
+    if (approvedPrefill?.pan) params.set('pan', approvedPrefill.pan);
+    return `/investor/signup?${params.toString()}`;
+  };
+
+  const loginAfterApprovalPath = () =>
+    `/investor/login?returnTo=${encodeURIComponent('/investor/kyc')}`;
+
   if (authLoading) {
     return (
       <ApprovalShell>
@@ -279,51 +343,182 @@ export default function InvestorLinkApproval() {
     );
   }
 
-  // ── 2. Not signed in → route through the existing OTP auth, return-to here ─
-  if (!authenticated) {
+  // ── 2. Not signed in → route through investor login, return-to here ─
+  if (loading) {
+    return (
+      <ApprovalShell>
+        <div className="flex min-h-[40vh] flex-col items-center justify-center">
+          <Loader2 className="h-7 w-7 animate-spin text-[#0B1B3E]" />
+          <p className="mt-3 text-sm font-medium text-slate-600">Loading the approval request...</p>
+        </div>
+      </ApprovalShell>
+    );
+  }
+
+  if (loadError) {
     return (
       <ApprovalShell>
         <motion.div
           initial={{ opacity: 0, y: 8 }}
           animate={{ opacity: 1, y: 0 }}
-          className="mx-auto max-w-md rounded-2xl border border-slate-200 bg-white p-8 shadow-sm"
+          className="mx-auto max-w-md rounded-2xl border border-red-100 bg-white p-8 text-center shadow-sm"
         >
-          <div className="mx-auto mb-5 flex h-12 w-12 items-center justify-center rounded-full bg-blue-50">
-            <ShieldCheck className="h-6 w-6 text-[#0B1B3E]" />
+          <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-red-50">
+            <XCircle className="h-6 w-6 text-red-500" />
           </div>
-          <h1 className="text-center text-xl font-semibold text-slate-800">Approve your distributor link</h1>
-          <p className="mt-2 text-center text-sm text-slate-500">
-            Sign in to your investor account to review and approve the request from your distributor.
-            Use the email address this link was sent to.
-          </p>
+          <h1 className="text-lg font-semibold text-slate-800">We couldn't open this link</h1>
+          <p className="mt-2 text-sm text-slate-500">{loadError}</p>
+          <button
+            type="button"
+            onClick={() => void loadReview()}
+            className="mt-6 flex w-full items-center justify-center gap-2 rounded-xl bg-[#0B1B3E] px-6 py-3 text-sm font-semibold text-white transition-colors hover:bg-[#1A3066]"
+          >
+            Try again
+          </button>
+        </motion.div>
+      </ApprovalShell>
+    );
+  }
 
-          {!token && (
-            <div className="mt-5 flex items-start gap-2.5 rounded-xl border border-amber-100 bg-amber-50 px-4 py-3">
-              <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0 text-amber-600" />
-              <p className="text-sm text-amber-800">
-                This link is missing its token. Please open the approval link from your email again.
+  if (!authenticated) {
+    if (phase === 'approved') {
+      return (
+        <ApprovalShell>
+          <motion.div
+            initial={{ opacity: 0, scale: 0.98 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="mx-auto max-w-md rounded-2xl border border-emerald-200 bg-emerald-50 p-8 text-center"
+          >
+            <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-emerald-100">
+              <CheckCircle2 className="h-7 w-7 text-emerald-600" />
+            </div>
+            <h1 className="text-lg font-semibold text-slate-800">Onboarding approved</h1>
+            <p className="mt-2 text-sm text-slate-600">
+              You're linked to {distributorName}. Create your investor account next, then complete KYC.
+            </p>
+            <button
+              type="button"
+              onClick={() => navigate(signupAfterApprovalPath())}
+              className="mt-6 flex w-full items-center justify-center gap-2 rounded-xl bg-[#0B1B3E] px-6 py-3.5 text-sm font-semibold text-white shadow-lg transition-colors hover:bg-[#1A3066]"
+            >
+              <UserPlus className="h-4 w-4" /> Create investor account
+            </button>
+            <button
+              type="button"
+              onClick={() => navigate(loginAfterApprovalPath())}
+              className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl border border-emerald-200 bg-white/70 px-6 py-3 text-sm font-semibold text-slate-700 transition-colors hover:bg-white"
+            >
+              <Mail className="h-4 w-4" /> I already have an account
+            </button>
+          </motion.div>
+        </ApprovalShell>
+      );
+    }
+
+    if (phase === 'rejected') {
+      return (
+        <ApprovalShell>
+          <motion.div
+            initial={{ opacity: 0, scale: 0.98 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="mx-auto max-w-md rounded-2xl border border-slate-200 bg-white p-8 text-center shadow-sm"
+          >
+            <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-slate-100">
+              <XCircle className="h-7 w-7 text-slate-500" />
+            </div>
+            <h1 className="text-lg font-semibold text-slate-800">Link request declined</h1>
+            <p className="mt-2 text-sm text-slate-500">
+              You declined the onboarding request from {distributorName}. They will not be linked to your account.
+            </p>
+          </motion.div>
+        </ApprovalShell>
+      );
+    }
+
+    return (
+      <ApprovalShell>
+        <motion.div
+          initial={{ opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="mx-auto max-w-2xl"
+        >
+          <div className="mb-6">
+            <h1 className="text-2xl font-semibold text-slate-800">Approve your onboarding</h1>
+            <p className="mt-1 text-sm text-slate-500">
+              {distributorName} entered these details for your account. Review them before approving.
+            </p>
+          </div>
+
+          <div className="mb-6 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+            <h2 className="mb-3 text-sm font-semibold text-slate-800">Details entered by {distributorName}</h2>
+            <ProfileDetails json={review?.profileDetailsJson} />
+            {review?.contentSha256 && (
+              <p className="mt-3 break-all font-mono text-[11px] text-slate-400">
+                Revision hash: {review.contentSha256}
               </p>
+            )}
+          </div>
+
+          {actionError && (
+            <div className="mb-5 flex items-start gap-2.5 rounded-xl border border-red-100 bg-red-50 px-4 py-3">
+              <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0 text-red-500" />
+              <p className="text-sm text-red-700">{actionError}</p>
             </div>
           )}
 
           <button
             type="button"
-            onClick={() => goSignIn('/investor/signup', { autoApprove: true })}
-            disabled={!token}
+            onClick={() => void handlePublicApprove()}
+            disabled={acting !== null}
             className="mt-6 flex w-full items-center justify-center gap-2 rounded-xl bg-[#0B1B3E] px-6 py-3.5 text-sm font-semibold text-white shadow-lg transition-all duration-150 hover:-translate-y-0.5 hover:bg-[#1A3066] disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:translate-y-0"
           >
-            <UserPlus className="h-4 w-4" /> Approve onboarding
+            {acting === 'approve'
+              ? <><Loader2 className="h-4 w-4 animate-spin" /> Approving...</>
+              : <><ShieldCheck className="h-4 w-4" /> Approve onboarding</>}
           </button>
           <p className="mt-2 text-center text-[11px] text-slate-400">
-            Create your investor account, then we'll approve this link automatically.
+            After approval you'll create your investor account and complete KYC.
           </p>
+
           <button
             type="button"
             onClick={() => goSignIn('/investor/login')}
             className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl border border-slate-200 px-6 py-3 text-sm font-semibold text-slate-700 transition-colors hover:bg-slate-50"
           >
-            <Mail className="h-4 w-4" /> Already registered? Sign in with email OTP
+            <Mail className="h-4 w-4" /> Sign in with email + PAN
           </button>
+          {!confirmReject ? (
+            <button
+              type="button"
+              onClick={() => { setConfirmReject(true); setActionError(''); }}
+              disabled={acting !== null}
+              className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl px-6 py-2.5 text-sm font-semibold text-red-600 transition-colors hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              <ThumbsDown className="h-4 w-4" /> Reject this request
+            </button>
+          ) : (
+            <div className="mt-4 rounded-xl border border-red-100 bg-red-50 p-4">
+              <p className="text-sm font-medium text-red-800">Decline this onboarding request?</p>
+              <div className="mt-3 flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => void handlePublicReject()}
+                  disabled={acting !== null}
+                  className="flex flex-1 items-center justify-center gap-2 rounded-lg bg-red-600 px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {acting === 'reject' ? <><Loader2 className="h-4 w-4 animate-spin" /> Rejecting...</> : 'Yes, reject'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setConfirmReject(false)}
+                  disabled={acting !== null}
+                  className="flex-1 rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-600 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
         </motion.div>
       </ApprovalShell>
     );
@@ -395,14 +590,14 @@ export default function InvestorLinkApproval() {
           <p className="mt-2 text-sm text-slate-600">
             {skipped
               ? `Thanks for approving. You've asked ${distributorName} to complete your profile details — they'll fill them in and you'll be notified to approve the final details.`
-              : 'Thanks for approving. Continue your onboarding to finish setting up your account.'}
+              : 'Thanks for approving. Complete KYC next to finish setting up your account.'}
           </p>
           <button
             type="button"
-            onClick={() => navigate('/investor/onboarding')}
+            onClick={() => navigate(skipped ? '/investor/dashboard' : '/investor/kyc')}
             className="mt-6 flex w-full items-center justify-center gap-2 rounded-xl bg-[#0B1B3E] px-6 py-3.5 text-sm font-semibold text-white shadow-lg transition-all duration-150 hover:-translate-y-0.5 hover:bg-[#1A3066]"
           >
-            Continue your onboarding <ArrowRight className="h-4 w-4" />
+            {skipped ? 'Go to my dashboard' : 'Continue to KYC'} <ArrowRight className="h-4 w-4" />
           </button>
           <button
             type="button"

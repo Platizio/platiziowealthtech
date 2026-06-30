@@ -27,6 +27,15 @@ const inp =
 
 const STEP_LABELS = ['Email', 'Your details', 'Verify & consent', 'Done'];
 
+const safeInvestorReturnTo = (value: string | null) => {
+  if (!value) return '/investor/dashboard';
+  if (!value.startsWith('/investor/')) return '/investor/dashboard';
+  if (value.startsWith('/investor/login') || value.startsWith('/investor/signup')) {
+    return '/investor/dashboard';
+  }
+  return value;
+};
+
 /**
  * Multi-step investor self-signup. No pre-selected checkboxes anywhere (SRS
  * no-defaults rule): both the ownership-declaration and the Terms & Conditions
@@ -201,7 +210,7 @@ export default function InvestorSignup() {
       const user = normalizeInvestorUser(data);
       if (user) dispatch(setInvestorUser(user));
       setStep(4);
-      setTimeout(() => navigate('/investor/dashboard', { replace: true }), 900);
+      setTimeout(() => navigate(safeInvestorReturnTo(params.get('returnTo')), { replace: true }), 900);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not complete signup. Please try again.');
       setOtpDigits(Array(6).fill(''));
