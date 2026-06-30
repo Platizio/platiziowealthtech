@@ -1,6 +1,9 @@
 package com.platizio.wealthtech.controller;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.platizio.wealthtech.domain.Distributor;
+import com.platizio.wealthtech.domain.Investor;
 import com.platizio.wealthtech.domain.InvestorAccount;
 import com.platizio.wealthtech.domain.InvestorLinkRequest;
 import com.platizio.wealthtech.domain.InvestorLinkingStatus;
@@ -27,6 +30,7 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.persistence.EntityNotFoundException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.NotBlank;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -40,6 +44,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
@@ -61,6 +66,8 @@ import org.springframework.web.bind.annotation.RestController;
 @RequestMapping("/api/v1/investor")
 @Tag(name = "Investor Link Approval", description = "Investor review/approve/reject of the distributor email-approval link")
 public class InvestorLinkController {
+
+    private static final ObjectMapper LINK_REVIEW_MAPPER = new ObjectMapper();
 
     /** The live (non-terminal) profile-change states surfaced on the Approvals page. */
     private static final java.util.Set<com.platizio.wealthtech.domain.ProfileChangeApprovalStatus>
@@ -97,6 +104,29 @@ public class InvestorLinkController {
         this.profileChangeApprovalService = profileChangeApprovalService;
     }
 
+    @Operation(summary = "Public review of the onboarding link",
+            description = "Loads the distributor-entered details by email-link token before the investor signs up/logs in.")
+    @GetMapping("/link/review")
+    public Map<String, Object> publicReview(@RequestParam String token) {
+        return linkRequestService.reviewByToken(token);
+    }
+
+    @Operation(summary = "Public approval of the onboarding link",
+            description = "Approves the token-addressed link before signup, then links distributor_id by PAN.")
+    @PostMapping("/link/approve")
+    public Map<String, Object> publicApprove(
+            @Valid @RequestBody PublicLinkApprovalRequest request) {
+        return linkRequestService.approvePublicByToken(
+                request.token(), Boolean.TRUE.equals(request.consentAccepted()));
+    }
+
+    @Operation(summary = "Public rejection of the onboarding link",
+            description = "Rejects the token-addressed link before signup/login.")
+    @PostMapping("/link/reject")
+    public Map<String, Object> publicReject(@Valid @RequestBody PublicLinkRejectRequest request) {
+        return linkRequestService.rejectPublicByToken(request.token());
+    }
+
     @Operation(summary = "Review the link I was sent",
             description = "Loads the token-addressed link request, proves I own it (ownership guard + PAN), and returns "
                     + "the distributor display name, the distributor-entered Step-1 profile details, status and expiry. "
@@ -112,10 +142,13 @@ public class InvestorLinkController {
 
         Optional<OnboardingSubmission> submission =
                 onboardingSubmissionService.findById(request.getOnboardingSubmissionId());
+        String profileDetailsJson = submission
+                .map(OnboardingSubmission::getPayloadJson)
+                .orElseGet(() -> fallbackProfileDetailsJson(request));
 
         return new InvestorLinkReviewResponse(
                 distributorName,
-                submission.map(OnboardingSubmission::getPayloadJson).orElse(null),
+                profileDetailsJson,
                 submission.map(OnboardingSubmission::getContentSha256).orElse(null),
                 submission.map(OnboardingSubmission::getRevisionNo).orElse(null),
                 request.getStatus().name(),
@@ -258,6 +291,15 @@ public class InvestorLinkController {
      * (account.investorId == request.investorId) PLUS a PAN match (403 otherwise). Used by the
      * read-only review endpoint, whose binding lives here rather than in the (write-path) service.
      */
+    private record PublicLinkApprovalRequest(
+            @NotBlank String token,
+            Boolean consentAccepted
+    ) {}
+
+    private record PublicLinkRejectRequest(
+            @NotBlank String token
+    ) {}
+
     private InvestorLinkRequest requireOwnedRequest(UUID accountId, String token) {
         InvestorLinkRequest request = linkRequestRepository.findByToken(token)
                 .orElseThrow(() -> new EntityNotFoundException("Approval link not found or no longer valid."));
@@ -270,6 +312,22 @@ public class InvestorLinkController {
 
     private static String normalizePan(String value) {
         return PanFormat.normalize(value);
+    }
+
+    private String fallbackProfileDetailsJson(InvestorLinkRequest request) {
+        try {
+            Investor investor = investorService.getInvestor(request.getInvestorId());
+            Map<String, Object> details = new LinkedHashMap<>();
+            details.put("fullName", investor.getFullName());
+            details.put("pan", investor.getPan());
+            details.put("email", investor.getEmail());
+            details.put("mobileNumber", investor.getMobileNumber());
+            details.put("dateOfBirth", investor.getDateOfBirth() == null ? null : investor.getDateOfBirth().toString());
+            details.put("linkingStatus", investor.getLinkingStatus() == null ? null : investor.getLinkingStatus().name());
+            return LINK_REVIEW_MAPPER.writeValueAsString(details);
+        } catch (JsonProcessingException | RuntimeException ex) {
+            return null;
+        }
     }
 
     /**

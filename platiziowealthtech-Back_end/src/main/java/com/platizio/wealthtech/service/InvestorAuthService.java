@@ -156,20 +156,63 @@ public class InvestorAuthService {
         String normalizedEmail = normalizeEmail(email);
         String normalizedPan = PanFormat.normalize(pan);
         InvestorAccount account = accountRepository.findByEmailIgnoreCase(normalizedEmail)
-                .filter(a -> a.getStatus() == InvestorAccountStatus.ACTIVE)
-                .orElseThrow(() -> new BadCredentialsException("Invalid email or PAN. Please check and try again."));
+                .map(a -> activateAndLinkForPanLogin(a, normalizedPan))
+                .orElseGet(() -> provisionFromDistributorInvestor(normalizedEmail, normalizedPan));
         if (account.getPan() == null || !constantTimeEquals(account.getPan(), normalizedPan)) {
             throw new BadCredentialsException("Invalid email or PAN. Please check and try again.");
         }
-        assertDistributorAllotted(account);
         return new InvestorAuthResult(jwtService.generateInvestorToken(account.getId(), account.getEmail()), account);
     }
 
-    /**
-     * R6 login gate: an investor may sign in only once a distributor has been assigned by
-     * PAN (i.e. {@code investor_id} is linked). Until then there is no portfolio to show, so
-     * we reject with the specific "No distributor allotted" message the login page surfaces.
-     */
+    private InvestorAccount activateAndLinkForPanLogin(InvestorAccount account, String normalizedPan) {
+        if (account.getStatus() == InvestorAccountStatus.BLOCKED) {
+            throw new BadCredentialsException("Invalid email or PAN. Please check and try again.");
+        }
+        if (account.getPan() == null || !constantTimeEquals(account.getPan(), normalizedPan)) {
+            throw new BadCredentialsException("Invalid email or PAN. Please check and try again.");
+        }
+        if (account.getInvestorId() == null) {
+            account = linkAccountToDistributorInvestor(account);
+        }
+        if (account.getStatus() != InvestorAccountStatus.ACTIVE) {
+            account.setStatus(InvestorAccountStatus.ACTIVE);
+            if (account.getActivatedAt() == null) {
+                account.setActivatedAt(OffsetDateTime.now());
+            }
+            account = accountRepository.save(account);
+        }
+        return account;
+    }
+
+    private InvestorAccount provisionFromDistributorInvestor(String normalizedEmail, String normalizedPan) {
+        accountRepository.findByPan(normalizedPan).ifPresent(existing -> {
+            throw new BadCredentialsException("Invalid email or PAN. Please check and try again.");
+        });
+        var investor = investorRepository.findByPan(normalizedPan)
+                .filter(inv -> normalizeEmail(inv.getEmail()).equals(normalizedEmail))
+                .orElseThrow(() -> new BadCredentialsException("Invalid email or PAN. Please check and try again."));
+
+        InvestorAccount account = new InvestorAccount();
+        account.setFullName(investor.getFullName());
+        account.setPan(normalizedPan);
+        account.setEmail(normalizedEmail);
+        account.setMobileNumber(investor.getMobileNumber());
+        account.setEmailVerified(Boolean.TRUE.equals(investor.getEmailVerified()));
+        account.setMobileVerified(Boolean.TRUE.equals(investor.getMobileVerified()));
+        account.setStatus(InvestorAccountStatus.ACTIVE);
+        account.setActivatedAt(OffsetDateTime.now());
+        account.setInvestorId(investor.getId());
+        return accountRepository.save(account);
+    }
+
+    private InvestorAccount linkAccountToDistributorInvestor(InvestorAccount account) {
+        var investor = investorRepository.findByPan(account.getPan())
+                .filter(inv -> normalizeEmail(inv.getEmail()).equals(normalizeEmail(account.getEmail())))
+                .orElseThrow(() -> new BadCredentialsException("Invalid email or PAN. Please check and try again."));
+        account.setInvestorId(investor.getId());
+        return accountRepository.save(account);
+    }
+
     private void assertDistributorAllotted(InvestorAccount account) {
         if (account.getInvestorId() == null) {
             throw new BadCredentialsException(

@@ -1,5 +1,6 @@
 package com.platizio.wealthtech.service;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.platizio.wealthtech.domain.Distributor;
 import com.platizio.wealthtech.domain.Investor;
 import com.platizio.wealthtech.domain.InvestorAccount;
@@ -14,6 +15,8 @@ import com.platizio.wealthtech.repository.InvestorRepository;
 import com.platizio.wealthtech.validation.PanFormat;
 import jakarta.persistence.EntityNotFoundException;
 import java.time.OffsetDateTime;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
 import org.slf4j.Logger;
@@ -40,6 +43,7 @@ public class InvestorLinkRequestService {
 
     /** Link expiry window (D10): 7 days. */
     private static final long LINK_TTL_DAYS = 7L;
+    private static final ObjectMapper LINK_MAPPER = new ObjectMapper();
 
     private static final Logger logger = LoggerFactory.getLogger(InvestorLinkRequestService.class);
 
@@ -150,6 +154,78 @@ public class InvestorLinkRequestService {
     }
 
     /**
+     * Public token review for the email link. The token is the possession factor, so this
+     * endpoint deliberately does not require an investor session; it only exposes the
+     * distributor-entered details for the token-addressed request.
+     */
+    @Transactional
+    public Map<String, Object> reviewByToken(String token) {
+        InvestorLinkRequest request = findByTokenOrThrow(token);
+        InvestorLinkRequestStatus status = refreshExpiredStatus(request);
+        Investor investor = investorRepository.findById(request.getInvestorId()).orElse(null);
+        OnboardingSubmission submission = request.getOnboardingSubmissionId() == null
+                ? null
+                : onboardingSubmissionService.findById(request.getOnboardingSubmissionId()).orElse(null);
+
+        String profileDetailsJson = submission != null
+                ? submission.getPayloadJson()
+                : fallbackProfileDetailsJson(investor);
+
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("distributorDisplayName", distributorName(request.getPendingDistributorId()));
+        body.put("profileDetailsJson", profileDetailsJson);
+        body.put("contentSha256", submission == null ? null : submission.getContentSha256());
+        body.put("revisionNo", submission == null ? null : submission.getRevisionNo());
+        body.put("status", status.name());
+        body.put("expiresAt", request.getExpiresAt());
+        if (investor != null) {
+            body.put("fullName", investor.getFullName());
+            body.put("pan", investor.getPan());
+            body.put("email", investor.getEmail());
+            body.put("mobileNumber", investor.getMobileNumber());
+            body.put("dateOfBirth", investor.getDateOfBirth() == null ? null : investor.getDateOfBirth().toString());
+        }
+        return body;
+    }
+
+    /** Public token approval used before the investor has created/logged into a portal account. */
+    @Transactional
+    public Map<String, Object> approvePublicByToken(String token, boolean consentAccepted) {
+        if (!consentAccepted) {
+            throw new IllegalArgumentException("You must approve the onboarding details to continue.");
+        }
+        InvestorLinkRequest request = requirePendingActiveLink(token);
+        Investor investor = approveRequest(request);
+
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("investorId", investor.getId());
+        body.put("pan", investor.getPan());
+        body.put("email", investor.getEmail());
+        body.put("linkingStatus", InvestorLinkingStatus.INVESTOR_APPROVED.name());
+        body.put("status", request.getStatus().name());
+        return body;
+    }
+
+    /** Public token rejection used from the email-link page before signup/login. */
+    @Transactional
+    public Map<String, Object> rejectPublicByToken(String token) {
+        InvestorLinkRequest request = requirePendingActiveLink(token);
+        Investor investor = investorRepository.findById(request.getInvestorId())
+                .orElseThrow(() -> new EntityNotFoundException("Investor not found: " + request.getInvestorId()));
+
+        request.setStatus(InvestorLinkRequestStatus.REJECTED);
+        linkRequestRepository.save(request);
+
+        investor.setLinkingStatus(InvestorLinkingStatus.REJECTED);
+        investorRepository.save(investor);
+
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("linkingStatus", InvestorLinkingStatus.REJECTED.name());
+        body.put("status", request.getStatus().name());
+        return body;
+    }
+
+    /**
      * Investor approves from the email link (T2, R5): assert the request is PENDING and not expired,
      * then link the distributor — {@code distributor_id ← pending_distributor_id},
      * {@code linking_status = INVESTOR_APPROVED} — and mark the request APPROVED. This is the moment
@@ -157,18 +233,7 @@ public class InvestorLinkRequestService {
      */
     @Transactional
     public InvestorLinkRequest approveByToken(UUID investorAccountId, String token) {
-        InvestorLinkRequest request = linkRequestRepository.findByToken(token)
-                .orElseThrow(() -> new EntityNotFoundException("Approval link not found or no longer valid."));
-        if (request.getStatus() != InvestorLinkRequestStatus.PENDING) {
-            throw new IllegalStateException("This approval link is not awaiting your approval.");
-        }
-        if (request.getExpiresAt().isBefore(OffsetDateTime.now())) {
-            // Make the lifecycle honest: an expired PENDING link transitions to EXPIRED
-            // (instead of lingering as PENDING forever) so a re-send mints a fresh one.
-            request.setStatus(InvestorLinkRequestStatus.EXPIRED);
-            linkRequestRepository.save(request);
-            throw new IllegalStateException("This approval link has expired. Ask your distributor to re-send it.");
-        }
+        InvestorLinkRequest request = requirePendingActiveLink(token);
 
         // SEC-1/SEC-2: bind the approval to the account that actually owns this investor.
         // approveByToken previously ignored investorAccountId and resolved the investor purely
@@ -179,28 +244,8 @@ public class InvestorLinkRequestService {
             throw new AccessDeniedException("Approval does not match your account.");
         }
 
-        Investor investor = investorRepository.findById(request.getInvestorId())
-                .orElseThrow(() -> new EntityNotFoundException("Investor not found: " + request.getInvestorId()));
-        // R5: linking happens here.
-        investor.setDistributorId(request.getPendingDistributorId());
-        investor.setLinkingStatus(InvestorLinkingStatus.INVESTOR_APPROVED);
-        investorRepository.save(investor);
-
-        request.setStatus(InvestorLinkRequestStatus.APPROVED);
-        request.setApprovedAt(OffsetDateTime.now());
-        InvestorLinkRequest approved = linkRequestRepository.save(request);
-
-        // R8 (receive-half): notify the (now-linked) distributor in-app that the investor
-        // approved the link. Same @Transactional boundary, so the notification commits
-        // atomically with the APPROVED transition (or rolls back with it).
-        notificationService.createForDistributor(
-                approved.getPendingDistributorId(),
-                approved.getInvestorId(),
-                NotificationType.INVESTOR_LINK_APPROVED,
-                "Investor approved your link",
-                "The investor approved your onboarding link. They are now linked to you.");
-
-        return approved;
+        approveRequest(request);
+        return request;
     }
 
     /**
@@ -212,11 +257,7 @@ public class InvestorLinkRequestService {
      */
     @Transactional
     public void reject(UUID investorAccountId, String token) {
-        InvestorLinkRequest request = linkRequestRepository.findByToken(token)
-                .orElseThrow(() -> new EntityNotFoundException("Approval link not found or no longer valid."));
-        if (request.getStatus() != InvestorLinkRequestStatus.PENDING) {
-            throw new IllegalStateException("This approval link is not awaiting your approval.");
-        }
+        InvestorLinkRequest request = requirePendingActiveLink(token);
 
         // Bind the rejection to the account that actually owns this investor (parity with
         // approveByToken): prove ownership, then PAN-bind, before flipping any state.
@@ -241,6 +282,82 @@ public class InvestorLinkRequestService {
      */
     private static String normalizePan(String value) {
         return PanFormat.normalize(value);
+    }
+
+    private InvestorLinkRequest findByTokenOrThrow(String token) {
+        return linkRequestRepository.findByToken(token)
+                .orElseThrow(() -> new EntityNotFoundException("Approval link not found or no longer valid."));
+    }
+
+    private InvestorLinkRequest requirePendingActiveLink(String token) {
+        InvestorLinkRequest request = findByTokenOrThrow(token);
+        if (request.getStatus() != InvestorLinkRequestStatus.PENDING) {
+            throw new IllegalStateException("This approval link is not awaiting your approval.");
+        }
+        if (request.getExpiresAt().isBefore(OffsetDateTime.now())) {
+            request.setStatus(InvestorLinkRequestStatus.EXPIRED);
+            linkRequestRepository.save(request);
+            throw new IllegalStateException("This approval link has expired. Ask your distributor to re-send it.");
+        }
+        return request;
+    }
+
+    private InvestorLinkRequestStatus refreshExpiredStatus(InvestorLinkRequest request) {
+        if (request.getStatus() == InvestorLinkRequestStatus.PENDING
+                && request.getExpiresAt().isBefore(OffsetDateTime.now())) {
+            request.setStatus(InvestorLinkRequestStatus.EXPIRED);
+            linkRequestRepository.save(request);
+        }
+        return request.getStatus();
+    }
+
+    private Investor approveRequest(InvestorLinkRequest request) {
+        Investor investor = investorRepository.findById(request.getInvestorId())
+                .orElseThrow(() -> new EntityNotFoundException("Investor not found: " + request.getInvestorId()));
+        // R5: linking happens only after the investor approves the token-addressed request.
+        investor.setDistributorId(request.getPendingDistributorId());
+        investor.setPendingDistributorId(null);
+        investor.setLinkingStatus(InvestorLinkingStatus.INVESTOR_APPROVED);
+        investorRepository.save(investor);
+
+        request.setStatus(InvestorLinkRequestStatus.APPROVED);
+        request.setApprovedAt(OffsetDateTime.now());
+        InvestorLinkRequest approved = linkRequestRepository.save(request);
+
+        notificationService.createForDistributor(
+                approved.getPendingDistributorId(),
+                approved.getInvestorId(),
+                NotificationType.INVESTOR_LINK_APPROVED,
+                "Investor approved your link",
+                "The investor approved your onboarding link. They are now linked to you.");
+        return investor;
+    }
+
+    private String distributorName(UUID distributorId) {
+        if (distributorId == null) {
+            return null;
+        }
+        return distributorRepository.findById(distributorId)
+                .map(d -> d.getFirmName() != null && !d.getFirmName().isBlank() ? d.getFirmName() : d.getFullName())
+                .orElse(null);
+    }
+
+    private String fallbackProfileDetailsJson(Investor investor) {
+        if (investor == null) {
+            return null;
+        }
+        try {
+            Map<String, Object> details = new LinkedHashMap<>();
+            details.put("fullName", investor.getFullName());
+            details.put("pan", investor.getPan());
+            details.put("email", investor.getEmail());
+            details.put("mobileNumber", investor.getMobileNumber());
+            details.put("dateOfBirth", investor.getDateOfBirth() == null ? null : investor.getDateOfBirth().toString());
+            details.put("linkingStatus", investor.getLinkingStatus() == null ? null : investor.getLinkingStatus().name());
+            return LINK_MAPPER.writeValueAsString(details);
+        } catch (Exception ex) {
+            return null;
+        }
     }
 
     /** Supersede any existing live (PENDING) link request for the investor (one live request — D10). */

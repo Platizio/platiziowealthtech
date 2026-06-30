@@ -176,6 +176,35 @@ class InvestorAuthServiceTest {
     }
 
     @Test
+    void passwordLoginCreatesActiveAccountFromDistributorCreatedInvestor() {
+        UUID investorId = UUID.randomUUID();
+        Investor invited = new Investor();
+        ReflectionTestUtils.setField(invited, "id", investorId);
+        invited.setFullName("Asha Rao");
+        invited.setEmail("asha@example.com");
+        invited.setPan("ABCDE1234F");
+        invited.setMobileNumber("9876543210");
+        invited.setEmailVerified(Boolean.FALSE);
+        invited.setMobileVerified(Boolean.FALSE);
+
+        when(accountRepository.findByEmailIgnoreCase("asha@example.com")).thenReturn(Optional.empty());
+        when(accountRepository.findByPan("ABCDE1234F")).thenReturn(Optional.empty());
+        when(investorRepository.findByPan("ABCDE1234F")).thenReturn(Optional.of(invited));
+
+        InvestorAuthService.InvestorAuthResult result = service.passwordLogin("ASHA@Example.com", "abcde1234f");
+
+        ArgumentCaptor<InvestorAccount> captor = ArgumentCaptor.forClass(InvestorAccount.class);
+        verify(accountRepository).save(captor.capture());
+        InvestorAccount saved = captor.getValue();
+        assertThat(saved.getInvestorId()).isEqualTo(investorId);
+        assertThat(saved.getEmail()).isEqualTo("asha@example.com");
+        assertThat(saved.getPan()).isEqualTo("ABCDE1234F");
+        assertThat(saved.getStatus()).isEqualTo(InvestorAccountStatus.ACTIVE);
+        assertThat(saved.getEmailVerified()).isFalse();
+        assertThat(result.token()).isEqualTo("investor.jwt.token");
+    }
+
+    @Test
     void requireAccountRejectsBlockedAccountOnEverySessionUse() {
         UUID accountId = UUID.randomUUID();
         InvestorAccount blocked = new InvestorAccount();

@@ -12,6 +12,7 @@ import static org.mockito.Mockito.when;
 
 import com.platizio.wealthtech.domain.Distributor;
 import com.platizio.wealthtech.domain.DistributorRole;
+import com.platizio.wealthtech.domain.Investor;
 import com.platizio.wealthtech.domain.InvestorAccount;
 import com.platizio.wealthtech.domain.InvestorLinkRequest;
 import com.platizio.wealthtech.domain.InvestorLinkRequestStatus;
@@ -96,6 +97,23 @@ class InvestorLinkControllerTest {
         assertThat(response.revisionNo()).isEqualTo(2);
         assertThat(response.status()).isEqualTo("PENDING");
         assertThat(response.expiresAt()).isEqualTo(request.getExpiresAt());
+    }
+
+    @Test
+    void reviewFallsBackToInvestorDetailsWhenFrozenSubmissionIsMissing() {
+        stubAccount();
+        InvestorLinkRequest request = pendingRequest();
+        when(linkRequestRepository.findByToken(TOKEN)).thenReturn(Optional.of(request));
+        when(ownershipGuard.assertOwns(accountId, investorId)).thenReturn(account(PAN));
+        when(distributorRepository.findById(distributorId)).thenReturn(Optional.of(distributor("Priya Advisor")));
+        when(onboardingSubmissionService.findById(submissionId)).thenReturn(Optional.empty());
+        when(investorService.getInvestor(investorId)).thenReturn(investor());
+
+        InvestorLinkReviewResponse response = controller.review(TOKEN, investorAuth());
+
+        assertThat(response.distributorDisplayName()).isEqualTo("Priya Advisor");
+        assertThat(response.profileDetailsJson()).contains("\"fullName\":\"Asha Rao\"");
+        assertThat(response.profileDetailsJson()).contains("\"pan\":\"ABCDE1234F\"");
     }
 
     @Test
@@ -405,6 +423,16 @@ class InvestorLinkControllerTest {
         s.setSubmittedBy(distributorId);
         s.setSubmittedAt(OffsetDateTime.now());
         return s;
+    }
+
+    private Investor investor() {
+        Investor inv = new Investor();
+        setId(inv, investorId);
+        inv.setFullName("Asha Rao");
+        inv.setPan(PAN);
+        inv.setEmail("asha@example.com");
+        inv.setMobileNumber("9999999999");
+        return inv;
     }
 
     private Distributor distributor(String name) {
