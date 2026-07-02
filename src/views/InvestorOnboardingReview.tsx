@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 import EmptyState from '../components/EmptyState';
 import ContactVerification from '../components/ContactVerification';
+import InvestorNomineeManager from '../components/InvestorNomineeManager';
 import { apiFetch } from '../config/api';
 import { useAppSelector } from '../store/hooks';
 import { selectInvestorUser } from '../store/slices/investorAuthSlice';
@@ -25,7 +26,7 @@ interface ContactStatus {
   mobileVerified?: boolean;
   mobileVerificationMethod?: string | null;
   mobileBelongsTo?: string | null;
-  /** SMS OTP availability — when false, the mobile channel is shown disabled. */
+  /** SMS OTP availability flags (informational — the mobile channel now runs as a demo). */
   otpEnabled?: boolean;
   smsEnabled?: boolean;
   email?: string;
@@ -66,9 +67,11 @@ function ReadOnlyPayload({ value }: { value: unknown }) {
  * F3: investor reviews and attests the exact onboarding submission frozen by
  * their distributor. GET /investor/onboarding/review → if `hasDraft:false`
  * show an empty state. Otherwise render the payload read-only, the investor's
- * own email contact verification (mobile shown disabled when SMS OTP is off),
- * and an UNTICKED attestation checkbox that POSTs the revision hash to
- * /investor/onboarding/attest. Shows awaiting → approved states.
+ * own email + mobile contact verification (mobile OTP runs as a simulated DEMO
+ * until MSG91 is integrated), and an UNTICKED attestation checkbox that POSTs
+ * the revision hash to /investor/onboarding/attest. Shows awaiting → approved
+ * states, then a final "Nominee details" step (shared InvestorNomineeManager)
+ * where distributor-captured nominees arrive pre-filled.
  */
 export default function InvestorOnboardingReview() {
   const investor = useAppSelector(selectInvestorUser);
@@ -132,7 +135,6 @@ export default function InvestorOnboardingReview() {
     }
   };
 
-  const smsEnabled = contact?.smsEnabled ?? contact?.otpEnabled ?? false;
   const emailValue = contact?.email || investor?.email || '';
   const mobileValue = contact?.mobileNumber || '';
 
@@ -222,7 +224,7 @@ export default function InvestorOnboardingReview() {
       <div className="mb-6 rounded-2xl border border-slate-200 bg-white p-6">
         <h2 className="mb-1 text-sm font-semibold text-slate-800">Verify your contact details</h2>
         <p className="mb-4 text-xs text-slate-500">
-          Confirm the email (and mobile, when available) on this submission belongs to you.
+          Confirm the email and mobile on this submission belong to you.
         </p>
 
         <div className="mb-4">
@@ -241,8 +243,14 @@ export default function InvestorOnboardingReview() {
         </div>
 
         <div>
-          <label className="block text-xs font-bold uppercase tracking-wider text-slate-500">Mobile</label>
+          <label className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-slate-500">
+            Mobile
+            <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-amber-700">Demo</span>
+          </label>
           <p className="mt-1 text-sm text-slate-700">{mobileValue || '—'}</p>
+          <p className="mt-1 text-[11px] text-slate-400">
+            SMS OTP is simulated for now — real delivery arrives with MSG91.
+          </p>
           <ContactVerification
             mode="investor-self"
             investorId={null}
@@ -251,8 +259,6 @@ export default function InvestorOnboardingReview() {
             verified={contact?.mobileVerified}
             method={(contact?.mobileVerificationMethod as 'OTP' | 'SELF_DECLARED' | null) ?? null}
             belongsTo={contact?.mobileBelongsTo}
-            disabled={!smsEnabled}
-            disabledHint="Mobile OTP verification is coming soon."
             onVerified={(s) => setContact((prev) => ({ ...prev, ...s }))}
           />
         </div>
@@ -302,6 +308,17 @@ export default function InvestorOnboardingReview() {
           </p>
         </div>
       )}
+
+      {/* Final step — nominee details (shared with /investor/nominations). Nominees
+          the distributor captured during onboarding arrive pre-filled from the same GET. */}
+      <div className="mt-6 rounded-2xl border border-slate-200 bg-white p-6">
+        <h2 className="mb-1 text-sm font-semibold text-slate-800">Nominee details</h2>
+        <p className="mb-4 text-xs text-slate-500">
+          Review the nominees on your account, complete anything that's missing, upload their
+          ID documents — or record that you'd rather not nominate.
+        </p>
+        <InvestorNomineeManager />
+      </div>
     </div>
   );
 }

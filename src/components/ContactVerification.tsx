@@ -81,6 +81,8 @@ export default function ContactVerification({
   const label = channel === 'email' ? 'email' : 'mobile';
   const isSelf = mode === 'investor-self';
 
+  // MSG91 STUB: mobile OTP is simulated server-side; swap to real MSG91-backed
+  // delivery when integrated. The email channel is fully live.
   // investor-self has no per-investor id in the URL; distributor needs one.
   const otpRequestUrl = isSelf
     ? `/investor/contact/${channel}/otp/request`

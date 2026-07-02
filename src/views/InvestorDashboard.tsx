@@ -6,9 +6,11 @@ import {
 import {
   Wallet, TrendingUp, TrendingDown, Activity, Percent, CalendarClock,
   Loader2, AlertCircle, PieChart as PieChartIcon, RefreshCw, Layers, Hash, Info,
+  Repeat,
 } from 'lucide-react';
 import EmptyState from '../components/EmptyState';
 import { apiFetch } from '../config/api';
+import { prettySipFrequency } from '../utils/sipDisplay';
 
 /**
  * Phase-3 investor dashboard (FR-DSH). Reads the investor-scoped dashboard endpoint
@@ -54,6 +56,24 @@ interface DashboardTotals {
 interface DashboardPayload {
   holdings?: DashboardHolding[];
   totals?: DashboardTotals;
+}
+
+// ── SIP rows (GET /investor/sips) — every field optional so a lagging backend degrades ──
+interface InvestorSip {
+  orderId?: string;
+  sipName?: string | null;
+  sipNumber?: string | null;
+  schemeName?: string | null;
+  amcName?: string | null;
+  amount?: number | null;
+  sipFrequency?: string | null;
+  sipStartDate?: string | null;
+  sipInstalments?: number | null;
+  mandateMode?: string | null;
+  mandateStatus?: string | null;
+  status?: string | null;
+  folioNumber?: string | null;
+  nextDueDate?: string | null;
 }
 
 const PIE_COLORS = ['#0B1B3E', '#1A3066', '#3B82F6', '#8B5CF6', '#10B981', '#F59E0B', '#EF4444', '#06B6D4'];
@@ -115,11 +135,109 @@ function Metric({ label, value, valueClass, mono }: { label: string; value: stri
   );
 }
 
+const sipStatusClasses = (status?: string | null) => {
+  const s = String(status || '').trim().toUpperCase();
+  if (['ACTIVE', 'SUCCESSFUL', 'COMPLETED', 'APPROVED'].includes(s)) return 'bg-emerald-50 text-emerald-700';
+  if (['CANCELLED', 'FAILED', 'REJECTED', 'EXPIRED'].includes(s)) return 'bg-red-50 text-red-600';
+  return 'bg-amber-50 text-amber-700';
+};
+
+/** "Your SIPs" section (GET /investor/sips). Errors are section-level only. */
+function SipsSection({ sips, loading, error }: { sips: InvestorSip[]; loading: boolean; error: string }) {
+  return (
+    <div>
+      <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold text-slate-700">
+        <Repeat className="h-4 w-4 text-slate-400" /> Your SIPs
+      </h2>
+      {loading ? (
+        <div className="flex items-center gap-2 rounded-2xl border border-slate-100 bg-white p-5 text-sm text-slate-500 shadow-sm">
+          <Loader2 className="h-4 w-4 animate-spin text-blue-600" /> Loading your SIPs…
+        </div>
+      ) : error ? (
+        <div className="flex items-start gap-2.5 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3">
+          <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0 text-amber-600" />
+          <p className="text-sm text-amber-800">Couldn&rsquo;t load your SIPs — {error}</p>
+        </div>
+      ) : sips.length === 0 ? (
+        <div className="rounded-2xl border border-slate-100 bg-white p-6 text-center shadow-sm">
+          <p className="text-sm text-slate-400">No active SIPs yet.</p>
+        </div>
+      ) : (
+        <div className="space-y-4">
+          {sips.map((sip, i) => (
+            <div key={sip.orderId || i} className="overflow-hidden rounded-2xl border border-slate-100 bg-white shadow-sm">
+              <div className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-50 px-5 py-4">
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-semibold text-slate-800">{sip.schemeName || 'Scheme name unavailable'}</p>
+                  <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px]">
+                    {sip.amcName && sip.amcName !== '—' && <span className="text-slate-500">{sip.amcName}</span>}
+                    {sip.sipName && <span className="rounded bg-violet-50 px-1.5 py-0.5 font-medium text-violet-600">SIP · {sip.sipName}</span>}
+                    {sip.sipNumber && <span className="rounded bg-slate-100 px-1.5 py-0.5 font-mono font-medium text-slate-500">#{sip.sipNumber}</span>}
+                  </div>
+                </div>
+                <div className="flex flex-col items-end gap-1">
+                  {sip.folioNumber ? (
+                    <span className="flex items-center gap-1 rounded-md bg-slate-50 px-2 py-1 font-mono text-[11px] font-semibold text-slate-600">
+                      <Hash className="h-3 w-3 text-slate-400" />{sip.folioNumber}
+                    </span>
+                  ) : <span className="text-[11px] text-slate-300">No folio</span>}
+                  {sip.status && (
+                    <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${sipStatusClasses(sip.status)}`}>
+                      {String(sip.status).replace(/_/g, ' ')}
+                    </span>
+                  )}
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-x-4 gap-y-4 px-5 py-4 sm:grid-cols-3 lg:grid-cols-6">
+                <Metric label="Amount" value={fmtMoneyExact(numOrNull(sip.amount))} />
+                <Metric label="Frequency" value={prettySipFrequency(sip.sipFrequency)} />
+                <Metric label="Start date" value={fmtDate(sip.sipStartDate)} />
+                <Metric label="Next due" value={fmtDate(sip.nextDueDate)} />
+                <Metric label="Instalments" value={numOrNull(sip.sipInstalments) != null ? String(sip.sipInstalments) : null} mono />
+                <Metric
+                  label="Mandate"
+                  value={sip.mandateMode || sip.mandateStatus
+                    ? [sip.mandateMode, sip.mandateStatus ? String(sip.mandateStatus).replace(/_/g, ' ') : null].filter(Boolean).join(' · ')
+                    : null}
+                />
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function InvestorDashboard() {
   const [data, setData] = useState<DashboardPayload | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState('');
+
+  // SIPs are loaded AFTER the dashboard and fail soft: a SIP-endpoint error only
+  // shows a section-level message — the rest of the dashboard still renders.
+  const [sips, setSips] = useState<InvestorSip[]>([]);
+  const [sipsLoading, setSipsLoading] = useState(false);
+  const [sipsError, setSipsError] = useState('');
+
+  const loadSips = useCallback(async () => {
+    setSipsLoading(true);
+    setSipsError('');
+    try {
+      const res = await apiFetch('/investor/sips');
+      const body = await res.json().catch(() => null);
+      if (!res.ok) {
+        throw new Error((body as { message?: string } | null)?.message || `Unable to load your SIPs (${res.status}).`);
+      }
+      setSips(Array.isArray(body) ? (body as InvestorSip[]) : []);
+    } catch (e) {
+      setSipsError(e instanceof Error ? e.message : 'Unable to load your SIPs.');
+      setSips([]);
+    } finally {
+      setSipsLoading(false);
+    }
+  }, []);
 
   const loadDashboard = useCallback(async (isRefresh = false) => {
     if (isRefresh) setRefreshing(true); else setLoading(true);
@@ -140,8 +258,10 @@ export default function InvestorDashboard() {
     } finally {
       setLoading(false);
       setRefreshing(false);
+      // Non-fatal follow-up fetch — never blocks or breaks the dashboard itself.
+      void loadSips();
     }
-  }, []);
+  }, [loadSips]);
 
   useEffect(() => { void loadDashboard(); }, [loadDashboard]);
 
@@ -208,8 +328,8 @@ export default function InvestorDashboard() {
 
   if (holdings.length === 0) {
     return (
-      <div className="mx-auto max-w-6xl p-8">
-        <div className="mb-6">
+      <div className="mx-auto max-w-6xl space-y-6 p-8">
+        <div>
           <h1 className="text-2xl font-semibold text-slate-800">Your portfolio</h1>
           <p className="mt-1 text-sm text-slate-500">A live view of your holdings, returns and allocation.</p>
         </div>
@@ -217,6 +337,7 @@ export default function InvestorDashboard() {
           <EmptyState icon={Wallet} title="No holdings yet"
             subtitle="Once your investments are confirmed, your portfolio value, returns and allocation will appear here." />
         </div>
+        <SipsSection sips={sips} loading={sipsLoading} error={sipsError} />
       </div>
     );
   }
@@ -393,6 +514,9 @@ export default function InvestorDashboard() {
           })}
         </div>
       </div>
+
+      {/* SIPs */}
+      <SipsSection sips={sips} loading={sipsLoading} error={sipsError} />
     </div>
   );
 }

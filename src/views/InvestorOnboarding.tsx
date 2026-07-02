@@ -3,14 +3,13 @@ import { useNavigate, useSearchParams, useLocation } from 'react-router-dom';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   ArrowLeft, ArrowRight, CheckCircle2, Loader2, Check,
-  ShieldCheck, Upload, Building2, User, AlertTriangle, X, RefreshCw, Fingerprint, Clock,
+  ShieldCheck, Upload, Building2, AlertTriangle, X, RefreshCw, Fingerprint, Clock,
 } from 'lucide-react';
 import CybrillaKycWarnings from '../components/CybrillaKycWarnings';
 import CybrillaKycReasonDialog, { type CybrillaKycReasonDialogContent } from '../components/CybrillaKycReasonDialog';
 import KycFlowPanel from '../components/KycFlowPanel';
 import KycProviderLink from '../components/KycProviderLink';
 import PincodeCityFields from '../components/PincodeCityFields';
-import NomineeFields, { emptyNominee, type NomineeValue } from '../components/NomineeFields';
 import SandboxDemoGuide from '../components/SandboxDemoGuide';
 import ContactVerification from '../components/ContactVerification';
 import { fetchIfscDetails } from '../utils/referenceLookup';
@@ -313,15 +312,8 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
     state: resumeInvestor?.state || '',
     postalCode: resumeInvestor?.postalCode || '',
   });
-  // IRIS P1 — repeatable nominees (up to 3) + display toggle.
-  const [nominees, setNominees] = useState<NomineeValue[]>(
-    Array.isArray(resumeInvestor?.nominees) && resumeInvestor.nominees.length > 0
-      ? resumeInvestor.nominees.map((n: any) => ({ ...emptyNominee(), ...n }))
-      : [],
-  );
-  const [displayNominees, setDisplayNominees] = useState<boolean>(
-    resumeInvestor?.displayNominees ?? false,
-  );
+  // Nominee capture moved to the INVESTOR's own flow (InvestorNomineeManager on
+  // /investor/nominations and the onboarding review page).
 
   // ── Step 5 — Bank ────────────────────────────────────────────────────────────
   const [s5, setS5] = useState({ accNumber: '', ifsc: '', accType: 'Savings', primary: true });
@@ -586,12 +578,6 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
       state: investor.state || '',
       postalCode: investor.postalCode || '',
     });
-    setNominees(
-      Array.isArray(investor.nominees) && investor.nominees.length > 0
-        ? investor.nominees.map((n: any) => ({ ...emptyNominee(), ...n }))
-        : [],
-    );
-    setDisplayNominees(investor.displayNominees ?? false);
     const incomeFromNotes = investor.annualIncome || noteValue(investor.onboardingNotes, 'income');
     setS6({
       taxResidency: noteValue(investor.onboardingNotes, 'tax_residency') || '', // DF-09
@@ -652,21 +638,6 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
     }));
   }, [resumeStep]);
 
-  // ── IRIS P1: nominee list helpers ───────────────────────────────────────────
-  const applicantAddress = {
-    addressLine1: s4.addressLine1,
-    addressLine2: s4.addressLine2,
-    city: s4.city,
-    state: s4.state,
-    postalCode: s4.postalCode,
-    country: 'India',
-  };
-  const addNominee = () => setNominees(prev => (prev.length >= 3 ? prev : [...prev, emptyNominee()]));
-  const removeNominee = (index: number) => setNominees(prev => prev.filter((_, i) => i !== index));
-  const updateNominee = (index: number, next: NomineeValue) =>
-    setNominees(prev => prev.map((n, i) => (i === index ? next : n)));
-  const nomineeShareTotal = nominees.reduce((sum, n) => sum + (Number(n.sharePercent) || 0), 0);
-
   const buildInvestorPayload = () => ({
     distributorId,
     fullName,
@@ -694,25 +665,6 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
     sourceOfWealth: s6.sourceOfWealth || null,
     pep: Boolean(s6.pep),
     relativeOfPep: Boolean(s6.relativeOfPep),
-    displayNominees: Boolean(displayNominees),
-    nominees: nominees.map(n => ({
-      fullName: n.fullName.trim(),
-      dateOfBirth: n.dateOfBirth || null,
-      relationship: n.relationship || null,
-      sharePercent: n.sharePercent ? Number(n.sharePercent) : null,
-      mobileNumber: n.mobileNumber ? normalizeMobile(n.mobileNumber) : null,
-      email: n.email.trim() || null,
-      idType: n.idType || null,
-      idNumber: n.idNumber.trim() || null,
-      addressLine1: n.addressLine1.trim() || null,
-      addressLine2: n.addressLine2.trim() || null,
-      addressLine3: n.addressLine3.trim() || null,
-      city: n.city.trim() || null,
-      state: n.state.trim() || null,
-      postalCode: n.postalCode.trim() || null,
-      country: n.country.trim() || null,
-      sameAsApplicant: Boolean(n.sameAsApplicant),
-    })),
     onboardingNotes: [
       `frontend_reference=${refNum}`,
       `contact_owner=${s4.contactOwner}`,
@@ -896,12 +848,6 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
 
   const investorDraftExists = Boolean(draftInvestor?.id || resumeInvestor?.id || resumeInvestorId);
 
-  // SEBI: nominees are optional, but if any are present they must be ≤3 and total exactly 100%.
-  const nomineesValid = nominees.length === 0
-    || (nominees.length <= 3
-        && nomineeShareTotal === 100
-        && nominees.every(n => n.fullName.trim() !== '' && !!n.relationship && Number(n.sharePercent) > 0));
-
   // Creates/updates the investor draft so the contact-verification widgets get a real
   // investorId on a fresh onboarding (backend create only needs name/mobile/email/pan).
   const saveDraftForVerification = async () => {
@@ -933,7 +879,7 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
         && s4.city.trim()
         && s4.state.trim()
         && /^\d{6}$/.test(s4.postalCode.trim())
-      ) && nomineesValid;           // SEBI: nominees must total exactly 100% (or none)
+      );
       case 4:
         return canProceedFromKycStep({
           isExistingKycVerified,
@@ -3315,65 +3261,8 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
                 </Field>
               </div>
 
-              {/* IRIS P1 — Nominees (repeatable, up to 3) */}
-              <div className="mt-6">
-                <div className="mb-3 flex items-center justify-between">
-                  <span className="flex items-center gap-2 text-sm font-semibold text-slate-700">
-                    <User className="w-4 h-4 text-slate-400" />
-                    Nominee Details
-                    <span className="text-xs font-normal text-slate-400">(optional, up to 3)</span>
-                  </span>
-                  {nominees.length < 3 && (
-                    <button
-                      type="button"
-                      onClick={addNominee}
-                      className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-50"
-                    >
-                      + Add nominee
-                    </button>
-                  )}
-                </div>
-
-                {nominees.length === 0 ? (
-                  <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-center text-xs text-slate-400">
-                    No nominees added. Click "Add nominee" to register up to 3 nominees.
-                  </div>
-                ) : (
-                  <div className="space-y-4">
-                    {nominees.map((nominee, index) => (
-                      <NomineeFields
-                        key={index}
-                        index={index}
-                        value={nominee}
-                        onChange={next => updateNominee(index, next)}
-                        onRemove={() => removeNominee(index)}
-                        applicantAddress={applicantAddress}
-                      />
-                    ))}
-                  </div>
-                )}
-
-                {nominees.length > 0 && (
-                  <p
-                    className={`mt-3 text-xs font-medium ${
-                      nomineeShareTotal === 100 ? 'text-green-600' : 'text-amber-600'
-                    }`}
-                  >
-                    Total nominee share: {nomineeShareTotal}% {nomineeShareTotal === 100 ? '✓' : '(should total 100%)'}
-                  </p>
-                )}
-
-                {/* Display nominees on statements toggle */}
-                <label className="mt-4 flex cursor-pointer items-center gap-3">
-                  <input
-                    type="checkbox"
-                    checked={displayNominees}
-                    onChange={e => setDisplayNominees(e.target.checked)}
-                    className="h-4 w-4 rounded border-slate-300 text-[#0B1B3E] focus:ring-blue-200"
-                  />
-                  <span className="text-sm text-slate-700">Display nominee details on statements and reports</span>
-                </label>
-              </div>
+              {/* Nominee capture moved to the investor's own flow (/investor/nominations
+                  + the onboarding review page) — the investor adds/completes nominees there. */}
             </div>
           )}
 
