@@ -144,6 +144,48 @@ class OrderServiceTest {
     }
 
     @Test
+    void createSipAppliesInstallmentDayToStartDate() {
+        UUID distributorId = UUID.randomUUID();
+        List<TransactionOrder> savedOrders = new ArrayList<>();
+        OrderService orderService = new OrderService(
+                savingOrderRepository(savedOrders),
+                null,
+                new FixedInvestorService(verifiedInvestor(distributorId)),
+                new CountingAuditService(new AtomicInteger()),
+                new CountingNotificationService(new AtomicInteger()),
+                actionUrlCybrillaClient(),
+                null,
+                productSchemeRepository(),
+                null,
+                null
+        );
+        // A future start date on the 20th; choosing installment day 5 should move the
+        // persisted start date to the 5th (mirrors the SIP edit flow's withDayOfMonth).
+        LocalDate start = LocalDate.now().plusMonths(2).withDayOfMonth(20);
+        OrderCreateRequest request = new OrderCreateRequest(
+                UUID.randomUUID(),
+                UUID.randomUUID(),
+                null,
+                TransactionType.SIP,
+                new BigDecimal("1000"),
+                null,
+                "MANDATE",
+                "E_MANDATE",
+                "MONTHLY",
+                start,
+                12,
+                5,
+                null,
+                null
+        );
+
+        TransactionOrder order = orderService.createOrder(request, distributorId);
+
+        assertThat(order.getSipStartDate()).isNotNull();
+        assertThat(order.getSipStartDate().getDayOfMonth()).isEqualTo(5);
+    }
+
+    @Test
     void createOrderResolvesSchemeByExternalIsinWhenUuidIsMissing() {
         UUID distributorId = UUID.randomUUID();
         UUID schemeId = UUID.randomUUID();

@@ -457,7 +457,7 @@ public class OrderService {
         order.setMandateMode(request.mandateMode());
         applyProductSchemeSnapshot(order, productScheme);
         order.setSipFrequency(normalizeSipFrequency(request.sipFrequency()));
-        order.setSipStartDate(request.sipStartDate());
+        order.setSipStartDate(applySipInstallmentDay(request.sipStartDate(), request.installmentDay()));
         order.setSipInstalments(request.sipInstalments());
         order.setInvestorActionToken(UUID.randomUUID().toString());
         order.setOrderStatus(OrderStatus.CREATED);
@@ -553,6 +553,7 @@ public class OrderService {
                 req.sipFrequency(),
                 req.sipStartDate(),
                 req.sipInstalments(),
+                req.installmentDay(),
                 req.externalSchemeCode(),
                 req.externalIsin());
         TransactionOrder created = createOrder(order, distributorId);
@@ -976,6 +977,43 @@ public class OrderService {
         auditService.log("ORDER", orderId, "INVESTOR_APPROVAL_LINK_RESENT", principal.getDistributorId(),
                 "{\"challengeId\":\"" + challengeId + "\"}");
         return response;
+    }
+
+    /**
+     * Distributor-initiated request that the investor approve a REDEMPTION draft with 2FA.
+     * Mirrors {@link #requestInvestorApproval} but targets an existing redemption draft — the
+     * challenge is keyed by the redemption id, the same id {@link #submitRedemptionToProvider}
+     * consumes at Gate C. Ownership-checked against the draft's order. NEVER sends/returns an OTP;
+     * the investor requests the code themselves in the Approval Center.
+     */
+    @Transactional
+    public ApprovalRequestResult requestRedemptionApproval(UUID redemptionId, JwtAuthPrincipal principal) {
+        RedemptionRecord record = redemptionRecordRepository.findById(redemptionId)
+                .orElseThrow(() -> new EntityNotFoundException("Redemption not found"));
+        TransactionOrder order = transactionOrderRepository.findById(record.getOrderId())
+                .orElseThrow(() -> new EntityNotFoundException("Order not found"));
+        assertOrderOwnership(order.getDistributorId(), principal);
+
+        InvestorAccount account = resolveInvestorAccount(order.getInvestorId());
+        TransactionApprovalChallenge challenge = transactionApprovalService.createChallenge(
+                record.getId(), TransactionType.REDEMPTION, account.getId());
+
+        auditService.log("REDEMPTION", record.getId(), "INVESTOR_APPROVAL_REQUESTED",
+                principal.getDistributorId(),
+                "{\"challengeId\":\"" + challenge.getId() + "\",\"type\":\"REDEMPTION\""
+                        + ",\"investorAccountId\":\"" + account.getId() + "\"}");
+        notificationService.createForDistributor(order.getDistributorId(), order.getInvestorId(),
+                NotificationType.PAYMENT_PENDING, "Approval requested",
+                "Investor 2FA approval requested for this redemption.");
+
+        // Challenge summary only — NEVER the OTP. The second field carries the redemption id
+        // (the challenge's transaction id), which the investor portal approves via challengeId.
+        return new ApprovalRequestResult(
+                challenge.getId(),
+                record.getId(),
+                TransactionType.REDEMPTION.name(),
+                challenge.getStatus().name(),
+                challenge.getMaskedDestination());
     }
 
     private InvestorAccount resolveInvestorAccount(UUID investorId) {
@@ -1524,6 +1562,27 @@ public class OrderService {
         if (request.sipInstalments() != null && request.sipInstalments() < 1) {
             throw new IllegalArgumentException("SIP instalments must be greater than 0");
         }
+        if (request.installmentDay() != null
+                && (request.installmentDay() < 1 || request.installmentDay() > 28)) {
+            throw new IllegalArgumentException("SIP date (day of month) must be between 1 and 28");
+        }
+    }
+
+    /**
+     * Shifts a SIP start date onto the chosen debit day-of-month (1–28). Mirrors the SIP
+     * edit flow ({@code sipStartDate.withDayOfMonth(installmentDay)}). If shifting the day
+     * lands on today or earlier, rolls forward one month so the start stays in the future.
+     */
+    private static LocalDate applySipInstallmentDay(LocalDate startDate, Integer installmentDay) {
+        if (startDate == null || installmentDay == null) {
+            return startDate;
+        }
+        int day = Math.min(Math.max(installmentDay, 1), 28);
+        LocalDate adjusted = startDate.withDayOfMonth(day);
+        if (!adjusted.isAfter(LocalDate.now())) {
+            adjusted = adjusted.plusMonths(1);
+        }
+        return adjusted;
     }
 
     private void validateLumpsumRequest(OrderCreateRequest request) {

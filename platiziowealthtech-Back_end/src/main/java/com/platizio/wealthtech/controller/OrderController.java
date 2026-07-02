@@ -145,6 +145,18 @@ public class OrderController {
     }
 
     /**
+     * Distributor asks the investor to approve a REDEMPTION draft with 2FA. Creates the
+     * approval challenge against the redemption draft (keyed by redemptionId); the investor
+     * then approves it with an OTP in their portal, which submits the real redemption.
+     * The response is a challenge summary — NEVER an OTP.
+     */
+    @PostMapping("/redemptions/{redemptionId}/request-approval")
+    public OrderService.ApprovalRequestResult requestRedemptionApproval(
+            @PathVariable UUID redemptionId, Authentication auth) {
+        return orderService.requestRedemptionApproval(redemptionId, actorPrincipal(auth));
+    }
+
+    /**
      * Distributor asks the investor to approve this purchase/SIP order with 2FA
      * (Phase-2). Creates the approval challenge and flips the order to
      * PENDING_INVESTOR_ACTION. The response is a challenge summary — NEVER an OTP.

@@ -435,6 +435,24 @@ public class DemoDataSeeder implements CommandLineRunner {
         String sipPaymentPendingId = "c3030003-0003-4003-8003-000000000303";
         String redemptionOrderId = "c3030003-0003-4003-8003-000000000304";
 
+        // Restore the demo product scheme the showcase holding points at (a123fef2 "Super Growth
+        // Fund"). A live Cybrilla catalogue refresh can drop the V3 demo schemes from
+        // product_schemes, which makes PortfolioService render the holding as "Unknown fund"
+        // (schemeKnown=false) and therefore NON-redeemable even with units available. Re-seed it so
+        // the holding resolves and the Withdraw page shows it redeemable (redeemable is
+        // NAV-independent). Idempotent by id; a demo-namespaced external_scheme_code avoids
+        // colliding with any real catalogue code (external_scheme_code is UNIQUE NOT NULL).
+        jdbc.update(
+            "INSERT INTO product_schemes (id, created_at, updated_at, scheme_name, amc_name, category, " +
+            "  external_scheme_code, external_isin, product_type, active, metadata_json) VALUES (" +
+            "  ?::uuid, now(), now(), 'Super Growth Fund', 'Super AMC', 'OTHER', 'DEMO-MF-SG-100', " +
+            "  'INF123456789', 'MUTUAL_FUND', true, '{\"returns\":{\"daily\":0.8,\"ytd\":12.4,\"1y\":18.5,\"5y\":85.2}}') " +
+            "ON CONFLICT (id) DO UPDATE SET updated_at = now(), scheme_name = EXCLUDED.scheme_name, " +
+            "  amc_name = EXCLUDED.amc_name, category = EXCLUDED.category, product_type = EXCLUDED.product_type, " +
+            "  active = true",
+            SCHEME_MF_GROWTH
+        );
+
         jdbc.update(
             "INSERT INTO transaction_orders (" +
             "  id, created_at, updated_at, investor_id, distributor_id, product_scheme_id, transaction_type, " +
@@ -442,9 +460,30 @@ public class DemoDataSeeder implements CommandLineRunner {
             ") VALUES (" +
             "  ?::uuid, now() - interval '12 days', now() - interval '10 days', ?::uuid, ?::uuid, ?::uuid, 'LUMPSUM_PURCHASE', " +
             "  'COMPLETED', 50000.00, 412.5000, 'NET_BANKING', 'MF', 'fp_purchase_demo_001', false" +
-            ") ON CONFLICT (id) DO NOTHING",
+            ") ON CONFLICT (id) DO UPDATE SET " +
+            // Repair a stale row from an earlier seed run (null external_order_id, zero units,
+            // CANCELLED, or is_deleted=true) back to the redeemable shape on every boot, so the
+            // Withdraw page's full-redemption "Request to distributor" draft path keeps working
+            // (200 + redemptionId). PortfolioService needs a non-blank external_order_id +
+            // non-CANCELLED status + positive units to mark the holding redeemable.
+            "  updated_at = now(), order_status = 'COMPLETED', units = 412.5000, amount = 50000.00, " +
+            "  external_order_id = 'fp_purchase_demo_001', product_scheme_id = EXCLUDED.product_scheme_id, " +
+            "  is_deleted = false, deleted_at = NULL",
             lumpsumId, id, TEST_DISTRIBUTOR_ID, SCHEME_MF_GROWTH
         );
+
+        // Repeatable demo: keep the showcase lumpsum FULLY redeemable across boots by clearing
+        // any in-flight redemption drafts/challenges previously requested against it (from a prior
+        // demo run or automated test). Otherwise those drafts leave its units "blocked" and the
+        // holding shows availableUnits=0 / redeemable=false. No table has an FK to
+        // redemption_records (verified), and the only seeded redemption (…403) targets the
+        // separate order …304 — so this never removes canonical demo data.
+        jdbc.update(
+            "DELETE FROM transaction_approval_challenges WHERE transaction_type = 'REDEMPTION' "
+                + "AND transaction_id IN (SELECT id FROM redemption_records WHERE order_id = ?::uuid)",
+            lumpsumId
+        );
+        jdbc.update("DELETE FROM redemption_records WHERE order_id = ?::uuid", lumpsumId);
         jdbc.update(
             "INSERT INTO transaction_orders (" +
             "  id, created_at, updated_at, investor_id, distributor_id, product_scheme_id, transaction_type, " +
