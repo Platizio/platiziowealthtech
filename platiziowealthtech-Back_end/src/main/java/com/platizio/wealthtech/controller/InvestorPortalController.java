@@ -394,6 +394,21 @@ public class InvestorPortalController {
         return NomineeResponse.from(saved);
     }
 
+    @Operation(summary = "Update (complete) a nominee",
+            description = "Overwrites one of my nominees with the submitted shape — used to fill in fields a "
+                    + "distributor-captured nominee is still missing.")
+    @PutMapping("/nominations/{nomineeId}")
+    public NomineeResponse updateNomination(
+            @PathVariable UUID nomineeId,
+            @Valid @RequestBody NomineeRequest request,
+            Authentication auth) {
+        InvestorAccount account = investorAuthService.requireAccount(accountId(auth));
+        UUID investorId = requireInvestorId(account);
+        InvestorNominee saved = nomineeService.updateNomineeAsInvestor(investorId, nomineeId, request);
+        boolean hasDoc = investorDocumentService.nomineeIdsWithDocuments(investorId).contains(saved.getId());
+        return NomineeResponse.from(saved, hasDoc);
+    }
+
     @Operation(summary = "Upload a nominee's identity document",
             description = "Uploads (or replaces) the ID document for one of my nominees; used to verify the nominee "
                     + "against the ID provided. PDF/JPG/PNG, max 5 MB.")

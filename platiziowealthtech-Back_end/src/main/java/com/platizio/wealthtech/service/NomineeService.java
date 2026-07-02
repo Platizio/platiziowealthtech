@@ -75,23 +75,7 @@ public class NomineeService {
 
         InvestorNominee nominee = new InvestorNominee();
         nominee.setInvestorId(investorId);
-        nominee.setFullName(request.fullName());
-        nominee.setRelationship(request.relationship());
-        nominee.setDateOfBirth(request.dateOfBirth());
-        nominee.setSharePercent(request.sharePercent());
-        nominee.setMobileNumber(request.mobileNumber());
-        nominee.setEmail(request.email());
-        nominee.setIdType(request.idType());
-        nominee.setIdNumber(request.idNumber());
-        nominee.setAddressLine1(request.addressLine1());
-        nominee.setAddressLine2(request.addressLine2());
-        nominee.setAddressLine3(request.addressLine3());
-        nominee.setCity(request.city());
-        nominee.setState(request.state());
-        nominee.setPostalCode(request.postalCode());
-        nominee.setCountry(request.country());
-        nominee.setSameAsApplicant(Boolean.TRUE.equals(request.sameAsApplicant()));
-        nominee.setGuardianName(request.guardianName());
+        applyRequest(nominee, request);
 
         List<InvestorNominee> existing = nomineeRepository.findByInvestorIdOrderByNomineeIndexAsc(investorId);
 
@@ -123,6 +107,33 @@ public class NomineeService {
             investorRepository.save(investor);
         }
         return saved;
+    }
+
+    /**
+     * Updates (completes) an existing nominee with the full submitted shape — used
+     * when the investor fills in the fields a distributor-captured nominee is still
+     * missing. Overwrite semantics: the client sends the merged view it displays.
+     * Allocation across all nominees (with this one's new share) may not exceed 100.
+     */
+    @Transactional
+    public InvestorNominee updateNominee(UUID investorId, UUID nomineeId, NomineeRequest request) {
+        requireInvestor(investorId);
+        InvestorNominee nominee = nomineeRepository.findById(nomineeId)
+                .filter(n -> investorId.equals(n.getInvestorId()))
+                .orElseThrow(() -> new EntityNotFoundException("Nominee not found"));
+        applyRequest(nominee, request);
+
+        BigDecimal total = shareOf(nominee);
+        for (InvestorNominee n : nomineeRepository.findByInvestorIdOrderByNomineeIndexAsc(investorId)) {
+            if (!nomineeId.equals(n.getId())) {
+                total = total.add(shareOf(n));
+            }
+        }
+        if (total.compareTo(FULL_ALLOCATION) > 0) {
+            throw new IllegalArgumentException(
+                    "Allocation percentages across nominees cannot exceed 100% (would be " + total + "%).");
+        }
+        return nomineeRepository.save(nominee);
     }
 
     /**
@@ -183,8 +194,33 @@ public class NomineeService {
     }
 
     @Transactional
+    public InvestorNominee updateNomineeAsInvestor(UUID investorId, UUID nomineeId, NomineeRequest request) {
+        return updateNominee(investorId, nomineeId, request);
+    }
+
+    @Transactional
     public Investor optOutAsInvestor(UUID investorId, UUID subjectId, String ip, String userAgent) {
         return optOut(investorId, subjectId, ip, userAgent);
+    }
+
+    private static void applyRequest(InvestorNominee nominee, NomineeRequest request) {
+        nominee.setFullName(request.fullName());
+        nominee.setRelationship(request.relationship());
+        nominee.setDateOfBirth(request.dateOfBirth());
+        nominee.setSharePercent(request.sharePercent());
+        nominee.setMobileNumber(request.mobileNumber());
+        nominee.setEmail(request.email());
+        nominee.setIdType(request.idType());
+        nominee.setIdNumber(request.idNumber());
+        nominee.setAddressLine1(request.addressLine1());
+        nominee.setAddressLine2(request.addressLine2());
+        nominee.setAddressLine3(request.addressLine3());
+        nominee.setCity(request.city());
+        nominee.setState(request.state());
+        nominee.setPostalCode(request.postalCode());
+        nominee.setCountry(request.country());
+        nominee.setSameAsApplicant(Boolean.TRUE.equals(request.sameAsApplicant()));
+        nominee.setGuardianName(request.guardianName());
     }
 
     private static BigDecimal shareOf(InvestorNominee n) {

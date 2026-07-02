@@ -42,7 +42,10 @@ class InvestorContactVerificationServiceTest {
 
     @BeforeEach
     void setUp() {
-        service = new InvestorContactVerificationService(investorRepository, supabaseAuthClient, auditService);
+        // Real SmsOtpService over the mocked Supabase client, so the demo-stub
+        // routing (TODO(MSG91)) is exercised rather than mocked away.
+        service = new InvestorContactVerificationService(
+                investorRepository, supabaseAuthClient, new SmsOtpService(supabaseAuthClient), auditService);
         investor = new Investor();
         ReflectionTestUtils.setField(investor, "id", investorId);
         investor.setDistributorId(distributorId);
@@ -101,13 +104,35 @@ class InvestorContactVerificationServiceTest {
     }
 
     @Test
-    void requestMobileOtpBlockedWhenSmsDisabled() {
+    void requestMobileOtpFallsBackToDemoStubWhenSmsDisabled() {
         when(supabaseAuthClient.isSmsEnabled()).thenReturn(false);
 
-        assertThatThrownBy(() -> service.requestMobileOtp(investorId, distributorId))
-                .isInstanceOf(IllegalStateException.class);
+        service.requestMobileOtp(investorId, distributorId);
 
+        // Simulated send (TODO(MSG91)): nothing reaches Supabase, request still succeeds.
         verify(supabaseAuthClient, never()).sendSmsOtp(anyString());
+        verify(auditService).log(eq("INVESTOR"), eq(investorId), eq("MOBILE_OTP_SENT"), eq(distributorId), isNull());
+    }
+
+    @Test
+    void verifyMobileOtpAcceptsDemoCodeWhenSmsDisabled() {
+        when(supabaseAuthClient.isSmsEnabled()).thenReturn(false);
+
+        service.verifyMobileOtp(investorId, distributorId, "000000");
+
+        assertThat(investor.getMobileVerified()).isTrue();
+        assertThat(investor.getMobileVerificationMethod()).isEqualTo(ContactVerificationMethod.OTP.name());
+        verify(supabaseAuthClient, never()).verifySmsOtp(anyString(), anyString());
+    }
+
+    @Test
+    void verifyMobileOtpRejectsWrongDemoCodeWhenSmsDisabled() {
+        when(supabaseAuthClient.isSmsEnabled()).thenReturn(false);
+
+        assertThatThrownBy(() -> service.verifyMobileOtp(investorId, distributorId, "111111"))
+                .isInstanceOf(BadCredentialsException.class);
+
+        assertThat(investor.getMobileVerified()).isFalse();
     }
 
     @Test
