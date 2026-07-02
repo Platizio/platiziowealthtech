@@ -14,40 +14,62 @@ export const isRedeemableHolding = (orderStatus?: string, transactionType?: stri
   REDEEMABLE_STATUSES.has(String(orderStatus || '').toUpperCase()) &&
   REDEEMABLE_TYPES.has(String(transactionType || '').toUpperCase());
 
+/** Shared, friendly mapping of a failed redemption HTTP response to a message. */
+const mapRedemptionError = (status: number, body: any): RedeemResult => {
+  if (status === 502 || status === 503) {
+    return {
+      ok: false,
+      message:
+        'Cybrilla is temporarily unavailable. Your request was not submitted — please try again in a few minutes.',
+    };
+  }
+  const message = body?.message || `Redemption failed (HTTP ${status}).`;
+  if (/mf investment account|investor profile|occupation/i.test(message)) {
+    return {
+      ok: false,
+      message: `${message} Redemption uses the same investor FP profile setup as purchases — restart the backend if you recently deployed a fix, then retry.`,
+    };
+  }
+  if (/fintech primitives purchase id|externalorderid|demo-only/i.test(message)) {
+    return {
+      ok: false,
+      message:
+        'This holding was not purchased through live Cybrilla POA (demo-only order). Place a real purchase first, then redeem that order.',
+    };
+  }
+  return { ok: false, message };
+};
+
 /**
- * POST /api/v1/orders/{orderId}/redemption with the normalized error messaging shared by every
- * redemption surface (Redemptions page, Investor redeem, Portfolio rows, Transaction detail).
+ * Distributor-initiated redemption with 2FA (shared by the Redemptions page, Investor
+ * redeem, Portfolio rows and Transaction detail). Two steps, no money moves until the
+ * investor approves:
+ *   1. POST /orders/{orderId}/redemption           → creates the redemption DRAFT
+ *   2. POST /orders/redemptions/{draftId}/request-approval → creates the REDEMPTION 2FA
+ *      challenge the investor authorizes (OTP) in their portal; that approval submits it.
  * Never throws — always resolves to { ok, message }.
  */
 export const submitRedemption = async (orderId: string): Promise<RedeemResult> => {
   try {
-    const response = await apiFetch(`/orders/${orderId}/redemption`, { method: 'POST' });
-    if (response.ok) {
-      return { ok: true, message: 'Redemption submitted. Track its progress under Transactions.' };
+    const draftRes = await apiFetch(`/orders/${orderId}/redemption`, { method: 'POST' });
+    const draft = await draftRes.json().catch(() => null);
+    if (!draftRes.ok) {
+      return mapRedemptionError(draftRes.status, draft);
     }
-    const body = await response.json().catch(() => null);
-    if (response.status === 502 || response.status === 503) {
-      return {
-        ok: false,
-        message:
-          'Cybrilla is temporarily unavailable. Your request was not submitted — please try again in a few minutes.',
-      };
+    const redemptionId = (draft as { id?: string } | null)?.id;
+    if (!redemptionId) {
+      return { ok: false, message: 'Could not create the redemption draft. Please try again.' };
     }
-    const message = body?.message || `Redemption failed (HTTP ${response.status}).`;
-    if (/mf investment account|investor profile|occupation/i.test(message)) {
-      return {
-        ok: false,
-        message: `${message} Redemption uses the same investor FP profile setup as purchases — restart the backend if you recently deployed a fix, then retry.`,
-      };
+    const apprRes = await apiFetch(`/orders/redemptions/${redemptionId}/request-approval`, { method: 'POST' });
+    const appr = await apprRes.json().catch(() => null);
+    if (!apprRes.ok) {
+      return mapRedemptionError(apprRes.status, appr);
     }
-    if (/fintech primitives purchase id|externalorderid|demo-only/i.test(message)) {
-      return {
-        ok: false,
-        message:
-          'This holding was not purchased through live Cybrilla POA (demo-only order). Place a real purchase first, then redeem that order.',
-      };
-    }
-    return { ok: false, message };
+    const dest = (appr as { maskedDestination?: string } | null)?.maskedDestination;
+    return {
+      ok: true,
+      message: `Redemption approval requested. The investor authorizes it with a one-time passcode in their portal${dest ? ` (a code can be sent to ${dest})` : ''}.`,
+    };
   } catch (err) {
     return { ok: false, message: err instanceof Error ? err.message : 'Redemption failed. Please try again.' };
   }

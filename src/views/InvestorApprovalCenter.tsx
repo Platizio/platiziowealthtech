@@ -41,6 +41,16 @@ function StatusPill({ status }: { status?: string }) {
 
 const typeLabel = (t?: string) => String(t || 'Transaction').replace(/_/g, ' ');
 
+/**
+ * The list (GET /investor/approvals) and detail (GET /investor/approvals/{challengeId})
+ * endpoints key the challenge id as `challengeId` (see ApprovalSummaryResponse /
+ * ApprovalDetailResponse) — there is no `id` field. The UI and TransactionApprovalPanel
+ * read `id`, so normalize it here. Without this, `c.id` is undefined → duplicate React
+ * keys and a GET /investor/approvals/undefined (HTTP 400) the moment a row is clicked.
+ */
+const toChallenge = (raw: any): ApprovalChallenge =>
+  ({ ...raw, id: raw?.id ?? raw?.challengeId }) as ApprovalChallenge;
+
 type TabKey = 'transactions' | 'profile';
 
 /**
@@ -85,7 +95,7 @@ export default function InvestorApprovalCenter() {
         : Array.isArray((data as { content?: ApprovalChallenge[] } | null)?.content)
           ? (data as { content: ApprovalChallenge[] }).content
           : [];
-      setChallenges(list);
+      setChallenges(list.map(toChallenge));
     } catch (e) {
       setLoadError(e instanceof Error ? e.message : 'Unable to load your approvals.');
     } finally {
@@ -111,7 +121,11 @@ export default function InvestorApprovalCenter() {
     void loadChanges();
   }, [loadList, loadChanges]);
 
-  const openChallenge = useCallback(async (id: string) => {
+  const openChallenge = useCallback(async (id?: string) => {
+    if (!id) {
+      setLoadError('This approval is missing its identifier and cannot be opened. Please refresh and try again.');
+      return;
+    }
     setSelectedId(id);
     setDetail(null);
     setDetailLoading(true);
@@ -121,7 +135,7 @@ export default function InvestorApprovalCenter() {
       if (!res.ok) {
         throw new Error((data as { message?: string } | null)?.message || 'Unable to load this approval.');
       }
-      setDetail(data as ApprovalChallenge);
+      setDetail(toChallenge(data));
     } catch (e) {
       setLoadError(e instanceof Error ? e.message : 'Unable to load this approval.');
       setSelectedId(null);
@@ -263,7 +277,7 @@ export default function InvestorApprovalCenter() {
                 const live = ['PENDING', 'CHALLENGE_SENT', 'APPROVED'].includes(normalizeStatus(c.status));
                 return (
                   <button
-                    key={c.id}
+                    key={c.id ?? i}
                     type="button"
                     onClick={() => void openChallenge(c.id)}
                     className={`flex w-full items-center justify-between gap-4 px-6 py-4 text-left transition-colors hover:bg-slate-50 ${i > 0 ? 'border-t border-slate-100' : ''}`}

@@ -171,7 +171,22 @@ export default function LoginPage({
           setPwLoading(false);
           return;
         }
-        throw new Error(data?.message || 'Incorrect email or password. Please try again.');
+        // A genuine credential rejection is 401. Anything else must NOT be shown as
+        // "wrong password": a 5xx/socket error means the proxy could not reach the
+        // backend (down or on a different port), and 429 is a rate-limit lockout.
+        // Mislabeling those as bad credentials is exactly what hid the real problem.
+        if (response.status === 429) {
+          throw new Error(data?.message || 'Too many attempts. Please wait ~60 seconds and try again.');
+        }
+        if (response.status >= 500) {
+          throw new Error(
+            `Can't reach the backend (HTTP ${response.status}). The API server may be down or listening on a different port than the app proxies to — start it and retry.`,
+          );
+        }
+        if (response.status === 401) {
+          throw new Error(data?.message || 'Incorrect email or password. Please try again.');
+        }
+        throw new Error(data?.message || `Login failed (HTTP ${response.status}).`);
       }
 
       console.log('[Login] Login successful. HttpOnly cookie should now be set by backend.', {
@@ -183,7 +198,16 @@ export default function LoginPage({
       onLogin(data);
     } catch (error) {
       console.error('Login failed:', error);
-      setPwError(error instanceof Error ? error.message : 'Login failed. Please try again.');
+      // fetch() rejects with a TypeError when the request itself fails (backend/proxy
+      // unreachable) — report that truthfully instead of blaming the password.
+      const isNetworkError = error instanceof TypeError;
+      setPwError(
+        isNetworkError
+          ? "Can't reach the server. Make sure the backend is running and the app points at the right port, then try again."
+          : error instanceof Error
+            ? error.message
+            : 'Login failed. Please try again.',
+      );
       setPwLoading(false);
     }
   };
@@ -207,7 +231,16 @@ export default function LoginPage({
       });
       const data = await response.json().catch(() => null);
       if (!response.ok) {
-        throw new Error(data?.message || 'Unable to start password reset. Please try again.');
+        if (response.status === 429) {
+          throw new Error(data?.message || 'Too many attempts. Please wait ~60 seconds and try again.');
+        }
+        if (response.status >= 500) {
+          throw new Error(`Can't reach the backend (HTTP ${response.status}). The API server may be down or on a different port than the app proxies to — start it and retry.`);
+        }
+        if (response.status === 401) {
+          throw new Error(data?.message || 'Unable to start password reset. Please try again.');
+        }
+        throw new Error(data?.message || `Unable to start password reset (HTTP ${response.status}).`);
       }
       const token = data?.resetToken || '';
       setForgotEmail(em);
@@ -217,7 +250,12 @@ export default function LoginPage({
       console.log('[Login] Password reset request completed');
     } catch (error) {
       console.error('Forgot password failed:', error);
-      setForgotError(error instanceof Error ? error.message : 'Unable to start password reset. Please try again.');
+      const isNetworkError = error instanceof TypeError;
+      setForgotError(
+        isNetworkError
+          ? "Can't reach the server. Make sure the backend is running and the app points at the right port, then try again."
+          : error instanceof Error ? error.message : 'Unable to start password reset. Please try again.',
+      );
       setForgotStatus('idle');
     }
   };
@@ -248,7 +286,16 @@ export default function LoginPage({
       });
       const data = await response.json().catch(() => null);
       if (!response.ok) {
-        throw new Error(data?.message || 'Unable to reset password. Please request a new token.');
+        if (response.status === 429) {
+          throw new Error(data?.message || 'Too many attempts. Please wait ~60 seconds and try again.');
+        }
+        if (response.status >= 500) {
+          throw new Error(`Can't reach the backend (HTTP ${response.status}). The API server may be down or on a different port than the app proxies to — start it and retry.`);
+        }
+        if (response.status === 401) {
+          throw new Error(data?.message || 'Unable to reset password. Please request a new token.');
+        }
+        throw new Error(data?.message || `Unable to reset password (HTTP ${response.status}).`);
       }
       setEmail(forgotEmail);
       setPassword('');
@@ -258,7 +305,12 @@ export default function LoginPage({
       console.log('[Login] Password reset completed');
     } catch (error) {
       console.error('Password reset failed:', error);
-      setForgotError(error instanceof Error ? error.message : 'Unable to reset password. Please request a new token.');
+      const isNetworkError = error instanceof TypeError;
+      setForgotError(
+        isNetworkError
+          ? "Can't reach the server. Make sure the backend is running and the app points at the right port, then try again."
+          : error instanceof Error ? error.message : 'Unable to reset password. Please request a new token.',
+      );
       setForgotStatus('sent');
     }
   };
@@ -280,7 +332,18 @@ export default function LoginPage({
     });
     const data = await res.json().catch(() => null);
     if (!res.ok) {
-      throw new Error(data?.message || 'Could not send the OTP. Please try again.');
+      // 429 = rate-limit; 5xx/socket = backend unreachable (down or wrong port). Neither
+      // is a bad OTP — mislabeling them is what hides the real problem.
+      if (res.status === 429) {
+        throw new Error(data?.message || 'Too many attempts. Please wait ~60 seconds and try again.');
+      }
+      if (res.status >= 500) {
+        throw new Error(`Can't reach the backend (HTTP ${res.status}). The API server may be down or on a different port than the app proxies to — start it and retry.`);
+      }
+      if (res.status === 401) {
+        throw new Error(data?.message || 'Could not send the OTP. Please try again.');
+      }
+      throw new Error(data?.message || `Could not send the OTP (HTTP ${res.status}).`);
     }
     return data;
   };
@@ -304,7 +367,12 @@ export default function LoginPage({
       console.log('[Login] OTP request accepted');
     } catch (error) {
       console.error('OTP request failed:', error);
-      setOtpError(error instanceof Error ? error.message : 'Could not send the OTP. Please try again.');
+      const isNetworkError = error instanceof TypeError;
+      setOtpError(
+        isNetworkError
+          ? "Can't reach the server. Make sure the backend is running and the app points at the right port, then try again."
+          : error instanceof Error ? error.message : 'Could not send the OTP. Please try again.',
+      );
     } finally {
       setOtpLoading(false);
     }
@@ -353,13 +421,29 @@ export default function LoginPage({
           setApprovalPopup(data?.message || 'Approval remaining. Your account is pending admin approval.');
           return;
         }
-        throw new Error(data?.message || 'Incorrect or expired OTP. Please try again.');
+        // A genuine wrong/expired OTP is 401; 429 is a rate-limit; 5xx means the backend
+        // is unreachable (down or wrong port) — don't show either as a bad OTP.
+        if (res.status === 429) {
+          throw new Error(data?.message || 'Too many attempts. Please wait ~60 seconds and try again.');
+        }
+        if (res.status >= 500) {
+          throw new Error(`Can't reach the backend (HTTP ${res.status}). The API server may be down or on a different port than the app proxies to — start it and retry.`);
+        }
+        if (res.status === 401) {
+          throw new Error(data?.message || 'Incorrect or expired OTP. Please try again.');
+        }
+        throw new Error(data?.message || `OTP verification failed (HTTP ${res.status}).`);
       }
       console.log('[Login] OTP login successful. HttpOnly cookie should now be set by backend.');
       onLogin(data);
     } catch (error) {
       console.error('OTP verify failed:', error);
-      setOtpError(error instanceof Error ? error.message : 'Incorrect OTP. Please check and try again.');
+      const isNetworkError = error instanceof TypeError;
+      setOtpError(
+        isNetworkError
+          ? "Can't reach the server. Make sure the backend is running and the app points at the right port, then try again."
+          : error instanceof Error ? error.message : 'Incorrect OTP. Please check and try again.',
+      );
       setOtpDigits(Array(6).fill(''));
       setTimeout(() => otpRefs.current[0]?.focus(), 50);
     } finally {
@@ -377,7 +461,12 @@ export default function LoginPage({
       setTimeout(() => otpRefs.current[0]?.focus(), 50);
     } catch (error) {
       console.error('OTP resend failed:', error);
-      setOtpError(error instanceof Error ? error.message : 'Could not resend the OTP. Please try again.');
+      const isNetworkError = error instanceof TypeError;
+      setOtpError(
+        isNetworkError
+          ? "Can't reach the server. Make sure the backend is running and the app points at the right port, then try again."
+          : error instanceof Error ? error.message : 'Could not resend the OTP. Please try again.',
+      );
     }
   };
 

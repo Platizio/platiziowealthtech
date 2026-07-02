@@ -3,7 +3,7 @@ import { useNavigate, useParams, useLocation } from 'react-router-dom';
 import { motion } from 'motion/react';
 import { ArrowLeft, TrendingDown, AlertCircle, CheckCircle2, Layers, RefreshCw, Info } from 'lucide-react';
 import { apiFetch } from '../config/api';
-import { fetchRedemptions, syncRedemptions, latestRedemptionStatus, redemptionStatusMeta } from '../utils/redeemOrder';
+import { fetchRedemptions, syncRedemptions, latestRedemptionStatus, redemptionStatusMeta, submitRedemption } from '../utils/redeemOrder';
 
 /**
  * Distributor-facing redemption screen (REQ #9).
@@ -164,42 +164,22 @@ export default function InvestorRedeem({ userData: _userData }: { userData?: any
       return;
     }
     const schemeName = holding.schemeName || 'this holding';
-    const unitsLabel = formatUnits(holding.availableUnits);
-    if (!window.confirm(
-      `Redeem the full available holding in "${schemeName}"${unitsLabel ? ` (${unitsLabel} units)` : ''}? This sells the units back to the AMC.`,
-    )) {
-      return;
-    }
     setRedeemingId(holding.orderId);
     setActionError('');
     setActionMessage('');
-    try {
-      const response = await apiFetch(`/orders/${holding.orderId}/redemption`, { method: 'POST' });
-      if (!response.ok) {
-        const body = await response.json().catch(() => null);
-        if (response.status === 502 || response.status === 503) {
-          throw new Error('Platizio is temporarily unavailable. Your request was not submitted — please try again in a few minutes.');
-        }
-        const message = body?.message || `Redemption failed (HTTP ${response.status}).`;
-        if (/mf investment account|investor profile|occupation/i.test(message)) {
-          throw new Error(
-            `${message} Redemption uses the same investor FP profile setup as purchases — restart the backend if you recently deployed a fix, then retry.`,
-          );
-        }
-        if (/fintech primitives purchase id|externalorderid/i.test(message)) {
-          throw new Error(
-            'This holding was not purchased through live Platizio POA (demo-only order). Place a real purchase first, then redeem that order.',
-          );
-        }
-        throw new Error(message);
-      }
-      setHoldings(prev => prev.map(h => (h.orderId === holding.orderId ? { ...h, alreadyRedeemed: true, redemptionStatus: 'SUBMITTED' } : h)));
-      setActionMessage(`Redemption submitted for "${schemeName}". Use Sync to track its status.`);
-    } catch (err) {
-      setActionError(err instanceof Error ? err.message : 'Redemption failed. Please try again.');
-    } finally {
-      setRedeemingId('');
+    // Distributor redemption now requires investor 2FA: this creates the redemption
+    // draft and requests the investor's OTP approval — no units are sold until the
+    // investor authorizes it with a one-time passcode in their portal.
+    const result = await submitRedemption(holding.orderId);
+    if (result.ok) {
+      setHoldings(prev => prev.map(h => (h.orderId === holding.orderId
+        ? { ...h, alreadyRedeemed: true, redemptionStatus: 'PENDING_INVESTOR_ACTION' }
+        : h)));
+      setActionMessage(`${result.message} — ${schemeName}.`);
+    } else {
+      setActionError(result.message);
     }
+    setRedeemingId('');
   };
 
   const syncStatus = async (holding: Holding) => {
@@ -251,7 +231,7 @@ export default function InvestorRedeem({ userData: _userData }: { userData?: any
       <div className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
         <AlertCircle className="w-4 h-4 mt-0.5 flex-shrink-0" />
         <span>
-          Redemption here is a <strong>full</strong> redemption of the available units in the selected holding. SIPs are paused or cancelled from the
+          Redemption here is a <strong>full</strong> redemption of the available units in the selected holding. It requires the investor to authorize it with a one-time passcode in their portal (2FA). SIPs are paused or cancelled from the
           {' '}<button onClick={() => navigate('/distributor/sip-dashboard')} className="underline font-semibold">SIP Dashboard</button>.
         </span>
       </div>
@@ -306,7 +286,7 @@ export default function InvestorRedeem({ userData: _userData }: { userData?: any
                   <th className="px-6 py-4">Scheme</th>
                   <th className="px-6 py-4">Folio number</th>
                   <th className="px-6 py-4 text-right">Available units</th>
-                  <th className="px-6 py-4 text-right">Current value</th>
+                  <th className="px-6 py-4 text-right">Available amount</th>
                   <th className="px-6 py-4">NAV as of</th>
                   <th className="px-6 py-4 text-right">Action</th>
                 </tr>

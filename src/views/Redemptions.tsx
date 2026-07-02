@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { motion } from 'motion/react';
 import { TrendingDown, AlertCircle, CheckCircle2, Layers, RefreshCw, Search } from 'lucide-react';
 import { apiFetch } from '../config/api';
-import { fetchRedemptions, syncRedemptions, latestRedemptionStatus, redemptionStatusMeta } from '../utils/redeemOrder';
+import { fetchRedemptions, syncRedemptions, latestRedemptionStatus, redemptionStatusMeta, submitRedemption } from '../utils/redeemOrder';
 
 // Order statuses that represent a settled holding the investor actually owns and
 // can therefore redeem (sell). Draft / failed / pending orders are not redeemable.
@@ -140,51 +140,21 @@ export default function Redemptions({ userData }: { userData?: any }) {
 
   const redeem = async (holding: RedeemableHolding) => {
     if (holding.alreadyRedeemed || redeemingId) return;
-    if (
-      !window.confirm(
-        `Redeem the full holding in "${holding.fund}" for ${holding.investorName} (${formatCurrency(
-          holding.amount,
-        )})? This sells the units back to the AMC.`,
-      )
-    ) {
-      return;
-    }
     setRedeemingId(holding.id);
     setActionError('');
     setActionMessage('');
-    try {
-      const response = await apiFetch(`/orders/${holding.id}/redemption`, { method: 'POST' });
-      if (!response.ok) {
-        const body = await response.json().catch(() => null);
-        if (response.status === 502 || response.status === 503) {
-          throw new Error(
-            'Cybrilla is temporarily unavailable. Your request was not submitted — please try again in a few minutes.',
-          );
-        }
-        const message = body?.message || `Redemption failed (HTTP ${response.status}).`;
-        if (/mf investment account|investor profile|occupation/i.test(message)) {
-          throw new Error(
-            `${message} Redemption uses the same investor FP profile setup as purchases — restart the backend if you recently deployed a fix, then retry.`,
-          );
-        }
-        if (/fintech primitives purchase id|externalorderid|demo-only/i.test(message)) {
-          throw new Error(
-            'This holding was not purchased through live Cybrilla POA (demo-only order). Place a real purchase first, then redeem that order.',
-          );
-        }
-        throw new Error(message);
-      }
+    // Distributor redemption requires investor 2FA: create the draft + request the
+    // investor's OTP approval (no units are sold until they authorize it in their portal).
+    const result = await submitRedemption(holding.id);
+    if (result.ok) {
       setHoldings(prev =>
-        prev.map(h => (h.id === holding.id ? { ...h, alreadyRedeemed: true, redemptionStatus: 'SUBMITTED' } : h)),
+        prev.map(h => (h.id === holding.id ? { ...h, alreadyRedeemed: true, redemptionStatus: 'PENDING_INVESTOR_ACTION' } : h)),
       );
-      setActionMessage(
-        `Redemption submitted for "${holding.fund}" (${holding.investorName}). Use Sync to track its status.`,
-      );
-    } catch (err) {
-      setActionError(err instanceof Error ? err.message : 'Redemption failed. Please try again.');
-    } finally {
-      setRedeemingId('');
+      setActionMessage(`${result.message} — "${holding.fund}" (${holding.investorName}).`);
+    } else {
+      setActionError(result.message);
     }
+    setRedeemingId('');
   };
 
   const syncStatus = async (holding: RedeemableHolding) => {
@@ -247,7 +217,7 @@ export default function Redemptions({ userData }: { userData?: any }) {
       <div className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
         <AlertCircle className="w-4 h-4 mt-0.5 flex-shrink-0" />
         <span>
-          Redemption here is a <strong>full</strong> redemption of the selected holding. SIPs are
+          Redemption here is a <strong>full</strong> redemption of the selected holding and requires the investor to authorize it with a one-time passcode (2FA) in their portal. Live available units/amount per holding are shown on each investor&rsquo;s Redeem page (click the investor name). SIPs are
           paused or cancelled from the{' '}
           <button
             onClick={() => navigate('/distributor/sip-dashboard')}

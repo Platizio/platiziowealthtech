@@ -103,6 +103,10 @@ const sipSchema = z.object({
   amount: z.number().min(500, 'Minimum SIP is ₹500'),
   frequency: z.enum(['MONTHLY', 'QUARTERLY'], { message: 'Select a SIP frequency' }),
   startDate: z.string().refine(d => new Date(d) > new Date(), 'Start date must be in the future'),
+  installmentDay: z.number({ message: 'Select a SIP date (1–28)' })
+    .int()
+    .min(1, 'SIP date must be between 1 and 28')
+    .max(28, 'SIP date must be between 1 and 28'),
   instalments: z.number().int().positive().optional(),
 });
 
@@ -269,6 +273,12 @@ export default function InvestorTransaction({ investor, onComplete, onBack }: Pr
   const frequency = watch('frequency'); // DF-09: no MONTHLY fallback
   const startDate = watch('startDate') || '';
   const instalments = watch('instalments');
+  const installmentDay = watch('installmentDay');
+
+  // Distributor-initiated 2FA: ask the investor to approve this order with an OTP (Phase-2).
+  const [approvalReq, setApprovalReq] = useState<{ challengeId?: string; maskedDestination?: string; status?: string } | null>(null);
+  const [requestingApproval, setRequestingApproval] = useState(false);
+  const [approvalReqError, setApprovalReqError] = useState('');
   const minAmount = product ? (txType === 'sip' ? product.minSip : product.minLumpsum) : 0;
   const amountValid = amountNum >= minAmount;
   const investorName = investor.fullName || investor.name || 'Investor';
@@ -425,6 +435,7 @@ export default function InvestorTransaction({ investor, onComplete, onBack }: Pr
         sipFrequency: isSip ? frequency : undefined,
         sipStartDate: isSip ? startDate : undefined,
         sipInstalments: isSip && instalments ? instalments : undefined,
+        installmentDay: isSip ? installmentDay : undefined,
       };
 
       const response = await apiFetch('/orders', {
@@ -486,6 +497,24 @@ export default function InvestorTransaction({ investor, onComplete, onBack }: Pr
     }
     if (!amountValid) return;
     setStep(3);
+  };
+
+  // Distributor asks the investor to authorize this order with a 2FA OTP. The
+  // distributor never sees the code — the investor enters it in their portal.
+  const requestInvestorApproval = async () => {
+    if (!createdOrder?.id) return;
+    setRequestingApproval(true);
+    setApprovalReqError('');
+    try {
+      const res = await apiFetch(`/orders/${createdOrder.id}/request-investor-approval`, { method: 'POST' });
+      const data: any = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(data?.message || 'Could not request investor approval.');
+      setApprovalReq({ challengeId: data?.challengeId, maskedDestination: data?.maskedDestination, status: data?.status });
+    } catch (e) {
+      setApprovalReqError(e instanceof Error ? e.message : 'Could not request investor approval.');
+    } finally {
+      setRequestingApproval(false);
+    }
   };
 
   // ── Success screen ─────────────────────────────────────────────────────────
@@ -554,6 +583,7 @@ export default function InvestorTransaction({ investor, onComplete, onBack }: Pr
               <Row label="Net invested" value={`₹${createdOrder.netInvested.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`} />
             )}
             {txType === 'sip' && <Row label="Start Date" value={formatDate(startDate)} />}
+            {txType === 'sip' && installmentDay && <Row label="SIP date" value={`Day ${installmentDay} of each ${frequency === 'QUARTERLY' ? 'quarter' : 'month'}`} />}
             {txType === 'sip' && instalments && <Row label="Instalments" value={String(instalments)} />}
             <Row label="Bank"           value={bankLabel(bank)}  />
             <Row label="Status"         value={formatOrderStatusLabel(createdOrder?.orderStatus)}
@@ -572,6 +602,32 @@ export default function InvestorTransaction({ investor, onComplete, onBack }: Pr
               investorActionUrl={createdOrder?.investorActionUrl}
             />
           </div>
+
+          {!orderFailed && (
+            <div className="mb-8 text-left rounded-2xl border border-slate-200 p-4">
+              <p className="text-sm font-semibold text-slate-800">Investor 2FA approval</p>
+              <p className="mt-1 text-xs text-slate-500">
+                Ask the investor to authorize this order with a one-time passcode in their portal.
+                For security, the passcode is never shown to the distributor.
+              </p>
+              {approvalReq ? (
+                <p className="mt-2 text-xs font-medium text-emerald-700">
+                  Approval requested — the investor can now enter the code sent to{' '}
+                  {approvalReq.maskedDestination || 'their registered contact'} (status: {approvalReq.status || 'PENDING'}).
+                </p>
+              ) : (
+                <button
+                  type="button"
+                  onClick={requestInvestorApproval}
+                  disabled={requestingApproval}
+                  className="mt-3 rounded-xl bg-[#0B1B3E] px-4 py-2 text-xs font-semibold text-white hover:bg-[#1A3066] disabled:opacity-50"
+                >
+                  {requestingApproval ? 'Requesting…' : 'Request investor approval (2FA)'}
+                </button>
+              )}
+              {approvalReqError && <p className="mt-2 text-xs text-red-600">{approvalReqError}</p>}
+            </div>
+          )}
 
           <div className="grid grid-cols-3 gap-3 text-center text-xs mb-8">
             {[
@@ -809,7 +865,7 @@ export default function InvestorTransaction({ investor, onComplete, onBack }: Pr
             </div>
 
             {txType === 'sip' && (
-              <div className="mb-6 grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="mb-6 grid grid-cols-1 md:grid-cols-4 gap-4">
                 <div>
                   <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5">Frequency</label>
                   <select
@@ -831,6 +887,18 @@ export default function InvestorTransaction({ investor, onComplete, onBack }: Pr
                     className={`w-full px-3.5 py-3 text-sm bg-slate-50 border rounded-xl outline-none focus:ring-2 focus:ring-blue-100 focus:border-blue-500 ${errors.startDate ? 'border-red-300 bg-red-50' : 'border-slate-200'}`}
                   />
                   {errors.startDate && <p className="text-xs text-red-500 mt-1">{errors.startDate.message}</p>}
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5">SIP date (day)</label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={28}
+                    placeholder="1–28"
+                    {...register('installmentDay', { setValueAs: parseOptionalPositiveInt })}
+                    className={`w-full px-3.5 py-3 text-sm bg-slate-50 border rounded-xl outline-none focus:ring-2 focus:ring-blue-100 focus:border-blue-500 ${errors.installmentDay ? 'border-red-300 bg-red-50' : 'border-slate-200'}`}
+                  />
+                  {errors.installmentDay && <p className="text-xs text-red-500 mt-1">{errors.installmentDay.message}</p>}
                 </div>
                 <div>
                   <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5">Instalments</label>

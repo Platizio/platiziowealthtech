@@ -63,13 +63,32 @@ export default function InvestorLoginPage() {
       });
       const data = await res.json().catch(() => null);
       if (!res.ok) {
-        throw new Error(data?.message || 'Invalid email or PAN. Please check and try again.');
+        // Don't blame the email/PAN for a transport failure: a 5xx/CORS/proxy error means
+        // the backend is unreachable (down or wrong port), 429 is a rate-limit. Only a 401
+        // is a genuine credential rejection.
+        if (res.status === 429) {
+          throw new Error(data?.message || 'Too many attempts. Please wait ~60 seconds and try again.');
+        }
+        if (res.status >= 500) {
+          throw new Error(`Can't reach the backend (HTTP ${res.status}). The API server may be down or on a different port than the app proxies to — start it and retry.`);
+        }
+        if (res.status === 401) {
+          throw new Error(data?.message || 'Invalid email or PAN. Please check and try again.');
+        }
+        throw new Error(data?.message || `Sign-in failed (HTTP ${res.status}).`);
       }
       const user = normalizeInvestorUser(data);
       if (user) dispatch(setInvestorUser(user));
       navigate(safeInvestorReturnTo(searchParams.get('returnTo')), { replace: true });
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Invalid email or PAN. Please check and try again.');
+      // fetch() rejects with a TypeError when the request itself fails (backend/proxy
+      // unreachable) — report that truthfully instead of blaming the email/PAN.
+      const isNetworkError = e instanceof TypeError;
+      setError(
+        isNetworkError
+          ? "Can't reach the server. Make sure the backend is running and the app points at the right port, then try again."
+          : e instanceof Error ? e.message : 'Invalid email or PAN. Please check and try again.',
+      );
     } finally {
       setLoading(false);
     }

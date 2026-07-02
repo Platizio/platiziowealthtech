@@ -270,6 +270,10 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
   // ── Step 3 — KYC ────────────────────────────────────────────────────────────
   const [kycPhase, setKycPhase] = useState<'idle' | 'checking' | 'accepted' | 'verified' | 'failed' | 'retry' | 'pending'>('idle');
   const [draftInvestor, setDraftInvestor] = useState<any | null>(null);
+  // Tier-2 email/mobile verification status, tracked parent-side so Step 1 can gate on it.
+  const [contactVerified, setContactVerified] = useState<{ email: boolean; mobile: boolean }>({ email: false, mobile: false });
+  const [savingDraftForVerify, setSavingDraftForVerify] = useState(false);
+  const [draftForVerifyError, setDraftForVerifyError] = useState('');
   const [draftIdentityFingerprint, setDraftIdentityFingerprint] = useState('');
   const [lastKycIdentityFingerprint, setLastKycIdentityFingerprint] = useState('');
   const [kycPreVerification, setKycPreVerification] = useState<any | null>(null);
@@ -868,19 +872,57 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
     key => Boolean(savedDocuments[key]?.id) || Boolean(docs[key]),
   );
 
+  // Keep the parent-side contact-verified flags in sync with the loaded/draft investor's
+  // persisted Tier-2 status, so a resumed/already-verified investor isn't asked to re-verify.
+  useEffect(() => {
+    const inv = draftInvestor || resumeInvestor;
+    if (!inv) return;
+    setContactVerified(prev => ({
+      email: prev.email || Boolean(inv.emailVerified),
+      mobile: prev.mobile || Boolean(inv.mobileVerified),
+    }));
+  }, [draftInvestor, resumeInvestor]);
+
+  const step1IdentityValid = Object.keys(validateInvestorIdentityForKyc({
+    firstName: s1.firstName,
+    lastName: s1.lastName,
+    pan: s1.pan,
+    dob: s1.dob,
+    mobile: s1.mobile,
+    email: s1.email,
+    relationshipType: s1.relationshipType,
+    guardianPan: s1.guardianPan,
+  })).length === 0 && !!s1.relationshipType;
+
+  const investorDraftExists = Boolean(draftInvestor?.id || resumeInvestor?.id || resumeInvestorId);
+
+  // SEBI: nominees are optional, but if any are present they must be ≤3 and total exactly 100%.
+  const nomineesValid = nominees.length === 0
+    || (nominees.length <= 3
+        && nomineeShareTotal === 100
+        && nominees.every(n => n.fullName.trim() !== '' && !!n.relationship && Number(n.sharePercent) > 0));
+
+  // Creates/updates the investor draft so the contact-verification widgets get a real
+  // investorId on a fresh onboarding (backend create only needs name/mobile/email/pan).
+  const saveDraftForVerification = async () => {
+    setDraftForVerifyError('');
+    setSavingDraftForVerify(true);
+    try {
+      await ensureInvestorDraftForKyc();
+    } catch (e) {
+      setDraftForVerifyError(e instanceof Error ? e.message : 'Could not save the investor to enable verification.');
+    } finally {
+      setSavingDraftForVerify(false);
+    }
+  };
+
   // ── Can proceed guard ─────────────────────────────────────────────────────────
   const canNext: boolean = (() => {
     switch (step) {
-      case 1: return Object.keys(validateInvestorIdentityForKyc({
-        firstName: s1.firstName,
-        lastName: s1.lastName,
-        pan: s1.pan,
-        dob: s1.dob,
-        mobile: s1.mobile,
-        email: s1.email,
-        relationshipType: s1.relationshipType,
-        guardianPan: s1.guardianPan,
-      })).length === 0 && !!s1.relationshipType; // DF-09: relationship must be chosen
+      case 1:
+        // DF-09: relationship required. Now also require Tier-2 email + mobile verification
+        // (OTP or self-declaration) before leaving Step 1.
+        return step1IdentityValid && contactVerified.email && contactVerified.mobile;
       case 2: return consentAcknowledged;
       case 3: return !!(
         s4.gender
@@ -891,7 +933,7 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
         && s4.city.trim()
         && s4.state.trim()
         && /^\d{6}$/.test(s4.postalCode.trim())
-      );
+      ) && nomineesValid;           // SEBI: nominees must total exactly 100% (or none)
       case 4:
         return canProceedFromKycStep({
           isExistingKycVerified,
@@ -2773,6 +2815,7 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
                     verified={draftInvestor?.mobileVerified ?? resumeInvestor?.mobileVerified}
                     method={draftInvestor?.mobileVerificationMethod ?? resumeInvestor?.mobileVerificationMethod}
                     belongsTo={draftInvestor?.mobileBelongsTo ?? resumeInvestor?.mobileBelongsTo}
+                    onVerified={() => setContactVerified(prev => ({ ...prev, mobile: true }))}
                   />
                 </Field>
                 <Field label="Email Address" required error={serverErrors.email}>
@@ -2784,9 +2827,29 @@ export default function InvestorOnboarding({ prospect, userData, resumeInvestor,
                     verified={draftInvestor?.emailVerified ?? resumeInvestor?.emailVerified}
                     method={draftInvestor?.emailVerificationMethod ?? resumeInvestor?.emailVerificationMethod}
                     belongsTo={draftInvestor?.emailBelongsTo ?? resumeInvestor?.emailBelongsTo}
+                    onVerified={() => setContactVerified(prev => ({ ...prev, email: true }))}
                   />
                 </Field>
               </div>
+              {!investorDraftExists && (
+                <div className="mt-4 rounded-lg border border-blue-100 bg-blue-50/60 p-3">
+                  <p className="text-xs text-blue-900">
+                    Save the investor to enable email &amp; mobile verification (OTP or self-declaration).
+                  </p>
+                  <button
+                    type="button"
+                    disabled={!step1IdentityValid || savingDraftForVerify}
+                    onClick={saveDraftForVerification}
+                    className="mt-2 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
+                  >
+                    {savingDraftForVerify ? 'Saving…' : 'Save & enable verification'}
+                  </button>
+                  {!step1IdentityValid && (
+                    <p className="mt-1 text-[11px] text-blue-700">Complete the identity fields above first.</p>
+                  )}
+                  {draftForVerifyError && <p className="mt-1 text-[11px] text-red-600">{draftForVerifyError}</p>}
+                </div>
+              )}
             </div>
           )}
 

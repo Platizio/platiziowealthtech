@@ -4,6 +4,7 @@ import {
   Search, Loader2, AlertCircle, TrendingUp, X, CheckCircle2, ArrowRight, Wallet, ShieldAlert,
 } from 'lucide-react';
 import { apiFetch, BACKEND_ORIGIN } from '../config/api';
+import TransactionApprovalPanel, { type ApprovalChallenge } from '../components/TransactionApprovalPanel';
 
 /**
  * Investor "Invest / Buy funds" page. Browses the live POA catalogue
@@ -42,12 +43,15 @@ export default function InvestorInvest() {
   const [placing, setPlacing] = useState(false);
   const [orderError, setOrderError] = useState('');
   const [order, setOrder] = useState<OrderResult | null>(null);
+  // Transaction 2FA: the order auto-creates an approval challenge; we surface it inline.
+  const [challenge, setChallenge] = useState<ApprovalChallenge | null>(null);
 
   // LUMPSUM vs SIP. SIP fields start EMPTY (no defaulted compliance values).
   const [mode, setMode] = useState<'LUMPSUM' | 'SIP'>('LUMPSUM');
-  const [sipFrequency, setSipFrequency] = useState('');     // '' | MONTHLY | WEEKLY
+  const [sipFrequency, setSipFrequency] = useState('');     // '' | MONTHLY | QUARTERLY
   const [sipStartDate, setSipStartDate] = useState('');
   const [sipInstalments, setSipInstalments] = useState('');
+  const [sipInstallmentDay, setSipInstallmentDay] = useState(''); // 1–28 day-of-month
 
   // Bank setup (investor self-service → order-ready)
   const [showBank, setShowBank] = useState(false);
@@ -107,10 +111,12 @@ export default function InvestorInvest() {
     setAmount('5000');
     setOrderError('');
     setOrder(null);
+    setChallenge(null);
     setMode('LUMPSUM');
     setSipFrequency('');
     setSipStartDate('');
     setSipInstalments('');
+    setSipInstallmentDay('');
   };
 
   const placeOrder = async () => {
@@ -124,6 +130,8 @@ export default function InvestorInvest() {
     if (mode === 'SIP') {
       if (!sipFrequency) { setOrderError('Select a SIP frequency.'); return; }
       if (!sipStartDate) { setOrderError('Pick a SIP start date.'); return; }
+      const day = Number(sipInstallmentDay);
+      if (!Number.isInteger(day) || day < 1 || day > 28) { setOrderError('Pick a SIP date (day of month, 1–28).'); return; }
       const inst = Number(sipInstalments);
       if (!Number.isInteger(inst) || inst < 1) { setOrderError('Enter the number of SIP instalments.'); return; }
       payload = {
@@ -134,6 +142,7 @@ export default function InvestorInvest() {
         sipFrequency,
         sipStartDate,
         sipInstalments: inst,
+        installmentDay: day,
       };
     } else {
       payload = { productSchemeId: selected.id, transactionType: 'LUMPSUM_PURCHASE', amount: amt, paymentMode: 'UPI' };
@@ -150,11 +159,42 @@ export default function InvestorInvest() {
       });
       const body = await res.json().catch(() => null);
       if (!res.ok) throw new Error((body as { message?: string } | null)?.message || 'Could not place the order.');
-      setOrder(body as OrderResult);
+      const placed = body as OrderResult;
+      setOrder(placed);
+      // The order auto-creates a 2FA challenge; surface it inline for OTP + consent.
+      void loadChallengeForOrder(placed?.id);
     } catch (e) {
       setOrderError(e instanceof Error ? e.message : 'Could not place the order.');
     } finally {
       setPlacing(false);
+    }
+  };
+
+  // Find the transaction-2FA challenge the backend auto-created for this order so the
+  // investor can approve (OTP + consent) inline instead of hopping to the Approval Center.
+  const loadChallengeForOrder = async (orderId?: string) => {
+    if (!orderId) return;
+    try {
+      const res = await apiFetch('/investor/approvals');
+      const data: any = await res.json().catch(() => null);
+      const list: any[] = Array.isArray(data) ? data : Array.isArray(data?.content) ? data.content : [];
+      const isLive = (c: any) =>
+        !['CONSUMED', 'SUBMITTED', 'EXPIRED', 'REJECTED', 'SUPERSEDED'].includes(String(c?.status).toUpperCase());
+      const match = list.find(c => c?.transactionId === orderId && isLive(c))
+        || list.find(c => c?.transactionId === orderId);
+      if (match) {
+        setChallenge({
+          id: match.challengeId || match.id,
+          transactionId: match.transactionId,
+          transactionType: match.transactionType,
+          status: match.status,
+          channel: match.channel,
+          maskedDestination: match.maskedDestination,
+          expiresAt: match.expiresAt,
+        });
+      }
+    } catch {
+      // Non-fatal: the success modal still offers the Approval Center link.
     }
   };
 
@@ -235,6 +275,20 @@ export default function InvestorInvest() {
             </div>
 
             {order ? (
+              challenge ? (
+                <div className="mt-5">
+                  <p className="mb-3 text-center text-sm font-semibold text-slate-800">Approve your order — {fmtMoney(order.amount)}</p>
+                  <TransactionApprovalPanel
+                    challenge={challenge}
+                    onBack={() => setChallenge(null)}
+                    onChallengeUpdated={(c) => setChallenge(c)}
+                  />
+                  <button onClick={() => { setSelected(null); navigate('/investor/dashboard'); }}
+                    className="mt-3 w-full rounded-xl border border-slate-200 py-2.5 text-sm font-semibold text-slate-600 hover:bg-slate-50">
+                    Back to dashboard
+                  </button>
+                </div>
+              ) : (
               <div className="mt-5 text-center">
                 <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-emerald-100"><CheckCircle2 className="h-7 w-7 text-emerald-600" /></div>
                 <p className="text-sm font-semibold text-slate-800">Order placed — {fmtMoney(order.amount)}</p>
@@ -256,6 +310,7 @@ export default function InvestorInvest() {
                   Back to dashboard
                 </button>
               </div>
+              )
             ) : (
               <>
                 {/* LUMPSUM vs SIP toggle */}
@@ -294,7 +349,7 @@ export default function InvestorInvest() {
                         className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-3 text-sm focus:ring-2 focus:ring-blue-100 focus:border-blue-500 outline-none">
                         <option value="" disabled>Select frequency</option>
                         <option value="MONTHLY">Monthly</option>
-                        <option value="WEEKLY">Weekly</option>
+                        <option value="QUARTERLY">Quarterly</option>
                       </select>
                     </div>
                     <div>
@@ -302,6 +357,14 @@ export default function InvestorInvest() {
                       <input type="date" value={sipStartDate}
                         onChange={e => { setSipStartDate(e.target.value); setOrderError(''); }}
                         className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-3 text-sm focus:ring-2 focus:ring-blue-100 focus:border-blue-500 outline-none" />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5">SIP date (day of month)</label>
+                      <input type="number" min={1} max={28} value={sipInstallmentDay}
+                        onChange={e => { setSipInstallmentDay(e.target.value); setOrderError(''); }}
+                        placeholder="1–28"
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-3 text-sm focus:ring-2 focus:ring-blue-100 focus:border-blue-500 outline-none" />
+                      <p className="mt-1 text-[11px] text-slate-400">Your SIP will debit on this day each month.</p>
                     </div>
                     <div>
                       <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5">Number of instalments</label>

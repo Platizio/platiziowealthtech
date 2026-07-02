@@ -163,10 +163,15 @@ export default function InvestorWithdrawal() {
     if (selected.orderId) base.orderId = selected.orderId;
     if (selected.folio || selected.folioNumber) base.folio = selected.folio || selected.folioNumber;
     if (form.fullRedemption) {
-      base.mode = 'FULL';
+      // Backend WithdrawalRequest.mode is @NotNull {AMOUNT, UNITS} and is IGNORED when
+      // fullRedemption=true (see OrderService.createRedemptionDraft). Full redemption is
+      // signalled by the boolean flag — sending mode:'FULL' fails enum deserialization (400).
+      base.mode = 'UNITS';
+      base.fullRedemption = true;
     } else {
       base.mode = form.mode === 'amount' ? 'AMOUNT' : 'UNITS';
       base.value = Number(form.value);
+      base.fullRedemption = false;
     }
     return base;
   };
@@ -355,7 +360,7 @@ export default function InvestorWithdrawal() {
                     <Disclosure label="Blocked units" value={formatUnits(h.blockedUnits)} quality={quality} />
                     <Disclosure label="Latest NAV" value={formatCurrency(h.latestNav)} quality={quality} />
                     <Disclosure label="NAV as of" value={formatDate(h.navAsOf)} quality={quality} />
-                    <Disclosure label="Current value" value={formatCurrency(h.currentValue)} quality={quality} />
+                    <Disclosure label="Available amount" value={formatCurrency(h.currentValue)} quality={quality} />
                     <Disclosure label="Payout bank" value={h.payoutBankMasked || null} quality={quality} />
                   </div>
                 </div>
