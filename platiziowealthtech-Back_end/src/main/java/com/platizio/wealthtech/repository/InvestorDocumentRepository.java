@@ -11,4 +11,9 @@ public interface InvestorDocumentRepository extends JpaRepository<InvestorDocume
     Optional<InvestorDocument> findByInvestorIdAndDocumentType(UUID investorId, String documentType);
 
     List<InvestorDocument> findAllByInvestorIdOrderByDocumentTypeAsc(UUID investorId);
+
+    Optional<InvestorDocument> findByInvestorIdAndNomineeIdAndDocumentType(
+            UUID investorId, UUID nomineeId, String documentType);
+
+    List<InvestorDocument> findAllByInvestorIdAndDocumentType(UUID investorId, String documentType);
 }

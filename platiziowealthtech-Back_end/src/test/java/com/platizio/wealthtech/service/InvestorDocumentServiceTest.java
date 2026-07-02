@@ -14,6 +14,7 @@ import com.platizio.wealthtech.domain.Investor;
 import com.platizio.wealthtech.domain.InvestorDocument;
 import com.platizio.wealthtech.dto.InvestorDocumentUploadResponse;
 import com.platizio.wealthtech.repository.InvestorDocumentRepository;
+import com.platizio.wealthtech.repository.InvestorNomineeRepository;
 import com.platizio.wealthtech.repository.InvestorRepository;
 import java.util.HashMap;
 import java.util.List;
@@ -35,6 +36,7 @@ class InvestorDocumentServiceTest {
         Investor investor = investor(investorId, distributorId);
         InvestorRepository investorRepository = mock(InvestorRepository.class);
         InvestorDocumentRepository documentRepository = mock(InvestorDocumentRepository.class);
+        InvestorNomineeRepository nomineeRepository = mock(InvestorNomineeRepository.class);
         RecordingDistributorService distributorService = new RecordingDistributorService();
         RecordingAuditService auditService = new RecordingAuditService();
         distributorService.put(distributorId, DistributorRole.SUB_DISTRIBUTOR);
@@ -49,6 +51,7 @@ class InvestorDocumentServiceTest {
         InvestorDocumentService service = new InvestorDocumentService(
                 investorRepository,
                 documentRepository,
+                nomineeRepository,
                 distributorService,
                 auditService
         );
@@ -87,6 +90,7 @@ class InvestorDocumentServiceTest {
         UUID actorId = UUID.randomUUID();
         InvestorRepository investorRepository = mock(InvestorRepository.class);
         InvestorDocumentRepository documentRepository = mock(InvestorDocumentRepository.class);
+        InvestorNomineeRepository nomineeRepository = mock(InvestorNomineeRepository.class);
         RecordingDistributorService distributorService = new RecordingDistributorService();
         RecordingAuditService auditService = new RecordingAuditService();
         distributorService.put(actorId, DistributorRole.SUB_DISTRIBUTOR);
@@ -95,6 +99,7 @@ class InvestorDocumentServiceTest {
         InvestorDocumentService service = new InvestorDocumentService(
                 investorRepository,
                 documentRepository,
+                nomineeRepository,
                 distributorService,
                 auditService
         );
@@ -114,6 +119,7 @@ class InvestorDocumentServiceTest {
         Investor investor = investor(investorId, distributorId);
         InvestorRepository investorRepository = mock(InvestorRepository.class);
         InvestorDocumentRepository documentRepository = mock(InvestorDocumentRepository.class);
+        InvestorNomineeRepository nomineeRepository = mock(InvestorNomineeRepository.class);
         RecordingDistributorService distributorService = new RecordingDistributorService();
         RecordingAuditService auditService = new RecordingAuditService();
         distributorService.put(distributorId, DistributorRole.SUB_DISTRIBUTOR);
@@ -134,6 +140,7 @@ class InvestorDocumentServiceTest {
         InvestorDocumentService service = new InvestorDocumentService(
                 investorRepository,
                 documentRepository,
+                nomineeRepository,
                 distributorService,
                 auditService
         );
@@ -151,6 +158,7 @@ class InvestorDocumentServiceTest {
         UUID distributorId = UUID.randomUUID();
         InvestorRepository investorRepository = mock(InvestorRepository.class);
         InvestorDocumentRepository documentRepository = mock(InvestorDocumentRepository.class);
+        InvestorNomineeRepository nomineeRepository = mock(InvestorNomineeRepository.class);
         RecordingDistributorService distributorService = new RecordingDistributorService();
         RecordingAuditService auditService = new RecordingAuditService();
         distributorService.put(distributorId, DistributorRole.SUB_DISTRIBUTOR);
@@ -159,6 +167,7 @@ class InvestorDocumentServiceTest {
         InvestorDocumentService service = new InvestorDocumentService(
                 investorRepository,
                 documentRepository,
+                nomineeRepository,
                 distributorService,
                 auditService
         );
