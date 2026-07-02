@@ -37,6 +37,7 @@ class InvestorAuthServiceTest {
     @Mock private InvestorAccountRepository accountRepository;
     @Mock private InvestorRepository investorRepository;
     @Mock private OtpService otpService;
+    @Mock private SmsOtpService smsOtpService;
     @Mock private JwtService jwtService;
     @Mock private TermsAcceptanceService termsAcceptanceService;
     @Mock private ConsentRecordService consentRecordService;
@@ -46,8 +47,8 @@ class InvestorAuthServiceTest {
 
     @BeforeEach
     void setUp() {
-        service = new InvestorAuthService(accountRepository, investorRepository, otpService, jwtService,
-                termsAcceptanceService, consentRecordService, distributorRepository);
+        service = new InvestorAuthService(accountRepository, investorRepository, otpService, smsOtpService,
+                jwtService, termsAcceptanceService, consentRecordService, distributorRepository);
         lenient().when(accountRepository.save(any(InvestorAccount.class))).thenAnswer(inv -> inv.getArgument(0));
         lenient().when(jwtService.generateInvestorToken(any(), anyString())).thenReturn("investor.jwt.token");
     }
@@ -70,11 +71,22 @@ class InvestorAuthServiceTest {
     }
 
     @Test
-    void loginOtpEligibleOnlyForActiveAccount() {
+    void loginOtpEligibleForAnyNonBlockedAccount() {
         InvestorAccount active = new InvestorAccount();
         active.setStatus(InvestorAccountStatus.ACTIVE);
         when(accountRepository.findByEmailIgnoreCase("a@example.com")).thenReturn(Optional.of(active));
         assertThat(service.isOtpEligible("a@example.com", OtpPurpose.INVESTOR_LOGIN)).isTrue();
+
+        // PENDING_ACTIVATION is eligible: the OTP itself proves the inbox and activates.
+        InvestorAccount pending = new InvestorAccount();
+        pending.setStatus(InvestorAccountStatus.PENDING_ACTIVATION);
+        when(accountRepository.findByEmailIgnoreCase("p@example.com")).thenReturn(Optional.of(pending));
+        assertThat(service.isOtpEligible("p@example.com", OtpPurpose.INVESTOR_LOGIN)).isTrue();
+
+        InvestorAccount blocked = new InvestorAccount();
+        blocked.setStatus(InvestorAccountStatus.BLOCKED);
+        when(accountRepository.findByEmailIgnoreCase("b@example.com")).thenReturn(Optional.of(blocked));
+        assertThat(service.isOtpEligible("b@example.com", OtpPurpose.INVESTOR_LOGIN)).isFalse();
 
         when(accountRepository.findByEmailIgnoreCase("none@example.com")).thenReturn(Optional.empty());
         assertThat(service.isOtpEligible("none@example.com", OtpPurpose.INVESTOR_LOGIN)).isFalse();
@@ -176,32 +188,61 @@ class InvestorAuthServiceTest {
     }
 
     @Test
-    void passwordLoginCreatesActiveAccountFromDistributorCreatedInvestor() {
+    void otpLoginActivatesPendingAccountAndLinksDistributorInvestor() {
         UUID investorId = UUID.randomUUID();
         Investor invited = new Investor();
         ReflectionTestUtils.setField(invited, "id", investorId);
-        invited.setFullName("Asha Rao");
         invited.setEmail("asha@example.com");
         invited.setPan("ABCDE1234F");
-        invited.setMobileNumber("9876543210");
-        invited.setEmailVerified(Boolean.FALSE);
-        invited.setMobileVerified(Boolean.FALSE);
 
-        when(accountRepository.findByEmailIgnoreCase("asha@example.com")).thenReturn(Optional.empty());
-        when(accountRepository.findByPan("ABCDE1234F")).thenReturn(Optional.empty());
+        InvestorAccount pending = new InvestorAccount();
+        ReflectionTestUtils.setField(pending, "id", UUID.randomUUID());
+        pending.setEmail("asha@example.com");
+        pending.setPan("ABCDE1234F");
+        pending.setStatus(InvestorAccountStatus.PENDING_ACTIVATION);
+        when(accountRepository.findByEmailIgnoreCase("asha@example.com")).thenReturn(Optional.of(pending));
         when(investorRepository.findByPan("ABCDE1234F")).thenReturn(Optional.of(invited));
 
-        InvestorAuthService.InvestorAuthResult result = service.passwordLogin("ASHA@Example.com", "abcde1234f");
+        InvestorAuthService.InvestorAuthResult result = service.otpLogin("ASHA@Example.com", "654321");
 
-        ArgumentCaptor<InvestorAccount> captor = ArgumentCaptor.forClass(InvestorAccount.class);
-        verify(accountRepository).save(captor.capture());
-        InvestorAccount saved = captor.getValue();
-        assertThat(saved.getInvestorId()).isEqualTo(investorId);
-        assertThat(saved.getEmail()).isEqualTo("asha@example.com");
-        assertThat(saved.getPan()).isEqualTo("ABCDE1234F");
-        assertThat(saved.getStatus()).isEqualTo(InvestorAccountStatus.ACTIVE);
-        assertThat(saved.getEmailVerified()).isFalse();
+        verify(otpService).verify("asha@example.com", OtpPurpose.INVESTOR_LOGIN, "654321");
+        assertThat(pending.getInvestorId()).isEqualTo(investorId);       // linked by PAN + email
+        assertThat(pending.getStatus()).isEqualTo(InvestorAccountStatus.ACTIVE); // OTP proved the inbox
+        assertThat(pending.getActivatedAt()).isNotNull();
         assertThat(result.token()).isEqualTo("investor.jwt.token");
+    }
+
+    @Test
+    void mobileOtpLoginAcceptsCodeFromSmsOtpService() {
+        InvestorAccount active = new InvestorAccount();
+        ReflectionTestUtils.setField(active, "id", UUID.randomUUID());
+        active.setEmail("a@example.com");
+        active.setMobileNumber("9876543210");
+        active.setStatus(InvestorAccountStatus.ACTIVE);
+        active.setInvestorId(UUID.randomUUID());
+        when(accountRepository.findByMobileNumber("9876543210")).thenReturn(java.util.List.of(active));
+        when(smsOtpService.verifyOtp("+919876543210", "000000")).thenReturn(true);
+
+        InvestorAuthService.InvestorAuthResult result = service.mobileOtpLogin("9876543210", "000000");
+
+        assertThat(result.token()).isEqualTo("investor.jwt.token");
+    }
+
+    @Test
+    void mobileOtpLoginRejectsWrongCodeAndAmbiguousNumbers() {
+        InvestorAccount active = new InvestorAccount();
+        active.setMobileNumber("9876543210");
+        active.setStatus(InvestorAccountStatus.ACTIVE);
+        when(accountRepository.findByMobileNumber("9876543210")).thenReturn(java.util.List.of(active));
+        when(smsOtpService.verifyOtp(anyString(), anyString())).thenReturn(false);
+        assertThatThrownBy(() -> service.mobileOtpLogin("9876543210", "111111"))
+                .isInstanceOf(BadCredentialsException.class);
+
+        // Two accounts sharing the number → ambiguous → refused (use email OTP instead).
+        when(accountRepository.findByMobileNumber("9876543210"))
+                .thenReturn(java.util.List.of(active, new InvestorAccount()));
+        assertThatThrownBy(() -> service.mobileOtpLogin("9876543210", "000000"))
+                .isInstanceOf(BadCredentialsException.class);
     }
 
     @Test

@@ -26,7 +26,11 @@ import org.springframework.transaction.annotation.Transactional;
  * name/PAN/email/mobile; the email OTP proves the inbox; the ownership
  * declaration + T&C are recorded as immutable consent; the account activates on
  * email verification + declaration (mobile stays pending while SMS is dormant).
- * Login is email OTP. Reuses {@link OtpService} (email), {@link JwtService},
+ *
+ * <p>Login is OTP-only (the old PAN-as-password login is removed — a static,
+ * low-entropy PAN is not a credential): email OTP via {@link OtpService}, or
+ * mobile OTP via {@link SmsOtpService} (demo stub until the MSG91 integration —
+ * see the TODO(MSG91) markers there). Reuses {@link JwtService},
  * {@link TermsAcceptanceService}, {@link ConsentRecordService}.
  */
 @Service
@@ -44,6 +48,7 @@ public class InvestorAuthService {
     private final InvestorAccountRepository accountRepository;
     private final InvestorRepository investorRepository;
     private final OtpService otpService;
+    private final SmsOtpService smsOtpService;
     private final JwtService jwtService;
     private final TermsAcceptanceService termsAcceptanceService;
     private final ConsentRecordService consentRecordService;
@@ -53,6 +58,7 @@ public class InvestorAuthService {
             InvestorAccountRepository accountRepository,
             InvestorRepository investorRepository,
             OtpService otpService,
+            SmsOtpService smsOtpService,
             JwtService jwtService,
             TermsAcceptanceService termsAcceptanceService,
             ConsentRecordService consentRecordService,
@@ -60,6 +66,7 @@ public class InvestorAuthService {
         this.accountRepository = accountRepository;
         this.investorRepository = investorRepository;
         this.otpService = otpService;
+        this.smsOtpService = smsOtpService;
         this.jwtService = jwtService;
         this.termsAcceptanceService = termsAcceptanceService;
         this.consentRecordService = consentRecordService;
@@ -79,7 +86,10 @@ public class InvestorAuthService {
     boolean isOtpEligible(String email, OtpPurpose purpose) {
         Optional<InvestorAccount> existing = accountRepository.findByEmailIgnoreCase(normalizeEmail(email));
         return switch (purpose) {
-            case INVESTOR_LOGIN -> existing.filter(a -> a.getStatus() == InvestorAccountStatus.ACTIVE).isPresent();
+            // Any non-blocked account may log in via OTP: a successful OTP proves the
+            // inbox, so otpLogin() activates PENDING_ACTIVATION accounts on the spot
+            // (activation used to happen only on the removed PAN-password login).
+            case INVESTOR_LOGIN -> existing.filter(a -> a.getStatus() != InvestorAccountStatus.BLOCKED).isPresent();
             case INVESTOR_SIGNUP -> existing.isEmpty();
             default -> false;
         };
@@ -139,41 +149,57 @@ public class InvestorAuthService {
         String normalized = normalizeEmail(email);
         otpService.verify(normalized, OtpPurpose.INVESTOR_LOGIN, code); // consumes; throws on failure
         InvestorAccount account = accountRepository.findByEmailIgnoreCase(normalized)
-                .filter(a -> a.getStatus() == InvestorAccountStatus.ACTIVE)
+                .filter(a -> a.getStatus() != InvestorAccountStatus.BLOCKED)
                 .orElseThrow(() -> new BadCredentialsException("Invalid email or code"));
-        assertDistributorAllotted(account);
-        return new InvestorAuthResult(jwtService.generateInvestorToken(account.getId(), account.getEmail()), account);
+        return completeLogin(account);
     }
 
     /**
-     * PAN-as-password login (replaces passwordless OTP for the investor portal). The
-     * investor signs in with their registered email + PAN; the PAN is compared in
-     * constant time against the stored account PAN. Same generic error for unknown
-     * email vs wrong PAN to avoid account enumeration.
+     * Mobile-OTP login. TODO(MSG91): the OTP send/verify below runs through the
+     * {@link SmsOtpService} demo stub (code 000000) until MSG91 is integrated —
+     * swap happens inside SmsOtpService, this flow stays as-is.
      */
-    @Transactional
-    public InvestorAuthResult passwordLogin(String email, String pan) {
-        String normalizedEmail = normalizeEmail(email);
-        String normalizedPan = PanFormat.normalize(pan);
-        InvestorAccount account = accountRepository.findByEmailIgnoreCase(normalizedEmail)
-                .map(a -> activateAndLinkForPanLogin(a, normalizedPan))
-                .orElseGet(() -> provisionFromDistributorInvestor(normalizedEmail, normalizedPan));
-        if (account.getPan() == null || !constantTimeEquals(account.getPan(), normalizedPan)) {
-            throw new BadCredentialsException("Invalid email or PAN. Please check and try again.");
+    public OtpRequestResponse requestMobileLoginOtp(String mobileNumber) {
+        // Anti-enumeration: same generic response whether or not an account matches.
+        if (findLoginAccountByMobile(mobileNumber).isPresent()) {
+            smsOtpService.sendOtp(MobileFormat.toE164India(MobileFormat.normalize(mobileNumber)));
         }
-        return new InvestorAuthResult(jwtService.generateInvestorToken(account.getId(), account.getEmail()), account);
+        return otpService.genericResponse();
     }
 
-    private InvestorAccount activateAndLinkForPanLogin(InvestorAccount account, String normalizedPan) {
-        if (account.getStatus() == InvestorAccountStatus.BLOCKED) {
-            throw new BadCredentialsException("Invalid email or PAN. Please check and try again.");
+    /** See {@link #requestMobileLoginOtp} — demo stub until MSG91. */
+    @Transactional
+    public InvestorAuthResult mobileOtpLogin(String mobileNumber, String code) {
+        InvestorAccount account = findLoginAccountByMobile(mobileNumber)
+                .orElseThrow(() -> new BadCredentialsException("Invalid mobile number or code"));
+        String phoneE164 = MobileFormat.toE164India(MobileFormat.normalize(mobileNumber));
+        if (!smsOtpService.verifyOtp(phoneE164, code == null ? "" : code.trim())) {
+            throw new BadCredentialsException("Invalid mobile number or code");
         }
-        if (account.getPan() == null || !constantTimeEquals(account.getPan(), normalizedPan)) {
-            throw new BadCredentialsException("Invalid email or PAN. Please check and try again.");
-        }
-        if (account.getInvestorId() == null) {
-            account = linkAccountToDistributorInvestor(account);
-        }
+        return completeLogin(account);
+    }
+
+    /**
+     * Resolves the single non-blocked account for a mobile number. Mobile is not
+     * unique on investor_accounts, so an ambiguous match (several accounts sharing
+     * the number) refuses mobile login — those investors use email OTP instead.
+     */
+    private Optional<InvestorAccount> findLoginAccountByMobile(String mobileNumber) {
+        var candidates = accountRepository.findByMobileNumber(MobileFormat.normalize(mobileNumber)).stream()
+                .filter(a -> a.getStatus() != InvestorAccountStatus.BLOCKED)
+                .toList();
+        return candidates.size() == 1 ? Optional.of(candidates.get(0)) : Optional.empty();
+    }
+
+    /**
+     * Shared post-OTP login steps: the verified OTP proved the contact channel, so
+     * link the account to its distributor-created investor when possible, require a
+     * distributor, and activate a PENDING_ACTIVATION account (activation used to
+     * happen only on the removed PAN-password login path).
+     */
+    private InvestorAuthResult completeLogin(InvestorAccount account) {
+        account = tryLinkAccountToDistributorInvestor(account);
+        assertDistributorAllotted(account);
         if (account.getStatus() != InvestorAccountStatus.ACTIVE) {
             account.setStatus(InvestorAccountStatus.ACTIVE);
             if (account.getActivatedAt() == null) {
@@ -181,36 +207,21 @@ public class InvestorAuthService {
             }
             account = accountRepository.save(account);
         }
-        return account;
+        return new InvestorAuthResult(jwtService.generateInvestorToken(account.getId(), account.getEmail()), account);
     }
 
-    private InvestorAccount provisionFromDistributorInvestor(String normalizedEmail, String normalizedPan) {
-        accountRepository.findByPan(normalizedPan).ifPresent(existing -> {
-            throw new BadCredentialsException("Invalid email or PAN. Please check and try again.");
-        });
-        var investor = investorRepository.findByPan(normalizedPan)
-                .filter(inv -> normalizeEmail(inv.getEmail()).equals(normalizedEmail))
-                .orElseThrow(() -> new BadCredentialsException("Invalid email or PAN. Please check and try again."));
-
-        InvestorAccount account = new InvestorAccount();
-        account.setFullName(investor.getFullName());
-        account.setPan(normalizedPan);
-        account.setEmail(normalizedEmail);
-        account.setMobileNumber(investor.getMobileNumber());
-        account.setEmailVerified(Boolean.TRUE.equals(investor.getEmailVerified()));
-        account.setMobileVerified(Boolean.TRUE.equals(investor.getMobileVerified()));
-        account.setStatus(InvestorAccountStatus.ACTIVE);
-        account.setActivatedAt(OffsetDateTime.now());
-        account.setInvestorId(investor.getId());
-        return accountRepository.save(account);
-    }
-
-    private InvestorAccount linkAccountToDistributorInvestor(InvestorAccount account) {
-        var investor = investorRepository.findByPan(account.getPan())
+    /** Best-effort link to the distributor-created investor with the same PAN + email. */
+    private InvestorAccount tryLinkAccountToDistributorInvestor(InvestorAccount account) {
+        if (account.getInvestorId() != null || account.getPan() == null) {
+            return account;
+        }
+        return investorRepository.findByPan(account.getPan())
                 .filter(inv -> normalizeEmail(inv.getEmail()).equals(normalizeEmail(account.getEmail())))
-                .orElseThrow(() -> new BadCredentialsException("Invalid email or PAN. Please check and try again."));
-        account.setInvestorId(investor.getId());
-        return accountRepository.save(account);
+                .map(inv -> {
+                    account.setInvestorId(inv.getId());
+                    return accountRepository.save(account);
+                })
+                .orElse(account);
     }
 
     private void assertDistributorAllotted(InvestorAccount account) {
