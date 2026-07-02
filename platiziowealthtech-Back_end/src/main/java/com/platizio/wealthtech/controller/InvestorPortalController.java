@@ -33,6 +33,7 @@ import com.platizio.wealthtech.domain.ProductScheme;
 import com.platizio.wealthtech.domain.TransactionOrder;
 import com.platizio.wealthtech.dto.InvestorBankRequest;
 import com.platizio.wealthtech.dto.InvestorOrderRequest;
+import com.platizio.wealthtech.dto.InvestorSipResponse;
 import com.platizio.wealthtech.dto.KycReadinessDecision;
 import com.platizio.wealthtech.dto.NomineeRequest;
 import com.platizio.wealthtech.dto.NomineeResponse;
@@ -47,6 +48,7 @@ import com.platizio.wealthtech.service.InvestorKycService;
 import com.platizio.wealthtech.service.OnboardingSubmissionService;
 import com.platizio.wealthtech.service.InvestorDocumentService;
 import com.platizio.wealthtech.service.InvestorService;
+import com.platizio.wealthtech.service.InvestorSipService;
 import com.platizio.wealthtech.service.NomineeService;
 import com.platizio.wealthtech.service.OrderService;
 import com.platizio.wealthtech.service.PortfolioService;
@@ -102,6 +104,7 @@ public class InvestorPortalController {
     private final InvestorService investorService;
     private final NomineeService nomineeService;
     private final InvestorDocumentService investorDocumentService;
+    private final InvestorSipService investorSipService;
 
     public InvestorPortalController(
             InvestorAuthService investorAuthService,
@@ -117,7 +120,8 @@ public class InvestorPortalController {
             ProductService productService,
             InvestorService investorService,
             NomineeService nomineeService,
-            InvestorDocumentService investorDocumentService) {
+            InvestorDocumentService investorDocumentService,
+            InvestorSipService investorSipService) {
         this.investorKycService = investorKycService;
         this.productService = productService;
         this.investorService = investorService;
@@ -132,6 +136,7 @@ public class InvestorPortalController {
         this.holdingsService = holdingsService;
         this.nomineeService = nomineeService;
         this.investorDocumentService = investorDocumentService;
+        this.investorSipService = investorSipService;
     }
 
     @Operation(summary = "Current investor session", description = "Returns the authenticated investor's account view.")
@@ -547,6 +552,15 @@ public class InvestorPortalController {
     public List<HoldingResponse> holdings(Authentication auth) {
         InvestorAccount account = investorAuthService.requireAccount(accountId(auth));
         return portfolioService.getInvestorHoldings(requireInvestorId(account));
+    }
+
+    @Operation(summary = "My SIP plans",
+            description = "Lists the investor's SIP plans with frequency, start date, next due date, instalments, "
+                    + "mandate and folio — the SIP detail the dashboard surfaces.")
+    @GetMapping("/sips")
+    public List<InvestorSipResponse> sips(Authentication auth) {
+        InvestorAccount account = investorAuthService.requireAccount(accountId(auth));
+        return investorSipService.listSipsAsInvestor(requireInvestorId(account));
     }
 
     // ── Dashboard (Phase-3 rich holdings) ────────────────────────────────────
