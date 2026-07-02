@@ -2,9 +2,10 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   AlertCircle, CheckCircle2, ShieldCheck, Loader2, RefreshCw,
-  Clock, XCircle, ExternalLink,
+  Clock, XCircle, ExternalLink, ChevronDown, ChevronRight,
 } from 'lucide-react';
 import { apiFetch } from '../config/api';
+import { prettySipFrequency } from '../utils/sipDisplay';
 
 /**
  * The 2FA approval state machine, mirrored from the backend
@@ -135,6 +136,8 @@ export default function TransactionApprovalPanel({
   const [approving, setApproving] = useState(false);
   const [countdown, setCountdown] = useState(0);
   const [devCode, setDevCode] = useState('');
+  // The structured detail card is primary; the raw JSON stays available but collapsed.
+  const [showRawSnapshot, setShowRawSnapshot] = useState(false);
   const otpRefs = useRef<(HTMLInputElement | null)[]>([]);
 
   const status = normalizeStatus(challenge.status);
@@ -310,8 +313,9 @@ export default function TransactionApprovalPanel({
 
   const typeLabel = String(challenge.transactionType || 'transaction').replace(/_/g, ' ');
 
-  // Pull amount / scheme out of the frozen snapshot so the consent is INFORMED.
-  // Works for PURCHASE, REDEMPTION and SIP snapshots (best-effort, read-only).
+  // Pull the frozen snapshot apart into a structured, labelled detail so the
+  // consent is INFORMED. Works for PURCHASE (lump sum), SIP and REDEMPTION
+  // snapshots (best-effort, read-only) — rows with absent values are omitted.
   const snapshotSummary = useMemo(() => {
     let snap: Record<string, unknown> | null = null;
     try {
@@ -331,20 +335,73 @@ export default function TransactionApprovalPanel({
       }
       return undefined;
     };
-    const amountRaw = pick('amount', 'amountInRupees', 'orderAmount', 'investmentAmount');
-    const amountNum = typeof amountRaw === 'number' ? amountRaw : Number(amountRaw);
-    const amount =
-      Number.isFinite(amountNum) && amountNum > 0
-        ? `₹${amountNum.toLocaleString('en-IN')}`
-        : undefined;
-    const scheme = pick('schemeName', 'productSchemeName', 'fundName', 'productName', 'scheme');
+    const asMoney = (raw: unknown) => {
+      const num = typeof raw === 'number' ? raw : Number(raw);
+      return Number.isFinite(num) && num > 0 ? `₹${num.toLocaleString('en-IN')}` : undefined;
+    };
+    const asDate = (raw: unknown) => {
+      if (raw == null || raw === '') return undefined;
+      const d = new Date(String(raw));
+      return Number.isNaN(d.getTime())
+        ? String(raw)
+        : d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+    };
+
+    const amount = asMoney(pick('amount', 'amountInRupees', 'orderAmount', 'investmentAmount'));
+    const scheme = pick('productSchemeName', 'schemeName', 'fundName', 'productName', 'scheme');
+    const amc = pick('productSchemeAmcName', 'amcName');
     const units = pick('units', 'unitsToRedeem', 'quantity');
+
+    // Transaction type: transactionKind LUMPSUM → lump sum purchase; otherwise
+    // fall back to the challenge's transactionType (PURCHASE | SIP | REDEMPTION).
+    const kind = String(pick('transactionKind') ?? '').trim().toUpperCase();
+    const type = normalizeStatus(String(pick('transactionType', 'type') ?? challenge.transactionType ?? ''));
+    const transactionTypeLabel =
+      kind === 'LUMPSUM' ? 'Lump sum purchase'
+        : type === 'SIP' ? 'SIP (recurring)'
+          : type === 'REDEMPTION' ? 'Redemption / payment exit'
+            : kind || type
+              ? (kind || type).replace(/_/g, ' ')
+              : undefined;
+
+    const orderDateTimeRaw = pick('orderDateTime');
+    const orderDateTime = (() => {
+      if (orderDateTimeRaw == null) return undefined;
+      const d = new Date(String(orderDateTimeRaw));
+      return Number.isNaN(d.getTime()) ? String(orderDateTimeRaw) : d.toLocaleString('en-IN');
+    })();
+
+    const instalmentsRaw = pick('sipInstalments', 'instalments');
+
+    const rows: Array<{ label: string; value: string }> = [];
+    const addRow = (label: string, value: unknown) => {
+      if (value === undefined || value === null || value === '') return;
+      rows.push({ label, value: String(value) });
+    };
+    addRow('Transaction type', transactionTypeLabel);
+    addRow('Scheme', scheme != null ? `${String(scheme)}${amc ? ` · ${String(amc)}` : ''}` : undefined);
+    addRow('ISIN', pick('productSchemeIsin', 'isin'));
+    addRow('Order date/time', orderDateTime);
+    addRow('Amount', amount);
+    addRow('Units', units);
+    addRow('Folio number', pick('folioNumber', 'folio'));
+    addRow('NAV date', asDate(pick('allotmentDate')));
+    addRow('NAV amount', asMoney(pick('allotmentNav')));
+    addRow('SIP name', pick('sipName'));
+    addRow('SIP number', pick('sipNumber'));
+    addRow('SIP frequency', prettySipFrequency(pick('sipFrequency') as string | undefined));
+    addRow('SIP start date', asDate(pick('sipStartDate')));
+    addRow('Instalments', instalmentsRaw);
+    addRow('Payment mode', pick('paymentMode', 'paymentMethod'));
+    addRow('Mandate mode', pick('mandateMode'));
+
     return {
+      rows,
       amount,
       scheme: scheme != null ? String(scheme) : undefined,
       units: units != null ? String(units) : undefined,
     };
-  }, [challenge.snapshotJson]);
+  }, [challenge.snapshotJson, challenge.transactionType]);
 
   return (
     <div className="space-y-6">
@@ -373,7 +430,40 @@ export default function TransactionApprovalPanel({
             </span>
           )}
         </div>
-        <ReadOnlySnapshot value={challenge.snapshotJson} />
+        {/* Structured, labelled detail (primary). Falls back to the raw dump when
+            the snapshot can't be parsed into any known field. */}
+        {snapshotSummary && snapshotSummary.rows.length > 0 ? (
+          <dl className="divide-y divide-slate-100 overflow-hidden rounded-xl border border-slate-200 bg-slate-50/60">
+            {snapshotSummary.rows.map((row) => (
+              <div key={row.label} className="flex items-start justify-between gap-4 px-4 py-2.5">
+                <dt className="pt-0.5 text-xs font-medium text-slate-400">{row.label}</dt>
+                <dd className="text-right text-sm font-medium text-slate-800 break-words">{row.value}</dd>
+              </div>
+            ))}
+          </dl>
+        ) : (
+          <ReadOnlySnapshot value={challenge.snapshotJson} />
+        )}
+
+        {/* Raw frozen snapshot stays available for full transparency, collapsed by default. */}
+        {snapshotSummary && snapshotSummary.rows.length > 0 && (
+          <div className="mt-3">
+            <button
+              type="button"
+              onClick={() => setShowRawSnapshot((v) => !v)}
+              className="flex items-center gap-1 text-xs font-medium text-blue-600 hover:text-blue-700"
+            >
+              {showRawSnapshot ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+              {showRawSnapshot ? 'Hide raw snapshot' : 'View raw snapshot'}
+            </button>
+            {showRawSnapshot && (
+              <div className="mt-2">
+                <ReadOnlySnapshot value={challenge.snapshotJson} />
+              </div>
+            )}
+          </div>
+        )}
+
         {challenge.snapshotSha256 && (
           <p className="mt-3 break-all font-mono text-[11px] text-slate-400">
             Snapshot hash: {challenge.snapshotSha256}
@@ -512,7 +602,7 @@ export default function TransactionApprovalPanel({
                 </div>
               </div>
 
-              {devCode && (
+              {import.meta.env.DEV && devCode && (
                 <div className="mb-5 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-left">
                   <p className="mb-1 text-[11px] font-semibold text-amber-900">Dev OTP code</p>
                   <p className="font-mono text-base tracking-widest text-amber-800">{devCode}</p>

@@ -6,7 +6,6 @@ import {
   type DistributorProfileSubmitResponse,
 } from '../config/api';
 import PincodeCityFields from './PincodeCityFields';
-import NomineeFields, { emptyNominee, type NomineeValue } from './NomineeFields';
 import { validateInvestorMinimumAge } from '../utils/kycActionLocks';
 import { fetchIfscDetails } from '../utils/referenceLookup';
 
@@ -20,10 +19,11 @@ import { fetchIfscDetails } from '../utils/referenceLookup';
  * P2: this now captures the FULL IRIS field set — exactly the same fields the investor
  * self-fill wizard (InvestorOnboarding) sends via `buildInvestorPayload`: mode-of-holding,
  * category, gender, country of birth/citizenship, source of wealth, PEP + Relative split,
- * annual income, occupation, bank (account type / IFSC / account number) and up to 3
- * nominees. The collected fields are JSON-stringified into `payloadJson` (with the SAME
- * field names as buildInvestorPayload so the BE freeze/apply-back machinery round-trips
- * them) and POSTed to /investors/{id}/profile/submit (first time) or PUT
+ * annual income, occupation and bank (account type / IFSC / account number). Nominees are
+ * captured by the INVESTOR themselves (/investor/nominations). The collected fields are
+ * JSON-stringified into `payloadJson` (with the SAME field names as buildInvestorPayload
+ * so the BE freeze/apply-back machinery round-trips them) and POSTed to
+ * /investors/{id}/profile/submit (first time) or PUT
  * /investors/{id}/profile (editing the still-pending fill). The acting distributor is
  * resolved server-side from the session — never sent in the body. On success the investor
  * must approve the frozen details via 2FA, so we surface the resulting challengeId.
@@ -106,12 +106,6 @@ function toScalarDefaults(investor: any): ScalarValues {
   };
 }
 
-function toNomineeDefaults(investor: any): NomineeValue[] {
-  return Array.isArray(investor?.nominees) && investor.nominees.length > 0
-    ? investor.nominees.map((n: any) => ({ ...emptyNominee(), ...n }))
-    : [];
-}
-
 const LABEL_CLS = 'block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5';
 const INPUT_CLS =
   'w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm ' +
@@ -136,8 +130,6 @@ export default function DistributorFillProfileForm({
   onCancel,
 }: Props) {
   const [s, setS] = useState<ScalarValues>(() => toScalarDefaults(investor));
-  const [nominees, setNominees] = useState<NomineeValue[]>(() => toNomineeDefaults(investor));
-  const [displayNominees, setDisplayNominees] = useState<boolean>(investor?.displayNominees ?? false);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [formError, setFormError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -149,8 +141,6 @@ export default function DistributorFillProfileForm({
 
   useEffect(() => {
     setS(toScalarDefaults(investor));
-    setNominees(toNomineeDefaults(investor));
-    setDisplayNominees(investor?.displayNominees ?? false);
     setFieldErrors({});
     setFormError(null);
   }, [investor?.id]);
@@ -190,20 +180,6 @@ export default function DistributorFillProfileForm({
       return next;
     });
   };
-
-  const applicantAddress = {
-    addressLine1: s.addressLine1,
-    addressLine2: s.addressLine2,
-    city: s.city,
-    state: s.state,
-    postalCode: s.postalCode,
-    country: 'India',
-  };
-  const addNominee = () => setNominees(prev => (prev.length >= 3 ? prev : [...prev, emptyNominee()]));
-  const removeNominee = (index: number) => setNominees(prev => prev.filter((_, i) => i !== index));
-  const updateNominee = (index: number, next: NomineeValue) =>
-    setNominees(prev => prev.map((n, i) => (i === index ? next : n)));
-  const nomineeShareTotal = nominees.reduce((sum, n) => sum + (Number(n.sharePercent) || 0), 0);
 
   const validate = (): boolean => {
     const errs: Record<string, string> = {};
@@ -247,25 +223,6 @@ export default function DistributorFillProfileForm({
     accountNumber: s.accountNumber.trim() || null,
     ifsc: s.ifsc.trim().toUpperCase() || null,
     accountType: s.accountType || null,
-    displayNominees: Boolean(displayNominees),
-    nominees: nominees.map(n => ({
-      fullName: n.fullName.trim(),
-      dateOfBirth: n.dateOfBirth || null,
-      relationship: n.relationship || null,
-      sharePercent: n.sharePercent ? Number(n.sharePercent) : null,
-      mobileNumber: n.mobileNumber ? n.mobileNumber.trim() : null,
-      email: n.email.trim() || null,
-      idType: n.idType || null,
-      idNumber: n.idNumber.trim() || null,
-      addressLine1: n.addressLine1.trim() || null,
-      addressLine2: n.addressLine2.trim() || null,
-      addressLine3: n.addressLine3.trim() || null,
-      city: n.city.trim() || null,
-      state: n.state.trim() || null,
-      postalCode: n.postalCode.trim() || null,
-      country: n.country.trim() || null,
-      sameAsApplicant: Boolean(n.sameAsApplicant),
-    })),
   });
 
   const onSubmit = async (e: React.FormEvent) => {
@@ -521,60 +478,7 @@ export default function DistributorFillProfileForm({
         </div>
       </section>
 
-      {/* ── Nominees (up to 3) ───────────────────────────────────────── */}
-      <section>
-        <div className="mb-3 flex items-center justify-between">
-          <span className="flex items-center gap-2 text-sm font-semibold text-slate-700">
-            <User className="h-4 w-4 text-slate-400" />
-            Nominee details
-            <span className="text-xs font-normal text-slate-400">(optional, up to 3)</span>
-          </span>
-          {nominees.length < 3 && (
-            <button
-              type="button"
-              onClick={addNominee}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-50"
-            >
-              + Add nominee
-            </button>
-          )}
-        </div>
-
-        {nominees.length === 0 ? (
-          <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-center text-xs text-slate-400">
-            No nominees added. Click "Add nominee" to register up to 3 nominees.
-          </div>
-        ) : (
-          <div className="space-y-4">
-            {nominees.map((nominee, index) => (
-              <NomineeFields
-                key={index}
-                index={index}
-                value={nominee}
-                onChange={next => updateNominee(index, next)}
-                onRemove={() => removeNominee(index)}
-                applicantAddress={applicantAddress}
-              />
-            ))}
-          </div>
-        )}
-
-        {nominees.length > 0 && (
-          <p className={`mt-3 text-xs font-medium ${nomineeShareTotal === 100 ? 'text-green-600' : 'text-amber-600'}`}>
-            Total nominee share: {nomineeShareTotal}% {nomineeShareTotal === 100 ? '✓' : '(should total 100%)'}
-          </p>
-        )}
-
-        <label className="mt-4 flex cursor-pointer items-center gap-3">
-          <input
-            type="checkbox"
-            checked={displayNominees}
-            onChange={e => setDisplayNominees(e.target.checked)}
-            className="h-4 w-4 rounded border-slate-300 text-[#0B1B3E] focus:ring-blue-200"
-          />
-          <span className="text-sm text-slate-700">Display nominee details on statements and reports</span>
-        </label>
-      </section>
+      {/* Nominees are captured by the INVESTOR themselves (/investor/nominations). */}
 
       <div className="flex items-center justify-end gap-3 pt-2">
         <button

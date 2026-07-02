@@ -232,7 +232,7 @@ export default function InvestorSignup() {
         </div>
         <h2 className="text-3xl font-bold text-white mb-3 leading-snug">Create your investor account</h2>
         <p className="text-blue-200/60 text-sm leading-relaxed mb-10">
-          A few details, an email verification, and quick phone/PAN checks — that's all it takes. Your PAN becomes your password.
+          A few details, an email verification, and quick phone/PAN checks — that's all it takes. You'll sign in with a one-time passcode.
         </p>
         <div className="space-y-4">
           {STEP_LABELS.slice(0, 3).map((label, i) => {
@@ -387,7 +387,7 @@ export default function InvestorSignup() {
                         <button type="button" onClick={verifyPanDummy} className="px-4 rounded-xl bg-slate-100 text-slate-700 text-xs font-semibold hover:bg-slate-200 transition-colors whitespace-nowrap">Verify</button>
                       )}
                     </div>
-                    <p className="text-[11px] text-slate-400 mt-1">Your PAN will also be your login password.</p>
+                    <p className="text-[11px] text-slate-400 mt-1">Used to verify your identity — sign-in itself is via OTP.</p>
                   </div>
                   <div className="mb-6">
                     <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5">
@@ -425,7 +425,7 @@ export default function InvestorSignup() {
                     </div>
                   </div>
 
-                  {devCode && (
+                  {import.meta.env.DEV && devCode && (
                     <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 mb-5 text-left">
                       <p className="text-[11px] font-semibold text-amber-900 mb-1">Dev OTP code</p>
                       <p className="font-mono text-base tracking-widest text-amber-800">{devCode}</p>

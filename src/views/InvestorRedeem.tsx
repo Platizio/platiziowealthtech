@@ -1,9 +1,10 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams, useLocation } from 'react-router-dom';
 import { motion } from 'motion/react';
-import { ArrowLeft, TrendingDown, AlertCircle, CheckCircle2, Layers, RefreshCw, Info } from 'lucide-react';
+import { ArrowLeft, TrendingDown, AlertCircle, CheckCircle2, Layers, RefreshCw, Info, X } from 'lucide-react';
 import { apiFetch } from '../config/api';
 import { fetchRedemptions, syncRedemptions, latestRedemptionStatus, redemptionStatusMeta, submitRedemption } from '../utils/redeemOrder';
+import { prettySipFrequency } from '../utils/sipDisplay';
 
 /**
  * Distributor-facing redemption screen (REQ #9).
@@ -30,6 +31,10 @@ interface Holding {
   currentValue?: number | null;
   dataQuality?: string; // OK | STALE | UNAVAILABLE
   redeemable?: boolean;
+  // Present when the source order was a SIP (optional — older BE rows omit them).
+  sipName?: string | null;
+  sipNumber?: string | null;
+  sipFrequency?: string | null;
   // Client-side redemption tracking (per source order).
   alreadyRedeemed: boolean;
   redemptionStatus?: string;
@@ -67,6 +72,8 @@ export default function InvestorRedeem({ userData: _userData }: { userData?: any
   const [syncingId, setSyncingId] = useState('');
   const [actionError, setActionError] = useState('');
   const [actionMessage, setActionMessage] = useState('');
+  // Holding awaiting explicit confirmation before the redemption request is submitted.
+  const [confirmHolding, setConfirmHolding] = useState<Holding | null>(null);
 
   const loadHoldings = async () => {
     if (!investorId) return;
@@ -129,6 +136,9 @@ export default function InvestorRedeem({ userData: _userData }: { userData?: any
             currentValue: h.currentValue != null ? Number(h.currentValue) : null,
             dataQuality: h.dataQuality,
             redeemable: Boolean(h.redeemable),
+            sipName: h?.sipName ?? null,
+            sipNumber: h?.sipNumber ?? null,
+            sipFrequency: h?.sipFrequency ?? null,
             alreadyRedeemed,
             redemptionStatus,
           } as Holding;
@@ -156,6 +166,18 @@ export default function InvestorRedeem({ userData: _userData }: { userData?: any
     && typeof h.availableUnits === 'number'
     && Number.isFinite(h.availableUnits)
     && h.availableUnits > 0;
+
+  // Opens the confirmation modal — nothing is submitted until the user confirms.
+  const requestRedeem = (holding: Holding) => {
+    if (holding.alreadyRedeemed || redeemingId) return;
+    if (!canRedeem(holding)) {
+      setActionError('This holding has no available units to redeem.');
+      return;
+    }
+    setActionError('');
+    setActionMessage('');
+    setConfirmHolding(holding);
+  };
 
   const redeem = async (holding: Holding) => {
     if (holding.alreadyRedeemed || redeemingId) return;
@@ -340,7 +362,7 @@ export default function InvestorRedeem({ userData: _userData }: { userData?: any
                           </div>
                         ) : canRedeem(h) ? (
                           <button
-                            onClick={() => redeem(h)}
+                            onClick={() => requestRedeem(h)}
                             disabled={redeemingId === h.orderId}
                             className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-amber-700 border border-amber-200 rounded-lg hover:bg-amber-50 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                           >
@@ -361,6 +383,96 @@ export default function InvestorRedeem({ userData: _userData }: { userData?: any
           </div>
         )}
       </div>
+
+      {/* Redemption confirmation modal — mirrors the InvestorNominees opt-out modal style. */}
+      {confirmHolding && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 px-4 backdrop-blur-sm">
+          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Confirm</p>
+                <p className="text-sm font-semibold text-slate-800">Redeem this holding?</p>
+              </div>
+              <button onClick={() => setConfirmHolding(null)} className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <dl className="mt-4 space-y-2 rounded-xl border border-slate-100 bg-slate-50 px-4 py-3 text-xs">
+              <div className="flex justify-between gap-3">
+                <dt className="text-slate-400">Scheme</dt>
+                <dd className="text-right font-semibold text-slate-800">
+                  {confirmHolding.schemeName || 'Scheme name unavailable'}
+                  {confirmHolding.amcName && confirmHolding.amcName !== '—' && (
+                    <span className="block text-[11px] font-normal text-slate-500">{confirmHolding.amcName}</span>
+                  )}
+                </dd>
+              </div>
+              <div className="flex justify-between gap-3">
+                <dt className="text-slate-400">Folio number</dt>
+                <dd className="font-mono text-slate-700">{confirmHolding.folio || '—'}</dd>
+              </div>
+              <div className="flex justify-between gap-3">
+                <dt className="text-slate-400">Units being redeemed</dt>
+                <dd className="font-mono font-semibold text-slate-800">{formatUnits(confirmHolding.availableUnits) ?? '—'}</dd>
+              </div>
+              <div className="flex justify-between gap-3">
+                <dt className="text-slate-400">Available amount</dt>
+                <dd className="font-mono text-slate-700">{formatCurrency(confirmHolding.currentValue) ?? '—'}</dd>
+              </div>
+              <div className="flex justify-between gap-3">
+                <dt className="text-slate-400">NAV as of</dt>
+                <dd className="text-slate-700">{formatDate(confirmHolding.navAsOf)}</dd>
+              </div>
+              {confirmHolding?.sipName && (
+                <div className="flex justify-between gap-3">
+                  <dt className="text-slate-400">SIP name</dt>
+                  <dd className="text-slate-700">{confirmHolding.sipName}</dd>
+                </div>
+              )}
+              {confirmHolding?.sipNumber && (
+                <div className="flex justify-between gap-3">
+                  <dt className="text-slate-400">SIP number</dt>
+                  <dd className="font-mono text-slate-700">{confirmHolding.sipNumber}</dd>
+                </div>
+              )}
+              {confirmHolding?.sipFrequency && (
+                <div className="flex justify-between gap-3">
+                  <dt className="text-slate-400">SIP frequency</dt>
+                  <dd className="text-slate-700">{prettySipFrequency(confirmHolding.sipFrequency)}</dd>
+                </div>
+              )}
+            </dl>
+
+            <div className="mt-4 flex items-start gap-2.5 rounded-xl border border-amber-100 bg-amber-50 px-3 py-3">
+              <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0 text-amber-600" />
+              <p className="text-xs text-amber-800">
+                This submits a <strong>full</strong> redemption of the available units. The investor must
+                authorize it with a one-time passcode in their portal before any units are sold.
+              </p>
+            </div>
+
+            <div className="mt-5 flex gap-3">
+              <button
+                onClick={() => setConfirmHolding(null)}
+                className="flex-1 rounded-xl border border-slate-200 py-2.5 text-sm font-semibold text-slate-600 hover:bg-slate-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  const holding = confirmHolding;
+                  setConfirmHolding(null);
+                  if (holding) void redeem(holding);
+                }}
+                className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-[#0B1B3E] py-2.5 text-sm font-semibold text-white hover:bg-[#1A3066]"
+              >
+                <TrendingDown className="h-4 w-4" /> Confirm redemption request
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </motion.div>
   );
 }
