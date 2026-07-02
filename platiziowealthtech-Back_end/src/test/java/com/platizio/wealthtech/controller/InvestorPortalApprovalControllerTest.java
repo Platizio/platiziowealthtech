@@ -26,7 +26,9 @@ import com.platizio.wealthtech.security.AuthenticatedInvestorPrincipal;
 import com.platizio.wealthtech.service.ConsentRecordService;
 import com.platizio.wealthtech.service.HoldingsService;
 import com.platizio.wealthtech.service.InvestorService;
+import com.platizio.wealthtech.service.InvestorDocumentService;
 import com.platizio.wealthtech.service.NomineeService;
+import com.platizio.wealthtech.service.InvestorSipService;
 import com.platizio.wealthtech.service.ProductService;
 import com.platizio.wealthtech.service.InvestorActionService;
 import com.platizio.wealthtech.service.InvestorActionService.InvestorActionPage;
@@ -76,7 +78,9 @@ class InvestorPortalApprovalControllerTest {
             mock(InvestorKycService.class),
             mock(ProductService.class),
             mock(InvestorService.class),
-            mock(NomineeService.class));
+            mock(NomineeService.class),
+            mock(InvestorDocumentService.class),
+            mock(InvestorSipService.class));
 
     private final UUID accountId = UUID.randomUUID();
     private final UUID investorId = UUID.randomUUID();

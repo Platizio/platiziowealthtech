@@ -1,6 +1,7 @@
 package com.platizio.wealthtech.repository;
 
 import com.platizio.wealthtech.domain.InvestorAccount;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -8,6 +9,9 @@ import org.springframework.data.jpa.repository.JpaRepository;
 public interface InvestorAccountRepository extends JpaRepository<InvestorAccount, UUID> {
 
     Optional<InvestorAccount> findByEmailIgnoreCase(String email);
+
+    /** Mobile is not unique on investor_accounts, so this may match several rows. */
+    List<InvestorAccount> findByMobileNumber(String mobileNumber);
 
     Optional<InvestorAccount> findByPan(String pan);
 

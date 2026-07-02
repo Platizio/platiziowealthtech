@@ -2,9 +2,10 @@ package com.platizio.wealthtech.controller;
 
 import com.platizio.wealthtech.domain.OtpPurpose;
 import com.platizio.wealthtech.dto.InvestorAuthResponse;
+import com.platizio.wealthtech.dto.InvestorMobileOtpRequest;
+import com.platizio.wealthtech.dto.InvestorMobileOtpVerifyRequest;
 import com.platizio.wealthtech.dto.InvestorOtpRequest;
 import com.platizio.wealthtech.dto.InvestorOtpVerifyRequest;
-import com.platizio.wealthtech.dto.InvestorPasswordLoginRequest;
 import com.platizio.wealthtech.dto.InvestorSignupRequest;
 import com.platizio.wealthtech.dto.OtpRequestResponse;
 import com.platizio.wealthtech.service.AuthCookieService;
@@ -67,12 +68,23 @@ public class InvestorAuthController {
         return InvestorAuthResponse.from(result.account());
     }
 
-    @Operation(summary = "Investor login with email + PAN",
-            description = "Signs in with the registered email and PAN (PAN is the password); sets the HttpOnly investor cookie.")
-    @PostMapping("/login")
-    public InvestorAuthResponse login(
-            @Valid @RequestBody InvestorPasswordLoginRequest request, HttpServletResponse response) {
-        InvestorAuthService.InvestorAuthResult result = investorAuthService.passwordLogin(request.email(), request.pan());
+    // TODO(MSG91): the mobile-login OTP below is delivered by the SmsOtpService demo
+    // stub (code 000000) until the MSG91 integration lands; these endpoints stay as-is.
+    @Operation(summary = "Request an investor mobile-login OTP (demo)",
+            description = "Sends a one-time passcode to the registered mobile number. Demo stub until MSG91: "
+                    + "the code 000000 verifies. Always returns a generic message to avoid leaking which numbers are registered.")
+    @PostMapping("/login/mobile/otp/request")
+    public OtpRequestResponse requestMobileLoginOtp(@Valid @RequestBody InvestorMobileOtpRequest request) {
+        return investorAuthService.requestMobileLoginOtp(request.mobileNumber());
+    }
+
+    @Operation(summary = "Verify an investor mobile-login OTP (demo)",
+            description = "Validates the mobile passcode and, on success, sets the HttpOnly investor cookie.")
+    @PostMapping("/login/mobile/otp/verify")
+    public InvestorAuthResponse verifyMobileLoginOtp(
+            @Valid @RequestBody InvestorMobileOtpVerifyRequest request, HttpServletResponse response) {
+        InvestorAuthService.InvestorAuthResult result =
+                investorAuthService.mobileOtpLogin(request.mobileNumber(), request.code());
         authCookieService.writeInvestorAccessToken(response, result.token());
         return InvestorAuthResponse.from(result.account());
     }

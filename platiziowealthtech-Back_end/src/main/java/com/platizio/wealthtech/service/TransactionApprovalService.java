@@ -166,14 +166,26 @@ public class TransactionApprovalService {
     }
 
     // ---- render* (stable-key snapshots; mirror OnboardingSubmissionService) --
+    //
+    // Enrichment rule: only fields that are SETTLED before the challenge is created
+    // AND cannot change before assertApprovedAndConsume recomputes the hash may be
+    // snapshotted. Scheme identity (V52 name/ISIN/AMC columns) and createdAt are
+    // fixed at order creation; externalOrderId/folio/allotmentNav are assigned BY
+    // the provider write, so they may appear only in the REDEMPTION snapshot (whose
+    // SOURCE order is already allotted), never in PURCHASE/SIP snapshots.
 
     /** Stable-key snapshot of a lumpsum/purchase order. */
     public String renderPurchaseSnapshot(TransactionOrder order) {
         Map<String, Object> snap = new LinkedHashMap<>();
         snap.put("transactionType", "PURCHASE");
+        snap.put("transactionKind", "LUMPSUM");
         snap.put("orderId", str(order.getId()));
         snap.put("investorId", str(order.getInvestorId()));
         snap.put("productSchemeId", str(order.getProductSchemeId()));
+        snap.put("productSchemeName", order.getProductSchemeName());
+        snap.put("productSchemeIsin", order.getProductSchemeIsin());
+        snap.put("productSchemeAmcName", order.getProductSchemeAmcName());
+        snap.put("orderDateTime", order.getCreatedAt() == null ? null : order.getCreatedAt().toString());
         snap.put("amount", plain(order.getAmount()));
         snap.put("units", plain(order.getUnits()));
         snap.put("paymentMode", order.getPaymentMode());
@@ -186,9 +198,15 @@ public class TransactionApprovalService {
     public String renderSipSnapshot(TransactionOrder order) {
         Map<String, Object> snap = new LinkedHashMap<>();
         snap.put("transactionType", "SIP");
+        snap.put("transactionKind", "SIP");
         snap.put("orderId", str(order.getId()));
         snap.put("investorId", str(order.getInvestorId()));
         snap.put("productSchemeId", str(order.getProductSchemeId()));
+        snap.put("productSchemeName", order.getProductSchemeName());
+        snap.put("productSchemeIsin", order.getProductSchemeIsin());
+        snap.put("productSchemeAmcName", order.getProductSchemeAmcName());
+        snap.put("orderDateTime", order.getCreatedAt() == null ? null : order.getCreatedAt().toString());
+        snap.put("sipName", sipLabel(order.getSipFrequency()));
         snap.put("amount", plain(order.getAmount()));
         snap.put("sipFrequency", order.getSipFrequency());
         snap.put("sipStartDate", order.getSipStartDate() == null ? null : order.getSipStartDate().toString());
@@ -198,16 +216,45 @@ public class TransactionApprovalService {
         return toJson(snap);
     }
 
-    /** Stable-key snapshot of a redemption (amount and/or units). */
+    /**
+     * Stable-key snapshot of a redemption (amount and/or units), enriched with the
+     * already-allotted SOURCE order's contract-note detail (scheme name/AMC, folio,
+     * NAV amount/date, SIP identifiers) so the investor confirms a fully-described
+     * payment exit — these fields are settled on the source order and cannot drift
+     * between challenge creation and consume.
+     */
     public String renderRedemptionSnapshot(RedemptionRecord redemption) {
         Map<String, Object> snap = new LinkedHashMap<>();
         snap.put("transactionType", "REDEMPTION");
+        snap.put("transactionKind", "REDEMPTION");
         snap.put("redemptionId", str(redemption.getId()));
         snap.put("orderId", str(redemption.getOrderId()));
         snap.put("investorId", str(redemption.getInvestorId()));
+        snap.put("orderDateTime", redemption.getCreatedAt() == null ? null : redemption.getCreatedAt().toString());
         snap.put("units", plain(redemption.getUnits()));
         snap.put("amount", plain(redemption.getAmount()));
+        TransactionOrder source = redemption.getOrderId() == null
+                ? null : orderRepository.findById(redemption.getOrderId()).orElse(null);
+        if (source != null) {
+            snap.put("productSchemeName", source.getProductSchemeName());
+            snap.put("productSchemeAmcName", source.getProductSchemeAmcName());
+            snap.put("productSchemeIsin", source.getProductSchemeIsin());
+            snap.put("folioNumber", source.getFolioNumber());
+            snap.put("allotmentNav", plain(source.getAllotmentNav()));
+            snap.put("allotmentDate",
+                    source.getAllotmentDate() == null ? null : source.getAllotmentDate().toString());
+            if (source.getTransactionType() == TransactionType.SIP) {
+                snap.put("sipName", sipLabel(source.getSipFrequency()));
+                snap.put("sipNumber", source.getExternalOrderId());
+                snap.put("sipFrequency", source.getSipFrequency());
+            }
+        }
         return toJson(snap);
+    }
+
+    /** Same SIP label convention as the holdings dashboard badge. */
+    private static String sipLabel(String frequency) {
+        return frequency == null || frequency.isBlank() ? "SIP" : "SIP (" + frequency + ")";
     }
 
     /**

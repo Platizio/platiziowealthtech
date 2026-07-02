@@ -355,12 +355,21 @@ public class PortfolioService {
                     currentValue,
                     maskedPayoutBank,
                     quality,
-                    redeemable));
+                    redeemable,
+                    order.getTransactionType() == TransactionType.SIP ? sipLabel(order.getSipFrequency()) : null,
+                    order.getTransactionType() == TransactionType.SIP ? order.getExternalOrderId() : null,
+                    order.getTransactionType() == TransactionType.SIP ? order.getSipFrequency() : null,
+                    order.getFolioNumber()));
         }
 
         holdings.sort(Comparator.comparing(HoldingResponse::orderId,
                 Comparator.nullsLast(Comparator.reverseOrder())));
         return holdings;
+    }
+
+    /** Same SIP label convention as the holdings dashboard badge. */
+    private static String sipLabel(String frequency) {
+        return frequency == null || frequency.isBlank() ? "SIP" : "SIP (" + frequency + ")";
     }
 
     /** Only settled, non-SIP-pending holdings are withdrawable disclosures. */

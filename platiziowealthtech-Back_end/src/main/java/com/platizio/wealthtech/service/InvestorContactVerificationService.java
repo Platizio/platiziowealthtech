@@ -21,7 +21,9 @@ import org.springframework.util.StringUtils;
  *
  * <p>Each channel can be satisfied two ways:
  * <ul>
- *   <li><b>OTP</b> — send a code via {@link SupabaseAuthClient} and verify it;</li>
+ *   <li><b>OTP</b> — email codes go via {@link SupabaseAuthClient}; mobile codes go
+ *       via {@link SmsOtpService} (Supabase Phone provider when enabled, otherwise
+ *       a demo stub until the MSG91 integration lands);</li>
  *   <li><b>Self-declaration</b> — the distributor attests the contact belongs to
  *       the investor and supplies the relationship ({@code belongs_to}).</li>
  * </ul>
@@ -38,14 +40,17 @@ public class InvestorContactVerificationService {
 
     private final InvestorRepository investorRepository;
     private final SupabaseAuthClient supabaseAuthClient;
+    private final SmsOtpService smsOtpService;
     private final AuditService auditService;
 
     public InvestorContactVerificationService(
             InvestorRepository investorRepository,
             SupabaseAuthClient supabaseAuthClient,
+            SmsOtpService smsOtpService,
             AuditService auditService) {
         this.investorRepository = investorRepository;
         this.supabaseAuthClient = supabaseAuthClient;
+        this.smsOtpService = smsOtpService;
         this.auditService = auditService;
     }
 
@@ -75,9 +80,8 @@ public class InvestorContactVerificationService {
     @Transactional
     public ContactVerificationStatus requestMobileOtp(UUID investorId, UUID actorId) {
         Investor investor = loadOwned(investorId, actorId);
-        requireSmsEnabled();
         String phoneE164 = MobileFormat.toE164India(requireContact(investor.getMobileNumber(), "mobile"));
-        supabaseAuthClient.sendSmsOtp(phoneE164);
+        smsOtpService.sendOtp(phoneE164);
         auditService.log("INVESTOR", investorId, "MOBILE_OTP_SENT", actorId, null);
         return status(investor);
     }
@@ -85,9 +89,8 @@ public class InvestorContactVerificationService {
     @Transactional
     public ContactVerificationStatus verifyMobileOtp(UUID investorId, UUID actorId, String code) {
         Investor investor = loadOwned(investorId, actorId);
-        requireSmsEnabled();
         String phoneE164 = MobileFormat.toE164India(requireContact(investor.getMobileNumber(), "mobile"));
-        if (!supabaseAuthClient.verifySmsOtp(phoneE164, normalizeCode(code))) {
+        if (!smsOtpService.verifyOtp(phoneE164, normalizeCode(code))) {
             auditService.log("INVESTOR", investorId, "MOBILE_VERIFICATION_FAILED", actorId, null);
             throw new BadCredentialsException("Invalid or expired code. Please request a new one.");
         }
@@ -150,9 +153,8 @@ public class InvestorContactVerificationService {
     @Transactional
     public ContactVerificationStatus requestMobileOtpAsInvestor(UUID investorId, UUID investorAccountId) {
         Investor investor = loadSelf(investorId);
-        requireSmsEnabled();
         String phoneE164 = MobileFormat.toE164India(requireContact(investor.getMobileNumber(), "mobile"));
-        supabaseAuthClient.sendSmsOtp(phoneE164);
+        smsOtpService.sendOtp(phoneE164);
         auditService.log("INVESTOR", investorId, "MOBILE_OTP_SENT", investorAccountId, null);
         return status(investor);
     }
@@ -160,9 +162,8 @@ public class InvestorContactVerificationService {
     @Transactional
     public ContactVerificationStatus verifyMobileOtpAsInvestor(UUID investorId, UUID investorAccountId, String code) {
         Investor investor = loadSelf(investorId);
-        requireSmsEnabled();
         String phoneE164 = MobileFormat.toE164India(requireContact(investor.getMobileNumber(), "mobile"));
-        if (!supabaseAuthClient.verifySmsOtp(phoneE164, normalizeCode(code))) {
+        if (!smsOtpService.verifyOtp(phoneE164, normalizeCode(code))) {
             auditService.log("INVESTOR", investorId, "MOBILE_VERIFICATION_FAILED", investorAccountId, null);
             throw new BadCredentialsException("Invalid or expired code. Please request a new one.");
         }
@@ -245,15 +246,10 @@ public class InvestorContactVerificationService {
         return code == null ? "" : code.trim();
     }
 
-    private void requireSmsEnabled() {
-        if (!supabaseAuthClient.isSmsEnabled()) {
-            throw new IllegalStateException(
-                    "Mobile OTP is not available. Verify the mobile number by self-declaration instead.");
-        }
-    }
-
     private ContactVerificationStatus status(Investor investor) {
+        // Mobile OTP is always offerable: real SMS when a provider is configured,
+        // the SmsOtpService demo stub otherwise (TODO(MSG91): becomes real then).
         return ContactVerificationStatus.of(
-                investor, supabaseAuthClient.isEnabled(), supabaseAuthClient.isSmsEnabled());
+                investor, supabaseAuthClient.isEnabled(), smsOtpService.isAvailable());
     }
 }

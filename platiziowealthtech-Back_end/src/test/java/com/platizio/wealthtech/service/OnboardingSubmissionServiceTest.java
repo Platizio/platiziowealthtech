@@ -14,7 +14,6 @@ import com.platizio.wealthtech.domain.OnboardingSubmission;
 import com.platizio.wealthtech.domain.OnboardingSubmissionStatus;
 import com.platizio.wealthtech.repository.InvestorBankAccountRepository;
 import com.platizio.wealthtech.repository.InvestorRepository;
-import com.platizio.wealthtech.repository.NomineeRepository;
 import com.platizio.wealthtech.repository.OnboardingSubmissionRepository;
 import java.util.List;
 import java.util.Optional;
@@ -33,7 +32,6 @@ class OnboardingSubmissionServiceTest {
     @Mock private AuditService auditService;
     @Mock private InvestorRepository investorRepository;
     @Mock private InvestorBankAccountRepository bankAccountRepository;
-    @Mock private NomineeRepository nomineeRepository;
     private OnboardingSubmissionService service;
 
     private final UUID investorId = UUID.randomUUID();
@@ -43,7 +41,7 @@ class OnboardingSubmissionServiceTest {
     @BeforeEach
     void setUp() {
         service = new OnboardingSubmissionService(
-                repository, auditService, investorRepository, bankAccountRepository, nomineeRepository);
+                repository, auditService, investorRepository, bankAccountRepository);
         lenient().when(repository.save(any(OnboardingSubmission.class))).thenAnswer(inv -> inv.getArgument(0));
     }
 
@@ -66,9 +64,10 @@ class OnboardingSubmissionServiceTest {
 
         assertThat(saved.getRevisionNo()).isEqualTo(1);
         assertThat(saved.getStatus()).isEqualTo(OnboardingSubmissionStatus.DRAFT_AWAITING_INVESTOR);
-        // The stored payload is WIDENED (bank/FATCA/nominee appended); the frozen hash is of the widened payload.
+        // The stored payload is WIDENED (bank/FATCA appended); the frozen hash is of the widened
+        // payload. Nominees are investor-owned and intentionally NOT widened in.
         assertThat(saved.getContentSha256()).isEqualTo(ConsentRecordService.sha256(saved.getPayloadJson()));
-        assertThat(saved.getPayloadJson()).contains("\"a\":1").contains("bankAccounts").contains("nominees");
+        assertThat(saved.getPayloadJson()).contains("\"a\":1").contains("bankAccounts").doesNotContain("nominees");
         verify(auditService).log(eq("INVESTOR"), eq(investorId), eq("ONBOARDING_SUBMITTED_FOR_REVIEW"), eq(distributorId), any());
     }
 

@@ -30,7 +30,15 @@ public record HoldingResponse(
         BigDecimal currentValue,
         String maskedPayoutBank,
         DataQuality dataQuality,
-        boolean redeemable) {
+        boolean redeemable,
+        // SIP identifiers + contract-note folio for the redemption verification
+        // step (null for non-SIP holdings / when not yet allotted). Note `folio`
+        // above predates V68 and carries the provider order reference; the real
+        // folio number lives here.
+        String sipName,
+        String sipNumber,
+        String sipFrequency,
+        String folioNumber) {
 
     /** Quality of the valuation inputs backing this holding row. */
     public enum DataQuality { OK, STALE, UNAVAILABLE }

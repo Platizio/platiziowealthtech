@@ -3,7 +3,7 @@ package com.platizio.wealthtech.controller;
 import com.platizio.wealthtech.domain.InvestorAccount;
 import com.platizio.wealthtech.domain.OnboardingSubmission;
 import com.platizio.wealthtech.domain.RedemptionRecord;
-import com.platizio.wealthtech.domain.Nominee;
+import com.platizio.wealthtech.domain.InvestorNominee;
 import com.platizio.wealthtech.domain.TransactionApprovalChallenge;
 import com.platizio.wealthtech.domain.TransactionType;
 import com.platizio.wealthtech.dto.ApprovalDetailResponse;
@@ -17,6 +17,7 @@ import com.platizio.wealthtech.dto.InvestorDashboardResponse;
 import com.platizio.wealthtech.dto.OnboardingAttestRequest;
 import com.platizio.wealthtech.dto.OtpRequestResponse;
 import com.platizio.wealthtech.dto.OtpVerifyCodeRequest;
+import com.platizio.wealthtech.dto.UploadedInvestorDocumentResponse;
 import com.platizio.wealthtech.dto.WithdrawalRequest;
 import com.platizio.wealthtech.dto.AadhaarVerificationResponse;
 import com.platizio.wealthtech.dto.EsignStartRequest;
@@ -32,6 +33,7 @@ import com.platizio.wealthtech.domain.ProductScheme;
 import com.platizio.wealthtech.domain.TransactionOrder;
 import com.platizio.wealthtech.dto.InvestorBankRequest;
 import com.platizio.wealthtech.dto.InvestorOrderRequest;
+import com.platizio.wealthtech.dto.InvestorSipResponse;
 import com.platizio.wealthtech.dto.KycReadinessDecision;
 import com.platizio.wealthtech.dto.NomineeRequest;
 import com.platizio.wealthtech.dto.NomineeResponse;
@@ -44,7 +46,9 @@ import com.platizio.wealthtech.service.InvestorAuthService;
 import com.platizio.wealthtech.service.InvestorContactVerificationService;
 import com.platizio.wealthtech.service.InvestorKycService;
 import com.platizio.wealthtech.service.OnboardingSubmissionService;
+import com.platizio.wealthtech.service.InvestorDocumentService;
 import com.platizio.wealthtech.service.InvestorService;
+import com.platizio.wealthtech.service.InvestorSipService;
 import com.platizio.wealthtech.service.NomineeService;
 import com.platizio.wealthtech.service.OrderService;
 import com.platizio.wealthtech.service.PortfolioService;
@@ -60,15 +64,18 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import org.springframework.http.MediaType;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.multipart.MultipartFile;
 
 /**
  * The authenticated investor's own portal (role {@code ROLE_INVESTOR}). Every
@@ -96,6 +103,8 @@ public class InvestorPortalController {
     private final ProductService productService;
     private final InvestorService investorService;
     private final NomineeService nomineeService;
+    private final InvestorDocumentService investorDocumentService;
+    private final InvestorSipService investorSipService;
 
     public InvestorPortalController(
             InvestorAuthService investorAuthService,
@@ -110,7 +119,9 @@ public class InvestorPortalController {
             InvestorKycService investorKycService,
             ProductService productService,
             InvestorService investorService,
-            NomineeService nomineeService) {
+            NomineeService nomineeService,
+            InvestorDocumentService investorDocumentService,
+            InvestorSipService investorSipService) {
         this.investorKycService = investorKycService;
         this.productService = productService;
         this.investorService = investorService;
@@ -124,6 +135,8 @@ public class InvestorPortalController {
         this.portfolioService = portfolioService;
         this.holdingsService = holdingsService;
         this.nomineeService = nomineeService;
+        this.investorDocumentService = investorDocumentService;
+        this.investorSipService = investorSipService;
     }
 
     @Operation(summary = "Current investor session", description = "Returns the authenticated investor's account view.")
@@ -367,8 +380,9 @@ public class InvestorPortalController {
     public Map<String, Object> listNominations(Authentication auth) {
         InvestorAccount account = investorAuthService.requireAccount(accountId(auth));
         UUID investorId = requireInvestorId(account);
+        var nomineesWithDocs = investorDocumentService.nomineeIdsWithDocuments(investorId);
         List<NomineeResponse> nominees = nomineeService.listNomineesAsInvestor(investorId).stream()
-                .map(NomineeResponse::from)
+                .map(n -> NomineeResponse.from(n, nomineesWithDocs.contains(n.getId())))
                 .toList();
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("nominees", nominees);
@@ -381,8 +395,36 @@ public class InvestorPortalController {
     @PostMapping("/nominations")
     public NomineeResponse addNomination(@Valid @RequestBody NomineeRequest request, Authentication auth) {
         InvestorAccount account = investorAuthService.requireAccount(accountId(auth));
-        Nominee saved = nomineeService.addNomineeAsInvestor(requireInvestorId(account), request);
+        InvestorNominee saved = nomineeService.addNomineeAsInvestor(requireInvestorId(account), request);
         return NomineeResponse.from(saved);
+    }
+
+    @Operation(summary = "Update (complete) a nominee",
+            description = "Overwrites one of my nominees with the submitted shape — used to fill in fields a "
+                    + "distributor-captured nominee is still missing.")
+    @PutMapping("/nominations/{nomineeId}")
+    public NomineeResponse updateNomination(
+            @PathVariable UUID nomineeId,
+            @Valid @RequestBody NomineeRequest request,
+            Authentication auth) {
+        InvestorAccount account = investorAuthService.requireAccount(accountId(auth));
+        UUID investorId = requireInvestorId(account);
+        InvestorNominee saved = nomineeService.updateNomineeAsInvestor(investorId, nomineeId, request);
+        boolean hasDoc = investorDocumentService.nomineeIdsWithDocuments(investorId).contains(saved.getId());
+        return NomineeResponse.from(saved, hasDoc);
+    }
+
+    @Operation(summary = "Upload a nominee's identity document",
+            description = "Uploads (or replaces) the ID document for one of my nominees; used to verify the nominee "
+                    + "against the ID provided. PDF/JPG/PNG, max 5 MB.")
+    @PutMapping(value = "/nominations/{nomineeId}/document", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public UploadedInvestorDocumentResponse uploadNominationDocument(
+            @PathVariable UUID nomineeId,
+            @RequestParam("file") MultipartFile file,
+            Authentication auth) {
+        InvestorAccount account = investorAuthService.requireAccount(accountId(auth));
+        return investorDocumentService.uploadNomineeDocumentAsInvestor(
+                requireInvestorId(account), nomineeId, file, account.getId());
     }
 
     @Operation(summary = "Opt out of nomination",
@@ -510,6 +552,15 @@ public class InvestorPortalController {
     public List<HoldingResponse> holdings(Authentication auth) {
         InvestorAccount account = investorAuthService.requireAccount(accountId(auth));
         return portfolioService.getInvestorHoldings(requireInvestorId(account));
+    }
+
+    @Operation(summary = "My SIP plans",
+            description = "Lists the investor's SIP plans with frequency, start date, next due date, instalments, "
+                    + "mandate and folio — the SIP detail the dashboard surfaces.")
+    @GetMapping("/sips")
+    public List<InvestorSipResponse> sips(Authentication auth) {
+        InvestorAccount account = investorAuthService.requireAccount(accountId(auth));
+        return investorSipService.listSipsAsInvestor(requireInvestorId(account));
     }
 
     // ── Dashboard (Phase-3 rich holdings) ────────────────────────────────────

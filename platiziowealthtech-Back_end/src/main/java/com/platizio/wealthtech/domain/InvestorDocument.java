@@ -5,27 +5,29 @@ import com.platizio.wealthtech.common.BaseEntity;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.Table;
-import jakarta.persistence.UniqueConstraint;
 import java.util.UUID;
 
+/**
+ * Uniqueness is enforced by two PARTIAL unique indexes (V73), which JPA cannot
+ * express: investor-level docs (nominee_id null) are one-per-(investor, type),
+ * and nominee docs are one-per-(investor, nominee, type).
+ */
 @Entity
-@Table(
-        name = "investor_documents",
-        uniqueConstraints = @UniqueConstraint(
-                name = "uq_investor_documents_investor_type",
-                columnNames = {"investor_id", "document_type"}
-        )
-)
+@Table(name = "investor_documents")
 public class InvestorDocument extends BaseEntity {
 
     @Column(nullable = false)
     private UUID investorId;
 
-    @Column(nullable = false)
+    /** Nullable since V73: unlinked investors (pending distributor) may upload nominee docs. */
     private UUID distributorId;
 
+    /** A distributor id OR an investor account id (nominee docs); no FK since V73. */
     @Column(nullable = false)
     private UUID uploadedBy;
+
+    /** Set only for nominee identity documents; null for investor-level documents. */
+    private UUID nomineeId;
 
     @Column(nullable = false, length = 50)
     private String documentType;
@@ -65,6 +67,14 @@ public class InvestorDocument extends BaseEntity {
 
     public void setUploadedBy(UUID uploadedBy) {
         this.uploadedBy = uploadedBy;
+    }
+
+    public UUID getNomineeId() {
+        return nomineeId;
+    }
+
+    public void setNomineeId(UUID nomineeId) {
+        this.nomineeId = nomineeId;
     }
 
     public String getDocumentType() {

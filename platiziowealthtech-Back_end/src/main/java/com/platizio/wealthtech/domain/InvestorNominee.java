@@ -43,6 +43,9 @@ public class InvestorNominee extends BaseEntity {
     @Column(nullable = false)
     private Boolean sameAsApplicant = Boolean.FALSE;
 
+    /** Guardian, required by self-service flows when the nominee is a minor (V71 graft). */
+    private String guardianName;
+
     public UUID getInvestorId() { return investorId; }
     public void setInvestorId(UUID investorId) { this.investorId = investorId; }
     public Integer getNomineeIndex() { return nomineeIndex; }
@@ -79,4 +82,6 @@ public class InvestorNominee extends BaseEntity {
     public void setCountry(String country) { this.country = country; }
     public Boolean getSameAsApplicant() { return sameAsApplicant; }
     public void setSameAsApplicant(Boolean sameAsApplicant) { this.sameAsApplicant = sameAsApplicant; }
+    public String getGuardianName() { return guardianName; }
+    public void setGuardianName(String guardianName) { this.guardianName = guardianName; }
 }
