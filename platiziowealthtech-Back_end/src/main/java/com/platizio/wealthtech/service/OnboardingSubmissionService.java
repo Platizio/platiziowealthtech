@@ -4,12 +4,10 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.platizio.wealthtech.domain.Investor;
 import com.platizio.wealthtech.domain.InvestorBankAccount;
-import com.platizio.wealthtech.domain.Nominee;
 import com.platizio.wealthtech.domain.OnboardingSubmission;
 import com.platizio.wealthtech.domain.OnboardingSubmissionStatus;
 import com.platizio.wealthtech.repository.InvestorBankAccountRepository;
 import com.platizio.wealthtech.repository.InvestorRepository;
-import com.platizio.wealthtech.repository.NomineeRepository;
 import com.platizio.wealthtech.repository.OnboardingSubmissionRepository;
 import jakarta.persistence.EntityNotFoundException;
 import java.time.OffsetDateTime;
@@ -30,10 +28,16 @@ import org.springframework.transaction.annotation.Transactional;
  * <p>Compliance: the investor attests <em>everything</em> the distributor entered,
  * not just identity. So before freezing/hashing a revision, the caller-supplied
  * payload (identity/address/contact) is widened here with the distributor-entered
- * bank account(s), FATCA declaration, and nominee details — see
- * {@link #widenSnapshot(UUID, String)}. The same widening is re-applied when the
- * finalize gate recomputes the live hash, so a post-attestation edit to ANY of
- * those fields (not only identity) invalidates the approval.
+ * bank account(s) and FATCA declaration — see {@link #widenSnapshot(UUID, String)}.
+ * The same widening is re-applied when the finalize gate recomputes the live hash,
+ * so a post-attestation edit to ANY of those fields (not only identity) invalidates
+ * the approval.
+ *
+ * <p>Nominees are intentionally NOT part of the widened/attested payload: nominee
+ * collection is investor-owned (captured in the investor's own verification flow
+ * via {@code NomineeService}, protected by the investor session and its own
+ * consent/opt-out records). Including live nominee rows here would make the
+ * investor's own nominee edits invalidate the distributor-onboarding attestation.
  */
 @Service
 public class OnboardingSubmissionService {
@@ -44,19 +48,16 @@ public class OnboardingSubmissionService {
     private final AuditService auditService;
     private final InvestorRepository investorRepository;
     private final InvestorBankAccountRepository bankAccountRepository;
-    private final NomineeRepository nomineeRepository;
 
     public OnboardingSubmissionService(
             OnboardingSubmissionRepository repository,
             AuditService auditService,
             InvestorRepository investorRepository,
-            InvestorBankAccountRepository bankAccountRepository,
-            NomineeRepository nomineeRepository) {
+            InvestorBankAccountRepository bankAccountRepository) {
         this.repository = repository;
         this.auditService = auditService;
         this.investorRepository = investorRepository;
         this.bankAccountRepository = bankAccountRepository;
-        this.nomineeRepository = nomineeRepository;
     }
 
     /** Distributor freezes the current payload into a new revision awaiting investor review. */
@@ -66,7 +67,7 @@ public class OnboardingSubmissionService {
         int nextRevision = repository.findFirstByInvestorIdOrderByRevisionNoDesc(investorId)
                 .map(s -> s.getRevisionNo() + 1)
                 .orElse(1);
-        // Widen the attested payload to cover bank/FATCA/nominee, so the investor is
+        // Widen the attested payload to cover bank/FATCA, so the investor is
         // attesting EVERYTHING the distributor entered (not just identity/address/contact).
         String widenedPayload = widenSnapshot(investorId, payloadJson);
         OnboardingSubmission submission = new OnboardingSubmission();
@@ -125,13 +126,14 @@ public class OnboardingSubmissionService {
      * still equals the currently-rendered (widened) payload hash (i.e. nothing
      * changed since the investor approved).
      *
-     * <p>The hash is recomputed here from the LIVE investor + bank/FATCA/nominee
-     * data via {@link #widenSnapshot(UUID, String)} so the gate covers everything
-     * the investor attested. The caller-supplied {@code currentRenderedHash} is the
+     * <p>The hash is recomputed here from the LIVE investor + bank/FATCA data via
+     * {@link #widenSnapshot(UUID, String)} so the gate covers everything the
+     * investor attested. The caller-supplied {@code currentRenderedHash} is the
      * narrow identity-only hash and is retained only for signature compatibility;
      * it is intentionally not trusted (it would never match the widened ATTESTED
-     * hash). A post-attestation edit to identity, address, contact, bank, FATCA, or
-     * a nominee now invalidates finalize.
+     * hash). A post-attestation edit to identity, address, contact, bank, or FATCA
+     * invalidates finalize. Nominees are excluded: they are investor-owned and may
+     * be edited by the investor at any time without invalidating the attestation.
      */
     @Transactional(readOnly = true)
     public void assertFinalizable(UUID investorId, String currentRenderedHash) {
@@ -140,7 +142,7 @@ public class OnboardingSubmissionService {
         if (latest.getStatus() != OnboardingSubmissionStatus.ATTESTED) {
             throw new IllegalStateException("Investor approval required before this onboarding can be finalized.");
         }
-        // Re-widen the live attested revision's frozen payload (re-fetching bank/FATCA/nominee)
+        // Re-widen the live attested revision's frozen payload (re-fetching bank/FATCA)
         // and compare to the ATTESTED hash; any drift means the data changed post-approval.
         String liveWidened = widenSnapshot(investorId, stripWidenedKeys(latest.getPayloadJson()));
         if (!latest.getContentSha256().equals(ConsentRecordService.sha256(liveWidened))) {
@@ -173,10 +175,15 @@ public class OnboardingSubmissionService {
 
     /**
      * Augments the caller-supplied identity/address/contact payload object with the
-     * distributor-entered bank account(s), FATCA declaration, and nominee details so
-     * the attestation hash covers the full set of details the distributor entered.
-     * Deterministic: keys are inserted in a stable order and lists are sorted, so the
-     * same data always yields the same JSON (and therefore the same hash).
+     * distributor-entered bank account(s) and FATCA declaration so the attestation
+     * hash covers the full set of details the distributor entered. Deterministic:
+     * keys are inserted in a stable order and lists are sorted, so the same data
+     * always yields the same JSON (and therefore the same hash).
+     *
+     * <p>Nominees are deliberately not widened in: they are investor-owned data
+     * (see the class Javadoc) and any nominees text already present in the caller's
+     * payload passes through untouched, so it hashes identically at freeze and
+     * finalize regardless of later investor nominee edits.
      *
      * <p>If the supplied payload is not a JSON object (defensive), it is returned
      * unchanged so hashing/attestation still works on the original content.
@@ -190,7 +197,6 @@ public class OnboardingSubmissionService {
             ObjectNode root = (ObjectNode) node;
             root.set("bankAccounts", bankAccountsNode(investorId));
             root.set("fatca", fatcaNode(investorId));
-            root.set("nominees", nomineesNode(investorId));
             return SNAPSHOT_MAPPER.writeValueAsString(root);
         } catch (com.fasterxml.jackson.core.JsonProcessingException ex) {
             throw new IllegalStateException("Failed to widen onboarding snapshot", ex);
@@ -211,7 +217,6 @@ public class OnboardingSubmissionService {
             ObjectNode root = (ObjectNode) node;
             root.remove("bankAccounts");
             root.remove("fatca");
-            root.remove("nominees");
             return SNAPSHOT_MAPPER.writeValueAsString(root);
         } catch (com.fasterxml.jackson.core.JsonProcessingException ex) {
             throw new IllegalStateException("Failed to normalise onboarding snapshot", ex);
@@ -253,31 +258,6 @@ public class OnboardingSubmissionService {
         o.put("occupation", onboardingNoteValue(notes, "occupation"));
         o.put("income", onboardingNoteValue(notes, "income"));
         return o;
-    }
-
-    /** Deterministic array of the investor's nominees (or the opt-out flag), sorted stably. */
-    private com.fasterxml.jackson.databind.JsonNode nomineesNode(UUID investorId) {
-        ObjectNode wrapper = SNAPSHOT_MAPPER.createObjectNode();
-        Investor investor = investorRepository.findById(investorId).orElse(null);
-        boolean optedOut = investor != null && Boolean.TRUE.equals(investor.getNominationOptedOut());
-        wrapper.put("nominationOptedOut", optedOut);
-        var array = SNAPSHOT_MAPPER.createArrayNode();
-        List<Nominee> nominees = new ArrayList<>(nomineeRepository.findByInvestorId(investorId));
-        nominees.sort(Comparator
-                .comparing((Nominee n) -> nullSafe(n.getFullName()))
-                .thenComparing(n -> nullSafe(n.getRelationship())));
-        for (Nominee n : nominees) {
-            ObjectNode o = SNAPSHOT_MAPPER.createObjectNode();
-            o.put("fullName", n.getFullName());
-            o.put("relationship", n.getRelationship());
-            o.put("dateOfBirth", n.getDateOfBirth() == null ? null : n.getDateOfBirth().toString());
-            o.put("allocationPercentage", n.getAllocationPercentage());
-            o.put("addressLine", n.getAddressLine());
-            o.put("guardianName", n.getGuardianName());
-            array.add(o);
-        }
-        wrapper.set("entries", array);
-        return wrapper;
     }
 
     /** Reads one {@code key=value} from a {@code key=value;...} onboarding-notes string. */

@@ -3,7 +3,7 @@ package com.platizio.wealthtech.controller;
 import com.platizio.wealthtech.domain.InvestorAccount;
 import com.platizio.wealthtech.domain.OnboardingSubmission;
 import com.platizio.wealthtech.domain.RedemptionRecord;
-import com.platizio.wealthtech.domain.Nominee;
+import com.platizio.wealthtech.domain.InvestorNominee;
 import com.platizio.wealthtech.domain.TransactionApprovalChallenge;
 import com.platizio.wealthtech.domain.TransactionType;
 import com.platizio.wealthtech.dto.ApprovalDetailResponse;
@@ -381,7 +381,7 @@ public class InvestorPortalController {
     @PostMapping("/nominations")
     public NomineeResponse addNomination(@Valid @RequestBody NomineeRequest request, Authentication auth) {
         InvestorAccount account = investorAuthService.requireAccount(accountId(auth));
-        Nominee saved = nomineeService.addNomineeAsInvestor(requireInvestorId(account), request);
+        InvestorNominee saved = nomineeService.addNomineeAsInvestor(requireInvestorId(account), request);
         return NomineeResponse.from(saved);
     }
 
