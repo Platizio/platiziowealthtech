@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { Analytics } from '@vercel/analytics/react';
 import { Product, initialProducts } from './data/products';
 import {
   LayoutDashboard, Users, BookOpen, Search, Bell,
@@ -374,6 +375,7 @@ export default function App() {
           {activeView}
         </div>
       </main>
+      <Analytics />
     </div>
   );
 }
